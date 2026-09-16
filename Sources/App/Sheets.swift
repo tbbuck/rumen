@@ -6,6 +6,10 @@ struct AddServerSheet: View {
     @Environment(AppModel.self) private var model
     let pending: PendingAdd
     @State private var friendlyName = ""
+    @State private var advanced = false
+    @State private var cookie = ""
+    @State private var origin = ""
+    @State private var referer = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -17,6 +21,10 @@ struct AddServerSheet: View {
                 TextField(pending.location.rootURL.host ?? "Name", text: $friendlyName)
                     .textFieldStyle(SheetFieldStyle())
                     .onSubmit(add)
+            }
+            Button(advanced ? "Hide advanced" : "Advanced…") { advanced.toggle() }.buttonStyle(LinkButtonStyle(size: 12.5))
+            if advanced {
+                AdvancedServerFields(cookie: $cookie, origin: $origin, referer: $referer, rootURL: pending.location.rootURL)
             }
             HStack {
                 Spacer()
@@ -31,7 +39,7 @@ struct AddServerSheet: View {
     }
 
     private func add() {
-        Task { await model.addServer(pending, friendlyName: friendlyName) }
+        Task { await model.addServer(pending, friendlyName: friendlyName, cookie: cookie, origin: origin, referer: referer) }
     }
 
     private var preview: String {
@@ -57,16 +65,14 @@ struct ServerSettingsSheet: View {
     @State private var name = ""
     @State private var origin = ""
     @State private var referer = ""
+    @State private var cookie = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Server settings").font(.sheetDisplay(18))
             Text(server.rootURL.absoluteString).font(.sheetMono(12)).foregroundStyle(Palette.muted)
             field("Friendly name", text: $name, placeholder: server.host)
-            field("Origin header", text: $origin, placeholder: ServerHeaders.resolve(rootURL: server.rootURL).origin, mono: true)
-            field("Referer header", text: $referer, placeholder: ServerHeaders.resolve(rootURL: server.rootURL).referer, mono: true)
-            Caption("Leave a header blank to use the default shown. Both are sent on every request to this server.", size: 11.5, color: Palette.muted2)
-                .frame(maxWidth: 440, alignment: .leading)
+            AdvancedServerFields(cookie: $cookie, origin: $origin, referer: $referer, rootURL: server.rootURL)
             VStack(alignment: .leading, spacing: 6) {
                 Caption("Sign-in")
                 Caption("Public server. Token sign-in arrives with milestone M8.", size: 12.5, color: Palette.muted2)
@@ -76,7 +82,7 @@ struct ServerSettingsSheet: View {
                 Button("Cancel") { model.settingsServer = nil }.buttonStyle(LinkButtonStyle())
                 Button("Save") {
                     Task {
-                        await model.saveSettings(server, name: name.isEmpty ? server.host : name, origin: origin, referer: referer)
+                        await model.saveSettings(server, name: name.isEmpty ? server.host : name, origin: origin, referer: referer, cookie: cookie)
                         model.settingsServer = nil
                     }
                 }
@@ -90,6 +96,7 @@ struct ServerSettingsSheet: View {
             name = server.friendlyName
             origin = server.originOverride ?? ""
             referer = server.refererOverride ?? ""
+            cookie = Keychain.cookie(for: server) ?? ""
         }
     }
 
@@ -97,6 +104,36 @@ struct ServerSettingsSheet: View {
         VStack(alignment: .leading, spacing: 6) {
             Caption(label)
             TextField(placeholder, text: text).textFieldStyle(SheetFieldStyle(mono: mono))
+        }
+    }
+}
+
+/// Cookie plus the Origin and Referer overrides: the same block on the add sheet (under
+/// "Advanced…") and on server settings.
+struct AdvancedServerFields: View {
+    @Binding var cookie: String
+    @Binding var origin: String
+    @Binding var referer: String
+    let rootURL: URL
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                Caption("Cookie")
+                TextField("name=value; other=value", text: $cookie).textFieldStyle(SheetFieldStyle(mono: true))
+                Caption("Sent as the Cookie header on every request to this server, like curl -b. Kept in your login keychain, not in the app database.", size: 11.5, color: Palette.muted2)
+                    .frame(maxWidth: 440, alignment: .leading)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Caption("Origin header")
+                TextField(ServerHeaders.resolve(rootURL: rootURL).origin, text: $origin).textFieldStyle(SheetFieldStyle(mono: true))
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Caption("Referer header")
+                TextField(ServerHeaders.resolve(rootURL: rootURL).referer, text: $referer).textFieldStyle(SheetFieldStyle(mono: true))
+            }
+            Caption("Leave a header blank to use the default shown. Both are sent on every request to this server.", size: 11.5, color: Palette.muted2)
+                .frame(maxWidth: 440, alignment: .leading)
         }
     }
 }

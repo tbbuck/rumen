@@ -47,16 +47,19 @@ public actor DownloadEngine {
     private let stagingDirectory: URL
     private let concurrency: Int
     private let tokenProvider: @Sendable (ServerRecord) async -> String?
+    private let cookieProvider: @Sendable (ServerRecord) async -> String?
     private var tasks: [Int64: Task<DownloadRecord, Error>] = [:]
 
     public init(client: ArcGISClient, database: AppDatabase, crawler: Crawler, stagingDirectory: URL,
-                concurrency: Int = 4, tokenProvider: @escaping @Sendable (ServerRecord) async -> String? = { _ in nil }) {
+                concurrency: Int = 4, tokenProvider: @escaping @Sendable (ServerRecord) async -> String? = { _ in nil },
+                cookieProvider: @escaping @Sendable (ServerRecord) async -> String? = { _ in nil }) {
         self.client = client
         self.db = database
         self.crawler = crawler
         self.stagingDirectory = stagingDirectory
         self.concurrency = max(1, concurrency)
         self.tokenProvider = tokenProvider
+        self.cookieProvider = cookieProvider
     }
 
     public var runningIDs: [Int64] { Array(tasks.keys) }
@@ -107,7 +110,7 @@ public actor DownloadEngine {
         let source = try await db.layer(id: assessment.sourceLayerID)
         let service = try await db.service(id: source.serviceID)
         let server = try await db.server(id: service.serverID)
-        let connection = server.connection(token: await tokenProvider(server))
+        let connection = server.connection(token: await tokenProvider(server), cookie: await cookieProvider(server))
         let url = service.url.appendingPathComponent(String(source.layerID))
         let oidField = source.objectIdField ?? "OBJECTID"
 
@@ -187,7 +190,7 @@ public actor DownloadEngine {
         let source = try await db.layer(id: sourceID)
         let service = try await db.service(id: source.serviceID)
         let server = try await db.server(id: service.serverID)
-        let connection = server.connection(token: await tokenProvider(server))
+        let connection = server.connection(token: await tokenProvider(server), cookie: await cookieProvider(server))
         let url = service.url.appendingPathComponent(String(source.layerID))
         let fields = try await db.fields(layerID: source.id)
         let oidField = source.objectIdField ?? "OBJECTID"

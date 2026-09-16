@@ -114,10 +114,12 @@ final class AppModel {
             try await db.migrate()
             try await db.loadSpatial()
             database = db
-            let crawler = Crawler(client: client, database: db)
+            let cookies: @Sendable (ServerRecord) async -> String? = { Keychain.cookie(for: $0) }
+            let crawler = Crawler(client: client, database: db, cookieProvider: cookies)
             self.crawler = crawler
             engine = DownloadEngine(client: client, database: db, crawler: crawler,
-                                    stagingDirectory: AppDatabase.defaultURL().deletingLastPathComponent().appendingPathComponent("staging"))
+                                    stagingDirectory: AppDatabase.defaultURL().deletingLastPathComponent().appendingPathComponent("staging"),
+                                    cookieProvider: cookies)
             if let dir = try await db.setting("download_dir") { downloadDirectory = URL(fileURLWithPath: dir) }
             switch try await db.setting("appearance") {
             case "light": appearanceOverride = .light
@@ -268,9 +270,9 @@ final class AppModel {
                 currentLayerInfo = info
                 pathContent = PathBarContent.build(server: server, service: service, layer: layer)
                 querySession = QuerySession(layer: layer, service: service, fields: fields, info: info,
-                                            client: client, database: database, connection: server.connection())
+                                            client: client, database: database, connection: server.connection(cookie: Keychain.cookie(for: server)))
                 mapSession = MapSession(layer: layer, service: service, client: client, database: database,
-                                        connection: server.connection(),
+                                        connection: server.connection(cookie: Keychain.cookie(for: server)),
                                         storedRuns: runs.filter { $0.record.layerID == layer.id && $0.status == .complete }.map(\.record),
                                         querySet: nil, queryWkid: nil)
                 await assessCurrentLayer()
@@ -474,21 +476,30 @@ final class AppModel {
     }
 
     /// Registers a new server from the Add-server sheet.
-    func addServer(_ pending: PendingAdd, friendlyName: String) async {
+    func addServer(_ pending: PendingAdd, friendlyName: String, cookie: String = "",
+                   origin: String = "", referer: String = "") async {
         guard pendingAdd != nil else { return }   // Return and the button can both fire; add once
         pendingAdd = nil
-        await open(pending.text, friendlyName: friendlyName)
+        do {
+            // The cookie must be in place before the first request; it is read by root URL.
+            try Keychain.setCookie(cookie, forRoot: pending.location.rootURL)
+        } catch {
+            errorText = String(describing: error)
+            return
+        }
+        await open(pending.text, friendlyName: friendlyName, headerOverrides: (origin, referer))
     }
 
     /// Opens any ArcGIS URL: registers or touches its server, crawls as needed, and lands on
     /// the node it names.
-    private func open(_ text: String, friendlyName: String?) async {
+    private func open(_ text: String, friendlyName: String?,
+                      headerOverrides: (origin: String?, referer: String?)? = nil) async {
         guard let crawler else { return }
         let root = (try? ArcGISURL.parse(text))?.rootURL.absoluteString ?? text
         openingStatus = OpeningStatus(url: root, step: "Opening…")
         defer { openingStatus = nil }
         do {
-            let opened = try await crawler.open(text, friendlyName: friendlyName, progress: { event in
+            let opened = try await crawler.open(text, friendlyName: friendlyName, headerOverrides: headerOverrides, progress: { event in
                 Task { @MainActor in self.openingProgress(event) }
             })
             openingStatus?.step = "Building the tree…"
@@ -564,9 +575,10 @@ final class AppModel {
         } catch { errorText = String(describing: error) }
     }
 
-    func saveSettings(_ server: ServerRecord, name: String, origin: String, referer: String) async {
+    func saveSettings(_ server: ServerRecord, name: String, origin: String, referer: String, cookie: String) async {
         guard let database else { return }
         do {
+            try Keychain.setCookie(cookie, forRoot: server.rootURL)
             try await database.renameServer(id: server.id, friendlyName: name)
             try await database.setHeaderOverrides(serverID: server.id, origin: origin, referer: referer)
             try await reloadServers()
@@ -578,6 +590,7 @@ final class AppModel {
     func forget(_ server: ServerRecord) async {
         guard let database else { return }
         do {
+            try Keychain.setCookie(nil, forRoot: server.rootURL)
             try await database.forgetServer(id: server.id)
             try await reloadServers()
             if currentServer?.id == server.id {

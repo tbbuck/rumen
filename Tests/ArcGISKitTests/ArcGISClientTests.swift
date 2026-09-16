@@ -33,6 +33,16 @@ final class ArcGISClientTests: XCTestCase {
         XCTAssertEqual(transport.last?.value(forHTTPHeaderField: "Origin"), "https://portal.example")
     }
 
+    func testCookieIsSentVerbatimWithSessionCookiesOff() async throws {
+        let transport = try StubTransport(reply: .fixture("s6-root.json"))
+        _ = try await client(transport).serviceDirectory(ServerConnection(rootURL: root, cookie: "agsession=abc; other=1"))
+        let request = try XCTUnwrap(transport.last)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "agsession=abc; other=1")
+        XCTAssertFalse(request.httpShouldHandleCookies)
+        _ = try await client(transport).serviceDirectory(ServerConnection(rootURL: root, cookie: "  "))
+        XCTAssertNil(transport.last?.value(forHTTPHeaderField: "Cookie"), "a blank cookie sends nothing")
+    }
+
     // MARK: - Request building
 
     func testGetAddsFormatAndEncodesParams() async throws {

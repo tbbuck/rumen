@@ -42,8 +42,8 @@ public struct ServerRecord: Sendable, Equatable, Identifiable {
     }
 
     /// The connection for this server; the token (from the Keychain) is supplied by the caller.
-    public func connection(token: String? = nil) -> ServerConnection {
-        ServerConnection(rootURL: rootURL, headers: headers, token: token)
+    public func connection(token: String? = nil, cookie: String? = nil) -> ServerConnection {
+        ServerConnection(rootURL: rootURL, headers: headers, token: token, cookie: cookie)
     }
 
     /// The host shown in the path bar and as the default friendly name.

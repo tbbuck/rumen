@@ -304,8 +304,34 @@ private struct StartServerRow: View {
     let server: ServerRecord
     let services: Int?
     @State private var hovered = false
+    @State private var forgetHovered = false
+    @State private var confirmForget = false
 
     var body: some View {
+        HStack(spacing: 6) {
+            openButton
+            Button {
+                confirmForget = true
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(forgetHovered ? Palette.no : Palette.muted2)
+                    .frame(width: 22, height: 22)
+                    .background(forgetHovered ? Palette.line : .clear, in: RoundedRectangle(cornerRadius: 5))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .hoverTracking($forgetHovered, hand: true)
+            .help("Forget this server: cached metadata is removed, downloaded files are kept")
+        }
+        .confirmationDialog("Forget \(server.friendlyName)?", isPresented: $confirmForget) {
+            Button("Forget", role: .destructive) { Task { await model.forget(server) } }
+        } message: {
+            Text("Cached metadata for this server is removed. Downloaded files on disk are kept.")
+        }
+    }
+
+    private var openButton: some View {
         Button {
             Task { await model.selectServer(server.id) }
         } label: {

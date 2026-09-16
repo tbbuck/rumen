@@ -298,6 +298,9 @@ Coded-value domains are exported as the raw code; an opt-in option (off by defau
 - Tokens and passwords go in the **macOS Keychain**; the app DB stores the username
   and the token service URL only. Tokens are refreshed on 498/499 responses.
 - An API key can be pasted instead of a username/password and is sent the same way.
+- A raw **Cookie** header can be set per server (the add sheet's Advanced section and
+  server settings), sent verbatim on every request like curl's `-b`, with the session's own
+  cookie handling off for that server. It lives in the Keychain, keyed by the root URL.
 
 ## 6. Non-functional requirements
 

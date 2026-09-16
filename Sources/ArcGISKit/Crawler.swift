@@ -28,18 +28,21 @@ public actor Crawler {
     private let client: ArcGISClient
     private let db: AppDatabase
     private let tokenProvider: @Sendable (ServerRecord) async -> String?
+    private let cookieProvider: @Sendable (ServerRecord) async -> String?
 
-    /// `tokenProvider` supplies a server's token from wherever it is kept (the Keychain in
-    /// the app, nothing in tests).
+    /// `tokenProvider` and `cookieProvider` supply a server's secrets from wherever they are
+    /// kept (the Keychain in the app, nothing in tests).
     public init(client: ArcGISClient, database: AppDatabase,
-                tokenProvider: @escaping @Sendable (ServerRecord) async -> String? = { _ in nil }) {
+                tokenProvider: @escaping @Sendable (ServerRecord) async -> String? = { _ in nil },
+                cookieProvider: @escaping @Sendable (ServerRecord) async -> String? = { _ in nil }) {
         self.client = client
         self.db = database
         self.tokenProvider = tokenProvider
+        self.cookieProvider = cookieProvider
     }
 
     private func connection(_ server: ServerRecord) async -> ServerConnection {
-        server.connection(token: await tokenProvider(server))
+        server.connection(token: await tokenProvider(server), cookie: await cookieProvider(server))
     }
 
     // MARK: - Add / open
@@ -59,13 +62,19 @@ public actor Crawler {
     /// Parses `text`, registers its server root (or touches an existing one), runs a
     /// shallow crawl for a new server, and — when the URL names a service or layer — crawls
     /// that service so the target rows exist. Errors surface verbatim.
+    /// `headerOverrides` (origin, referer) apply to a new server before its first request.
     public func open(_ text: String, friendlyName: String? = nil,
+                     headerOverrides: (origin: String?, referer: String?)? = nil,
                      progress: (@Sendable (CrawlEvent) -> Void)? = nil) async throws -> Opened {
         let location = try ArcGISURL.parse(text)
         let existing = try await db.server(rootURL: location.rootURL)
-        let server = try await db.addServer(rootURL: location.rootURL,
+        var server = try await db.addServer(rootURL: location.rootURL,
                                             friendlyName: friendlyName ?? location.rootURL.host ?? "server")
         let isNew = existing == nil
+        if isNew, let headerOverrides {
+            try await db.setHeaderOverrides(serverID: server.id, origin: headerOverrides.origin, referer: headerOverrides.referer)
+            server = try await db.server(id: server.id)
+        }
         var problems = [CrawlProblem]()
         if isNew {
             problems = try await shallowCrawl(serverID: server.id, progress: progress)

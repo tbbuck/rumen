@@ -29,11 +29,15 @@ public struct ServerConnection: Sendable, Equatable {
     public let headers: ServerHeaders
     /// ArcGIS token or API key, sent as the `token` parameter (SPEC §5.10). Nil for public servers.
     public var token: String?
+    /// A raw `Cookie` header sent on every request, as curl's `-b` would; the session's own
+    /// cookie handling is switched off for such requests so exactly this is sent.
+    public var cookie: String?
 
-    public init(rootURL: URL, headers: ServerHeaders? = nil, token: String? = nil) {
+    public init(rootURL: URL, headers: ServerHeaders? = nil, token: String? = nil, cookie: String? = nil) {
         self.rootURL = rootURL
         self.headers = headers ?? .resolve(rootURL: rootURL)
         self.token = token
+        self.cookie = cookie
     }
 
     /// `https://host[:port]` — the key for the per-host concurrency cap.
@@ -315,6 +319,10 @@ public actor ArcGISClient {
         request.httpMethod = method.rawValue
         request.setValue(server.headers.origin, forHTTPHeaderField: "Origin")
         request.setValue(server.headers.referer, forHTTPHeaderField: "Referer")
+        if let cookie = server.cookie?.trimmingCharacters(in: .whitespacesAndNewlines), !cookie.isEmpty {
+            request.setValue(cookie, forHTTPHeaderField: "Cookie")
+            request.httpShouldHandleCookies = false
+        }
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 120

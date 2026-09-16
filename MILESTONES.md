@@ -42,6 +42,13 @@ commit per logical unit.
 - **Storage switched to SQLite** (decision 16): the app database is `explorer.sqlite` behind
   the new `SQLiteKit`; DuckDB is now only the spatial engine (in-memory, for extents) and,
   from M4, the staging and export engine.
+- **M3 complete.** Esri JSON geometry parsing with grid summaries, feature-set decoding,
+  query options → parameters, client calls for features and extents, the Query tab (where
+  editor, fields / spatial reference / order / geometry options, Count · Extent · Preview ·
+  Distinct · Statistics gated by capability with reasons, Next page on offset paging), the
+  `NSTableView` results grid ported to the Sheet palette, and per-layer history that
+  restores a past query. `--tab` and `--run preview` launch arguments for scripted captures.
+  132 tests; verified on sampleserver6.
 
 ---
 
@@ -101,7 +108,7 @@ commit per logical unit.
   with 100+ services completes and is resumable.
 - **Demo:** paste a MapServer URL, read the per-layer verdicts.
 
-## M3 — Read-only query
+## M3 — Read-only query — ✅ done 2026-09-16
 **Goal:** poke at a layer before downloading it.
 - **Deliverables**
   - Query tab: `where`, `outFields`, `outSR`, `orderByFields`, geometry toggle;

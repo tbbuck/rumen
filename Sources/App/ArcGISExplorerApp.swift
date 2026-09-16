@@ -9,9 +9,14 @@ struct ArcGISExplorerApp: App {
     @State private var model = AppModel()
 
     /// `--open <url>`: navigate to an ArcGIS URL after launch (`open -a "ArcGIS Explorer" --args --open <url>`).
-    static var openArgument: String? {
+    static var openArgument: String? { argument("--open") }
+    /// `--tab <name>` and `--run preview`: for scripted window captures.
+    static var tabArgument: String? { argument("--tab") }
+    static var runArgument: String? { argument("--run") }
+
+    private static func argument(_ flag: String) -> String? {
         let args = CommandLine.arguments
-        guard let index = args.firstIndex(of: "--open"), index + 1 < args.count else { return nil }
+        guard let index = args.firstIndex(of: flag), index + 1 < args.count else { return nil }
         return args[index + 1]
     }
 
@@ -28,6 +33,8 @@ struct ArcGISExplorerApp: App {
                 .task {
                     await model.start()
                     if let url = Self.openArgument { await model.openFromLaunch(url) }
+                    if let tab = Self.tabArgument, let chosen = LayerTab(rawValue: tab.capitalizedFirst) { model.layerTab = chosen }
+                    if Self.runArgument == "preview" { await model.querySession?.preview() }
                 }
         }
         .windowStyle(.hiddenTitleBar)

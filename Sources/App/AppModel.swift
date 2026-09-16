@@ -55,6 +55,8 @@ final class AppModel {
     private(set) var currentRawJSON: String?
     private(set) var pathContent: PathBarContent?
     private(set) var assessment: Assessment?
+    private(set) var currentLayerInfo: LayerInfo?
+    private(set) var querySession: QuerySession?
     private(set) var probing = false
     private(set) var probeError: String?
     private var deepCrawlTask: Task<Void, Never>?
@@ -172,6 +174,8 @@ final class AppModel {
         currentRawJSON = nil
         assessment = nil
         probeError = nil
+        currentLayerInfo = nil
+        querySession = nil
         guard let id, let database, let server = currentServer else { pathContent = nil; return }
         do {
             switch id {
@@ -194,6 +198,11 @@ final class AppModel {
                 currentLayer = layer
                 currentFields = try await database.fields(layerID: layerID)
                 pathContent = PathBarContent.build(server: server, service: service, layer: layer)
+                if let raw = try await database.layerRawJSON(id: layerID), let data = raw.data(using: .utf8) {
+                    currentLayerInfo = try? ArcGISJSON.decode(LayerInfo.self, from: data)
+                }
+                querySession = QuerySession(layer: layer, service: service, fields: currentFields, info: currentLayerInfo,
+                                            client: client, database: database, connection: server.connection())
                 await assessCurrentLayer()
             }
         } catch {

@@ -14,19 +14,24 @@ struct LayerPage: View {
         VStack(alignment: .leading, spacing: 18) {
             LayerHeader(layer: layer, service: service)
             LayerTabs(selection: $model.layerTab)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    switch model.layerTab {
-                    case .overview: OverviewTab(layer: layer, service: service, fields: fields)
-                    case .fields: FieldsTab(fields: fields)
-                    case .raw: RawJSONView()
-                    case .query: Pending(text: "Read-only queries arrive with milestone M3.")
-                    case .download: Pending(text: "Downloads arrive with milestone M4.")
-                    case .map: Pending(text: "The map arrives with milestone M6.")
+            if model.layerTab == .query, let session = model.querySession {
+                QueryTab(session: session)
+                    .padding(.bottom, 18)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        switch model.layerTab {
+                        case .overview: OverviewTab(layer: layer, service: service, fields: fields)
+                        case .fields: FieldsTab(fields: fields)
+                        case .raw: RawJSONView()
+                        case .query: Caption("Loading…")
+                        case .download: Pending(text: "Downloads arrive with milestone M4.")
+                        case .map: Pending(text: "The map arrives with milestone M6.")
+                        }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.bottom, 24)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.bottom, 24)
             }
         }
         .padding(.top, 22).padding(.horizontal, 36)

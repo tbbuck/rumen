@@ -373,3 +373,53 @@ extension AppDatabase {
         return String(decoding: data, as: UTF8.self)
     }
 }
+
+// MARK: - Query history
+
+public struct QueryHistoryRecord: Sendable, Equatable, Identifiable {
+    public let id: Int64
+    public let layerID: Int64
+    public let whereClause: String
+    public let outFields: String?
+    public let ranAt: Date
+    public let count: Int64?
+    public let durationMillis: Int64?
+
+    public init(id: Int64, layerID: Int64, whereClause: String, outFields: String?, ranAt: Date, count: Int64?, durationMillis: Int64?) {
+        self.id = id
+        self.layerID = layerID
+        self.whereClause = whereClause
+        self.outFields = outFields
+        self.ranAt = ranAt
+        self.count = count
+        self.durationMillis = durationMillis
+    }
+}
+
+extension AppDatabase {
+    /// Records a query that ran (count or preview) against a layer.
+    @discardableResult
+    public func recordQuery(layerID: Int64, whereClause: String, outFields: String?, count: Int64?,
+                            durationMillis: Int64?, at date: Date = Date()) throws -> QueryHistoryRecord {
+        let id = try query("""
+            INSERT INTO query_history (layer_id, where_clause, out_fields, ran_at, count, duration_ms)
+            VALUES (?, ?, ?, ?, ?, ?) RETURNING id;
+            """, [.int(layerID), .string(whereClause), .optional(outFields), date.bindValue,
+                  .optional(count), .optional(durationMillis)]).rows.first?.first?.int64
+        guard let id else { throw MetadataStoreError.unexpectedRow("query_history insert") }
+        return QueryHistoryRecord(id: id, layerID: layerID, whereClause: whereClause, outFields: outFields,
+                                  ranAt: date, count: count, durationMillis: durationMillis)
+    }
+
+    /// Most recent first.
+    public func queryHistory(layerID: Int64, limit: Int = 50) throws -> [QueryHistoryRecord] {
+        try query("""
+            SELECT id, layer_id, where_clause, out_fields, ran_at, count, duration_ms
+            FROM query_history WHERE layer_id = ? ORDER BY ran_at DESC, id DESC LIMIT ?;
+            """, [.int(layerID), .int(Int64(limit))]).rows.map { r in
+            QueryHistoryRecord(id: r[0].int64 ?? 0, layerID: r[1].int64 ?? 0, whereClause: r[2].stringValue ?? "",
+                               outFields: r[3].stringValue, ranAt: r[4].dateFromMicros ?? Date(timeIntervalSince1970: 0),
+                               count: r[5].int64, durationMillis: r[6].int64)
+        }
+    }
+}

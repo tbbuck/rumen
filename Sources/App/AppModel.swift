@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 import Observation
 import ArcGISKit
-import DuckDBKit
+import SQLiteKit
 
 /// One visible tree row: a node plus its indent. Indents follow DESIGN-TOKENS: folders and
 /// root services at 14, +18 per folder level, layers a further 20 in.

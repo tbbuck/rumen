@@ -38,16 +38,11 @@ public enum MigrationError: Error, CustomStringConvertible, Equatable {
 
     public var description: String {
         switch self {
-        case .badFilename(let f):
-            return "migration filename '\(f)' is not of the form NNNN_name.sql"
-        case .duplicateVersion(let v):
-            return "two migrations share version \(v)"
-        case .unknownAppliedVersion(let v):
-            return "database has migration \(v) applied but this build does not include it"
-        case .outOfOrder(let pending, let latest):
-            return "migration \(pending) is pending but \(latest) is already applied"
-        case .failed(let v, let m):
-            return "migration \(v) failed: \(m)"
+        case .badFilename(let f): return "migration filename '\(f)' is not of the form NNNN_name.sql"
+        case .duplicateVersion(let v): return "two migrations share version \(v)"
+        case .unknownAppliedVersion(let v): return "database has migration \(v) applied but this build does not include it"
+        case .outOfOrder(let pending, let latest): return "migration \(pending) is pending but \(latest) is already applied"
+        case .failed(let v, let m): return "migration \(v) failed: \(m)"
         }
     }
 }
@@ -65,14 +60,13 @@ public struct MigrationReport: Sendable, Equatable {
     }
 }
 
-/// Applies numbered SQL migrations to a DuckDB database, recording each in
+/// Applies numbered SQL migrations to a SQLite database, recording each in
 /// `schema_migrations`. Every migration runs in its own transaction: a failure rolls it back,
-/// leaves the version unrecorded, and is thrown with the engine's message.
+/// leaves the version unrecorded, and is thrown with SQLite's message.
 public enum Migrator {
     /// Loads migrations from `.sql` files in `directory`, sorted by version.
     public static func load(directory: URL) throws -> [Migration] {
-        let files = try FileManager.default.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: nil)
+        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
         return try load(files: files.filter { $0.pathExtension == "sql" })
     }
 
@@ -97,13 +91,13 @@ public enum Migrator {
 
     /// Applies every pending migration in version order.
     @discardableResult
-    public static func apply(_ migrations: [Migration], to db: DuckDB) throws -> MigrationReport {
+    public static func apply(_ migrations: [Migration], to db: SQLite) throws -> MigrationReport {
         let migrations = try validated(migrations)
-        try db.run("""
+        try db.execScript("""
             CREATE TABLE IF NOT EXISTS schema_migrations (
                 version INTEGER PRIMARY KEY,
-                name VARCHAR NOT NULL,
-                applied_at TIMESTAMP NOT NULL
+                name TEXT NOT NULL,
+                applied_at INTEGER NOT NULL
             );
             """)
         let appliedRows = try db.run("SELECT version FROM schema_migrations ORDER BY version;")
@@ -119,25 +113,19 @@ public enum Migrator {
             if migration.version < latestApplied {
                 throw MigrationError.outOfOrder(pending: migration.version, latestApplied: latestApplied)
             }
-            try db.run("BEGIN TRANSACTION;")
+            try db.execScript("BEGIN IMMEDIATE;")
             do {
-                try db.run(migration.sql)
-                try db.run("""
-                    INSERT INTO schema_migrations (version, name, applied_at)
-                    VALUES (\(migration.version), '\(escape(migration.name))', CAST(now() AS TIMESTAMP));
-                    """)
-                try db.run("COMMIT;")
+                try db.execScript(migration.sql)
+                try db.run("INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?);",
+                           [.int(Int64(migration.version)), .string(migration.name),
+                            .timestamp(micros: Int64(Date().timeIntervalSince1970 * 1_000_000))])
+                try db.execScript("COMMIT;")
             } catch {
-                _ = try? db.run("ROLLBACK;")
+                _ = try? db.execScript("ROLLBACK;")
                 throw MigrationError.failed(version: migration.version, message: String(describing: error))
             }
             newlyApplied.append(migration.version)
         }
-        return MigrationReport(applied: newlyApplied,
-                               currentVersion: max(latestApplied, newlyApplied.last ?? 0))
-    }
-
-    private static func escape(_ s: String) -> String {
-        s.replacingOccurrences(of: "'", with: "''")
+        return MigrationReport(applied: newlyApplied, currentVersion: max(latestApplied, newlyApplied.last ?? 0))
     }
 }

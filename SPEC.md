@@ -331,8 +331,11 @@ Coded-value domains are exported as the raw code; an opt-in option (off by defau
 
 ### 7.1 Modules
 - **`ArcGISCore`** (SPM package at the repo root, `swift test`-able headlessly):
+  - **`SQLiteKit`**: a thin wrapper over the system SQLite (WAL journal, prepared
+    statements, typed values) and the **migration runner**. The app database lives here.
   - `CDuckDB` system module + **`DuckDBKit`**: copied from DuckLake Explorer as the
-    starting point, plus an **Appender** wrapper and a small **migration runner**.
+    starting point, plus an **Appender** wrapper and prepared statements. DuckDB is the
+    spatial and data engine only: extent reprojection, download staging, export, map.
     Extracting a shared package across the two apps is a later, optional refactor.
   - **`ArcGISKit`**: URL normalisation, REST DTOs, the client (headers, retries,
     error envelopes, token refresh), the crawler, extractability rules, the PBF
@@ -342,8 +345,9 @@ Coded-value domains are exported as the raw code; an opt-in option (off by defau
   shell, `NSTableView` grid and `WKWebView` map via `NSViewRepresentable`, the
   `AppModel`, panes, sheets, preferences.
 
-### 7.2 App database (DuckDB, one file)
-Located at `~/Library/Application Support/ArcGIS Explorer/explorer.duckdb`. Schema is
+### 7.2 App database (SQLite, one file)
+Located at `~/Library/Application Support/ArcGIS Explorer/explorer.sqlite`, WAL journal
+mode. Timestamps are INTEGER microseconds since the Unix epoch; booleans INTEGER 0/1. Schema is
 owned by numbered SQL migration files in `Sources/ArcGISKit/Migrations/`
 (`0001_initial.sql`, …), applied in order by the runner and recorded in
 `schema_migrations`. **No ad-hoc DDL anywhere else.**
@@ -372,8 +376,9 @@ Tables (initial):
   duration_ms.
 - `setting` — key, value.
 
-Spatial data (extents) is stored as JSON here for simplicity; the spatial extension is
-loaded only for staging, export, and map preview.
+Extents are stored as JSON text: the native one verbatim and a WGS 84 box reprojected at
+crawl time through an in-memory DuckDB with the spatial extension (the "spatial engine",
+owned by `AppDatabase`). DuckDB never holds app state.
 
 ### 7.3 Networking
 - `URLSession` with a per-server `Origin` / `Referer` header set, a shared per-host
@@ -428,8 +433,8 @@ loaded only for staging, export, and map preview.
    accepted 2026-09-16. Extractability detection is a first-class feature.
 4. **Origin = server origin, Referer = origin + `/`, both overridable per server** —
    accepted 2026-09-16.
-5. **Single DuckDB app database for metadata; downloads and exports always outside
-   it** — accepted 2026-09-16.
+5. **Single app database for metadata; downloads and exports always outside it** —
+   accepted 2026-09-16. Originally DuckDB; the engine changed to SQLite in decision 16.
 6. **GeoParquet default export** — accepted 2026-09-16.
 7. **Read-only means no server mutation and no sign-in beyond tokens** — accepted
    2026-09-16. ArcGIS token auth in scope; OAuth out.
@@ -456,6 +461,12 @@ loaded only for staging, export, and map preview.
     a tab drawn as a survey sheet, and transfers live in a bottom strip that opens
     into a drawer. See [UI-SPEC.md](./UI-SPEC.md), [DESIGN-TOKENS.md](./DESIGN-TOKENS.md)
     and the frames under `design/`.
+16. **App state in SQLite, not DuckDB** — accepted 2026-09-16. The metadata cache and
+    download bookkeeping are small relational rows; SQLite's WAL is robust across force
+    quits where DuckDB's replay proved fragile (it could not rebind sequence defaults), and
+    the system library needs no bundling. DuckDB remains the spatial and data engine:
+    extent reprojection now, staging, export, and map data later. This departs from the
+    tree's "DuckDB first" default deliberately.
 
 ## 10. Open questions
 1. ~~**Design direction**: reuse DuckLake Explorer's Stratum system or give this app

@@ -9,7 +9,7 @@ final class SpatialExtentTests: XCTestCase {
 
     override func setUp() async throws {
         scratch = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
-        db = try AppDatabase(path: scratch.appendingPathComponent("explorer.duckdb").path)
+        db = try AppDatabase(path: scratch.appendingPathComponent("explorer.sqlite").path)
         try await db.migrate()
     }
 

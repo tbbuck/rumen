@@ -1,6 +1,6 @@
 import SwiftUI
 import ArcGISKit
-import DuckDBKit
+import SQLiteKit
 
 /// Entry point. The window hides the system title bar so the path bar can be the spine
 /// (UI-SPEC: "the URL is the spine"); `TitleBar` draws the 48px row behind the traffic lights.

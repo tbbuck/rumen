@@ -1,7 +1,7 @@
 import XCTest
 import Foundation
 import ArcGISKit
-import DuckDBKit
+import SQLiteKit
 
 /// Opt-in network test against a real public server. Skipped unless `ARCGIS_LIVE=1` is in the
 /// environment (see `claude-scripts/live_test.sh`). Proves the real URLSession path: headers,
@@ -14,7 +14,7 @@ final class LiveCrawlTests: XCTestCase {
         }
         let scratch = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: scratch) }
-        let db = try AppDatabase(path: scratch.appendingPathComponent("explorer.duckdb").path)
+        let db = try AppDatabase(path: scratch.appendingPathComponent("explorer.sqlite").path)
         try await db.migrate()
         try await db.loadSpatial()
         let client = ArcGISClient()

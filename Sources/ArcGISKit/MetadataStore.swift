@@ -1,5 +1,5 @@
 import Foundation
-import DuckDBKit
+import SQLiteKit
 
 public enum MetadataStoreError: Error, CustomStringConvertible, Equatable {
     case notFound(String)
@@ -21,8 +21,7 @@ extension AppDatabase {
 
     private static let serverColumns = """
         id, root_url, friendly_name, origin_override, referer_override, auth_kind, username,
-        token_service_url, arcgis_version, epoch_us(created_at), epoch_us(last_visited_at),
-        epoch_us(last_deep_crawl_at)
+        token_service_url, arcgis_version, created_at, last_visited_at, last_deep_crawl_at
         """
 
     /// Registers a server root, or touches `last_visited_at` on an existing one. The friendly
@@ -31,8 +30,8 @@ extension AppDatabase {
     public func addServer(rootURL: URL, friendlyName: String, now: Date = Date()) throws -> ServerRecord {
         let name = friendlyName.trimmingCharacters(in: .whitespacesAndNewlines)
         let id = try query("""
-            INSERT INTO server (id, root_url, friendly_name, created_at, last_visited_at)
-            VALUES (nextval('seq_server'), ?, ?, ?, ?)
+            INSERT INTO server (root_url, friendly_name, created_at, last_visited_at)
+            VALUES (?, ?, ?, ?)
             ON CONFLICT (root_url) DO UPDATE SET last_visited_at = excluded.last_visited_at
             RETURNING id;
             """, [.string(rootURL.absoluteString), .string(name.isEmpty ? (rootURL.host ?? "server") : name),
@@ -64,7 +63,7 @@ extension AppDatabase {
 
     /// Blank overrides are stored as NULL (meaning "use the default").
     public func setHeaderOverrides(serverID: Int64, origin: String?, referer: String?) throws {
-        func clean(_ s: String?) -> BindValue {
+        func clean(_ s: String?) -> SQLBind {
             let t = s?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             return t.isEmpty ? .null : .string(t)
         }
@@ -83,36 +82,24 @@ extension AppDatabase {
     /// Removes a server and everything cached beneath it. Download *records* go too; files
     /// on disk are never touched.
     public func forgetServer(id: Int64) throws {
-        try query("BEGIN TRANSACTION;")
+        try execScript("BEGIN IMMEDIATE;")
         do {
-            try query("""
-                DELETE FROM download_chunk WHERE download_id IN (
-                    SELECT d.id FROM download d JOIN layer l ON l.id = d.layer_id
-                    JOIN service s ON s.id = l.service_id WHERE s.server_id = ?);
-                """, [.int(id)])
-            try query("""
-                DELETE FROM download WHERE layer_id IN (
-                    SELECT l.id FROM layer l JOIN service s ON s.id = l.service_id WHERE s.server_id = ?);
-                """, [.int(id)])
-            try query("""
-                DELETE FROM query_history WHERE layer_id IN (
-                    SELECT l.id FROM layer l JOIN service s ON s.id = l.service_id WHERE s.server_id = ?);
-                """, [.int(id)])
-            try query("""
-                DELETE FROM field WHERE layer_id IN (
-                    SELECT l.id FROM layer l JOIN service s ON s.id = l.service_id WHERE s.server_id = ?);
-                """, [.int(id)])
+            let layersOf = "SELECT l.id FROM layer l JOIN service s ON s.id = l.service_id WHERE s.server_id = ?"
+            try query("DELETE FROM download_chunk WHERE download_id IN (SELECT d.id FROM download d WHERE d.layer_id IN (\(layersOf)));", [.int(id)])
+            try query("DELETE FROM download WHERE layer_id IN (\(layersOf));", [.int(id)])
+            try query("DELETE FROM query_history WHERE layer_id IN (\(layersOf));", [.int(id)])
+            try query("DELETE FROM field WHERE layer_id IN (\(layersOf));", [.int(id)])
             try query("DELETE FROM layer WHERE service_id IN (SELECT id FROM service WHERE server_id = ?);", [.int(id)])
             try query("DELETE FROM service WHERE server_id = ?;", [.int(id)])
             try query("DELETE FROM server WHERE id = ?;", [.int(id)])
-            try query("COMMIT;")
+            try execScript("COMMIT;")
         } catch {
-            _ = try? query("ROLLBACK;")
+            _ = try? execScript("ROLLBACK;")
             throw error
         }
     }
 
-    private static func serverRecord(_ r: [DuckValue]) throws -> ServerRecord {
+    private static func serverRecord(_ r: [SQLValue]) throws -> ServerRecord {
         guard r.count == 12, let id = r[0].int64, let urlText = r[1].stringValue, let url = URL(string: urlText),
               let name = r[2].stringValue, let auth = r[5].stringValue, let created = r[9].dateFromMicros
         else { throw MetadataStoreError.unexpectedRow("server") }
@@ -126,7 +113,7 @@ extension AppDatabase {
 
     private static let serviceColumns = """
         id, server_id, folder_path, name, type, url, capabilities, max_record_count,
-        supported_query_formats, is_tile_cache, epoch_us(fetched_at), extent_wgs84_json
+        supported_query_formats, is_tile_cache, fetched_at, extent_wgs84_json
         """
 
     /// Records the services listed in a directory (root or folder). New rows get their URL
@@ -140,8 +127,8 @@ extension AppDatabase {
             let type = entry.serviceType
             let url = rootURL.appendingPathComponent(entry.name).appendingPathComponent(type.name)
             let id = try query("""
-                INSERT INTO service (id, server_id, folder_path, name, type, url)
-                VALUES (nextval('seq_service'), ?, ?, ?, ?, ?)
+                INSERT INTO service (server_id, folder_path, name, type, url)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT (server_id, url) DO UPDATE SET name = excluded.name, folder_path = excluded.folder_path
                 RETURNING id;
                 """, [.int(serverID), .string(folderPath), .string(entry.name), .string(type.name),
@@ -165,10 +152,11 @@ extension AppDatabase {
     }
 
     public func deleteService(id: Int64) throws {
-        try query("DELETE FROM download_chunk WHERE download_id IN (SELECT d.id FROM download d JOIN layer l ON l.id = d.layer_id WHERE l.service_id = ?);", [.int(id)])
-        try query("DELETE FROM download WHERE layer_id IN (SELECT id FROM layer WHERE service_id = ?);", [.int(id)])
-        try query("DELETE FROM query_history WHERE layer_id IN (SELECT id FROM layer WHERE service_id = ?);", [.int(id)])
-        try query("DELETE FROM field WHERE layer_id IN (SELECT id FROM layer WHERE service_id = ?);", [.int(id)])
+        let layersOf = "SELECT id FROM layer WHERE service_id = ?"
+        try query("DELETE FROM download_chunk WHERE download_id IN (SELECT d.id FROM download d WHERE d.layer_id IN (\(layersOf)));", [.int(id)])
+        try query("DELETE FROM download WHERE layer_id IN (\(layersOf));", [.int(id)])
+        try query("DELETE FROM query_history WHERE layer_id IN (\(layersOf));", [.int(id)])
+        try query("DELETE FROM field WHERE layer_id IN (\(layersOf));", [.int(id)])
         try query("DELETE FROM layer WHERE service_id = ?;", [.int(id)])
         try query("DELETE FROM service WHERE id = ?;", [.int(id)])
     }
@@ -210,7 +198,7 @@ extension AppDatabase {
         try query("SELECT raw_json FROM service WHERE id = ?;", [.int(id)]).rows.first?.first?.stringValue
     }
 
-    private static func serviceRecord(_ r: [DuckValue]) throws -> ServiceRecord {
+    private static func serviceRecord(_ r: [SQLValue]) throws -> ServiceRecord {
         guard r.count == 12, let id = r[0].int64, let serverID = r[1].int64, let folder = r[2].stringValue,
               let name = r[3].stringValue, let type = r[4].stringValue, let urlText = r[5].stringValue,
               let url = URL(string: urlText)
@@ -218,8 +206,7 @@ extension AppDatabase {
         return ServiceRecord(id: id, serverID: serverID, folderPath: folder, name: name, type: ServiceType(type),
                              url: url, capabilities: r[6].stringValue, maxRecordCount: r[7].intValue,
                              supportedQueryFormats: r[8].stringValue, isTileCache: r[9].boolValue,
-                             extentWGS84: BoundingBox(json: r[11].stringValue),
-                             fetchedAt: r[10].dateFromMicros)
+                             extentWGS84: BoundingBox(json: r[11].stringValue), fetchedAt: r[10].dateFromMicros)
     }
 
     // MARK: - Layers
@@ -229,7 +216,7 @@ extension AppDatabase {
         global_id_field, has_z, has_m, has_attachments, extent_json, wkid, latest_wkid, max_record_count,
         supported_query_formats, capabilities, supports_pagination, supports_statistics, supports_order_by,
         supports_result_type, transport, extractable, extractable_reason, sibling_layer_id, feature_count,
-        epoch_us(feature_count_at), epoch_us(fetched_at), extent_wgs84_json
+        feature_count_at, fetched_at, extent_wgs84_json
         """
 
     /// Records the layers and tables a service lists. Existing rows keep their crawled detail.
@@ -238,8 +225,8 @@ extension AppDatabase {
         var ids = [Int64]()
         for (summary, isTable) in layers.map({ ($0, false) }) + tables.map({ ($0, true) }) {
             let id = try query("""
-                INSERT INTO layer (id, service_id, layer_id, name, type, is_table, geometry_type, parent_layer_id)
-                VALUES (nextval('seq_layer'), ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO layer (service_id, layer_id, name, type, is_table, geometry_type, parent_layer_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (service_id, layer_id) DO UPDATE SET
                     name = excluded.name, type = excluded.type, is_table = excluded.is_table,
                     geometry_type = excluded.geometry_type, parent_layer_id = excluded.parent_layer_id
@@ -271,7 +258,7 @@ extension AppDatabase {
     public func updateLayer(id: Int64, info: LayerInfo, raw: Data, extentWGS84: BoundingBox? = nil,
                             fetchedAt: Date = Date()) throws {
         let sr = info.spatialReference
-        try query("BEGIN TRANSACTION;")
+        try execScript("BEGIN IMMEDIATE;")
         do {
             try query("""
                 UPDATE layer SET name = ?, type = ?, is_table = ?, geometry_type = ?, parent_layer_id = ?,
@@ -292,16 +279,16 @@ extension AppDatabase {
             try query("DELETE FROM field WHERE layer_id = ?;", [.int(id)])
             for (position, field) in info.fields.enumerated() {
                 try query("""
-                    INSERT INTO field (id, layer_id, position, name, alias, esri_type, duck_type, length, nullable, editable, domain_json)
-                    VALUES (nextval('seq_field'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    INSERT INTO field (layer_id, position, name, alias, esri_type, duck_type, length, nullable, editable, domain_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """, [.int(id), .int(Int64(position)), .string(field.name), .optional(field.alias),
                           .string(field.type.rawValue), .string(field.type.duckType ?? "SKIP"),
                           .optional(field.length), .optional(field.nullable), .optional(field.editable),
                           .optional(Self.json(field.domain))])
             }
-            try query("COMMIT;")
+            try execScript("COMMIT;")
         } catch {
-            _ = try? query("ROLLBACK;")
+            _ = try? execScript("ROLLBACK;")
             throw error
         }
     }
@@ -345,7 +332,7 @@ extension AppDatabase {
             """, [.int(layerID)]).rows.map(Self.fieldRecord)
     }
 
-    private static func layerRecord(_ r: [DuckValue]) throws -> LayerRecord {
+    private static func layerRecord(_ r: [SQLValue]) throws -> LayerRecord {
         guard r.count == 31, let id = r[0].int64, let serviceID = r[1].int64, let layerID = r[2].intValue,
               let name = r[3].stringValue, let isTable = r[5].boolValue
         else { throw MetadataStoreError.unexpectedRow("layer") }
@@ -362,7 +349,7 @@ extension AppDatabase {
             extentWGS84: BoundingBox(json: r[30].stringValue), fetchedAt: r[29].dateFromMicros)
     }
 
-    private static func fieldRecord(_ r: [DuckValue]) throws -> FieldRecord {
+    private static func fieldRecord(_ r: [SQLValue]) throws -> FieldRecord {
         guard r.count == 11, let id = r[0].int64, let layerID = r[1].int64, let position = r[2].intValue,
               let name = r[3].stringValue, let esri = r[5].stringValue, let duck = r[6].stringValue
         else { throw MetadataStoreError.unexpectedRow("field") }

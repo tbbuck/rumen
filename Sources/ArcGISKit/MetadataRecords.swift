@@ -1,9 +1,9 @@
 import Foundation
-import DuckDBKit
+import SQLiteKit
 
-// Rows of the app database (SPEC §7.2) as Swift values. Timestamps are read with
-// `epoch_us(...)` so they arrive as integers, never as parsed strings. Explicit initialisers
-// keep them constructible from tests and previews.
+// Rows of the app database (SPEC §7.2) as Swift values. Timestamps are INTEGER microseconds
+// since the Unix epoch in SQLite, so they arrive as integers, never as parsed strings. Explicit
+// initialisers keep them constructible from tests and previews.
 
 public struct ServerRecord: Sendable, Equatable, Identifiable {
     public let id: Int64
@@ -229,29 +229,14 @@ public struct FieldRecord: Sendable, Equatable, Identifiable {
     }
 }
 
-// MARK: - Row decoding helpers
-
-extension DuckValue {
-    var boolValue: Bool? { if case .bool(let b) = self { return b }; return nil }
-    var doubleValue: Double? {
-        switch self {
-        case .double(let d): return d
-        case .int(let i): return Double(i)
-        case .uint(let u): return Double(u)
-        default: return nil
-        }
-    }
-    var intValue: Int? { int64.map(Int.init) }
-    /// Microseconds since the epoch (from `epoch_us(col)`) → Date.
-    var dateFromMicros: Date? { int64.map { Date(timeIntervalSince1970: Double($0) / 1_000_000) } }
-}
+// MARK: - Bind helpers
 
 extension Date {
     /// Microseconds since the Unix epoch, for `BindValue.timestamp`.
     var epochMicros: Int64 { Int64((timeIntervalSince1970 * 1_000_000).rounded()) }
-    var bindValue: BindValue { .timestamp(micros: epochMicros) }
+    var bindValue: SQLBind { .timestamp(micros: epochMicros) }
 }
 
 extension Optional where Wrapped == Date {
-    var bindValue: BindValue { self.map { .timestamp(micros: $0.epochMicros) } ?? .null }
+    var bindValue: SQLBind { self.map { .timestamp(micros: $0.epochMicros) } ?? .null }
 }

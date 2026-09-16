@@ -39,6 +39,9 @@ commit per logical unit.
   confirms the verdict and records the count or overturns it with the server's message; the
   verdict sentence, primary button, and links on the Overview; tile-cache flag on the service
   page; deep crawl with progress, cancel, and resume (fresh services skipped). 115 tests.
+- **Storage switched to SQLite** (decision 16): the app database is `explorer.sqlite` behind
+  the new `SQLiteKit`; DuckDB is now only the spatial engine (in-memory, for extents) and,
+  from M4, the staging and export engine.
 
 ---
 

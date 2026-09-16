@@ -1,7 +1,7 @@
 import XCTest
 import Foundation
 import ArcGISKit
-import DuckDBKit
+import SQLiteKit
 
 final class AppDatabaseTests: XCTestCase {
 
@@ -16,12 +16,12 @@ final class AppDatabaseTests: XCTestCase {
     }
 
     private var dbPath: String {
-        scratch.appendingPathComponent("nested/explorer.duckdb").path
+        scratch.appendingPathComponent("nested/explorer.sqlite").path
     }
 
     func testDefaultURLIsUnderApplicationSupport() {
         let url = AppDatabase.defaultURL()
-        XCTAssertTrue(url.path.hasSuffix("/Library/Application Support/ArcGIS Explorer/explorer.duckdb"), url.path)
+        XCTAssertTrue(url.path.hasSuffix("/Library/Application Support/ArcGIS Explorer/explorer.sqlite"), url.path)
     }
 
     func testBundledMigrationsStartAtInitial() throws {
@@ -65,34 +65,34 @@ final class AppDatabaseTests: XCTestCase {
         let db = try AppDatabase(path: dbPath)
         try await db.migrate()
         try await db.query("""
-            INSERT INTO server (id, root_url, friendly_name, created_at)
-            VALUES (nextval('seq_server'), 'https://example.com/arcgis/rest/services', 'Example', CAST(now() AS TIMESTAMP));
+            INSERT INTO server (root_url, friendly_name, created_at)
+            VALUES ('https://example.com/arcgis/rest/services', 'Example', 0);
             """)
         let row = try await db.query("SELECT id, auth_kind, origin_override FROM server;").rows[0]
-        XCTAssertEqual(row, [.int(1), .string("none"), .null])
+        XCTAssertEqual(row, [.int(1), .text("none"), .null])
 
         await XCTAssertThrowsErrorAsync(
             try await db.query("""
-                INSERT INTO server (id, root_url, friendly_name, created_at)
-                VALUES (nextval('seq_server'), 'https://example.com/arcgis/rest/services', 'Dup', CAST(now() AS TIMESTAMP));
+                INSERT INTO server (root_url, friendly_name, created_at)
+                VALUES ('https://example.com/arcgis/rest/services', 'Dup', 0);
                 """)) { error in
-            XCTAssertTrue(String(describing: error).lowercased().contains("constraint"), String(describing: error))
+            XCTAssertTrue(String(describing: error).lowercased().contains("unique"), String(describing: error))
         }
 
         try await db.query("""
-            INSERT INTO service (id, server_id, name, type, url)
-            VALUES (nextval('seq_service'), 1, 'Roads', 'FeatureServer', 'https://example.com/arcgis/rest/services/Roads/FeatureServer');
+            INSERT INTO service (server_id, name, type, url)
+            VALUES (1, 'Roads', 'FeatureServer', 'https://example.com/arcgis/rest/services/Roads/FeatureServer');
             """)
         try await db.query("""
-            INSERT INTO layer (id, service_id, layer_id, name) VALUES (nextval('seq_layer'), 1, 0, 'Centrelines');
+            INSERT INTO layer (service_id, layer_id, name) VALUES (1, 0, 'Centrelines');
             """)
         try await db.query("""
-            INSERT INTO field (id, layer_id, position, name, esri_type, duck_type)
-            VALUES (nextval('seq_field'), 1, 0, 'OBJECTID', 'esriFieldTypeOID', 'BIGINT'),
-                   (nextval('seq_field'), 1, 1, 'UPRN', 'esriFieldTypeString', 'VARCHAR');
+            INSERT INTO field (layer_id, position, name, esri_type, duck_type)
+            VALUES (1, 0, 'OBJECTID', 'esriFieldTypeOID', 'BIGINT'),
+                   (1, 1, 'UPRN', 'esriFieldTypeString', 'VARCHAR');
             """)
-        let hits = try await db.query("SELECT name FROM field WHERE name ILIKE '%uprn%';")
-        XCTAssertEqual(hits.rows, [[.string("UPRN")]])
+        let hits = try await db.query("SELECT name FROM field WHERE name LIKE '%uprn%';")
+        XCTAssertEqual(hits.rows, [[.text("UPRN")]])
     }
 }
 

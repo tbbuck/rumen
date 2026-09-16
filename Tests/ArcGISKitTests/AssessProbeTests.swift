@@ -1,7 +1,7 @@
 import XCTest
 import Foundation
 import ArcGISKit
-import DuckDBKit
+import SQLiteKit
 
 /// The crawler's assess + probe against a stub server: twin discovery crawls the twin once,
 /// the verdict is persisted, a count confirms, a server error overturns.
@@ -15,7 +15,7 @@ final class AssessProbeTests: XCTestCase {
 
     override func setUp() async throws {
         scratch = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
-        db = try AppDatabase(path: scratch.appendingPathComponent("explorer.duckdb").path)
+        db = try AppDatabase(path: scratch.appendingPathComponent("explorer.sqlite").path)
         try await db.migrate()
         try await db.loadSpatial()
         transport = StubTransport { request, _ in

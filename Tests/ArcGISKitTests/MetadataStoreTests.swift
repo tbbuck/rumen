@@ -1,7 +1,7 @@
 import XCTest
 import Foundation
 import ArcGISKit
-import DuckDBKit
+import SQLiteKit
 
 final class MetadataStoreTests: XCTestCase {
 
@@ -11,7 +11,7 @@ final class MetadataStoreTests: XCTestCase {
 
     override func setUp() async throws {
         scratch = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
-        db = try AppDatabase(path: scratch.appendingPathComponent("explorer.duckdb").path)
+        db = try AppDatabase(path: scratch.appendingPathComponent("explorer.sqlite").path)
         try await db.migrate()
     }
 

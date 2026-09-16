@@ -3,12 +3,15 @@ import PackageDescription
 
 // ArcGISCore: the headless engine + kit layer, testable with `swift test`.
 //
-// - CDuckDB / DuckDBKit wrap the locally-installed libduckdb (Homebrew, v1.5.5) via its
-//   C API — copied from DuckLake Explorer, plus an Appender and a migration runner.
+// - SQLiteKit wraps the system SQLite: the app database (metadata cache, download
+//   bookkeeping) and the migration runner. Boring storage for boring data.
+// - CDuckDB / DuckDBKit wrap the locally-installed libduckdb (Homebrew, v1.5.5) via its C
+//   API — copied from DuckLake Explorer, plus an Appender and prepared statements. DuckDB
+//   is the spatial and data engine: extent reprojection, download staging, export, map.
 // - ArcGISKit holds everything ArcGIS: URL normalisation, REST client, crawler, PBF
-//   decoding, download planning, and the app database. No UI, no AppKit.
+//   decoding, extractability, download planning, and the app database. No UI, no AppKit.
 //
-// The macOS app (see project.yml) links both products. Homebrew's dylib has an absolute
+// The macOS app (see project.yml) links the products. Homebrew's dylib has an absolute
 // install name, so no rpath is needed for local development; bundling is M8.
 let duckdbLib = "/opt/homebrew/opt/duckdb/lib"
 
@@ -16,6 +19,7 @@ let package = Package(
     name: "ArcGISCore",
     platforms: [.macOS("26.0")],
     products: [
+        .library(name: "SQLiteKit", targets: ["SQLiteKit"]),
         .library(name: "DuckDBKit", targets: ["DuckDBKit"]),
         .library(name: "ArcGISKit", targets: ["ArcGISKit"]),
     ],
@@ -24,6 +28,10 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-protobuf.git", from: "1.38.0"),
     ],
     targets: [
+        .target(
+            name: "SQLiteKit",
+            linkerSettings: [.linkedLibrary("sqlite3")]
+        ),
         // System module exposing duckdb.h (absolute path — see module.modulemap).
         .systemLibrary(name: "CDuckDB", path: "Sources/CDuckDB"),
         .target(
@@ -36,6 +44,7 @@ let package = Package(
         .target(
             name: "ArcGISKit",
             dependencies: [
+                "SQLiteKit",
                 "DuckDBKit",
                 .product(name: "SwiftProtobuf", package: "swift-protobuf"),
             ],
@@ -51,6 +60,7 @@ let package = Package(
                 .copy("Migrations"),
             ]
         ),
+        .testTarget(name: "SQLiteKitTests", dependencies: ["SQLiteKit"]),
         .testTarget(name: "DuckDBKitTests", dependencies: ["DuckDBKit"]),
         .testTarget(name: "ArcGISKitTests", dependencies: ["ArcGISKit"]),
     ]

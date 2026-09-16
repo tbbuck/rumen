@@ -1,7 +1,7 @@
 import XCTest
 import Foundation
 import ArcGISKit
-import DuckDBKit
+import SQLiteKit
 
 /// A stub "sampleserver6" routed by URL path: recorded fixtures where we have them, minimal
 /// synthetic JSON elsewhere, and a few deliberate failures to exercise fallbacks.
@@ -45,7 +45,7 @@ final class CrawlerTests: XCTestCase {
 
     override func setUp() async throws {
         scratch = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
-        db = try AppDatabase(path: scratch.appendingPathComponent("explorer.duckdb").path)
+        db = try AppDatabase(path: scratch.appendingPathComponent("explorer.sqlite").path)
         try await db.migrate()
         try await db.loadSpatial()
         transport = stubServer()

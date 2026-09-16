@@ -417,7 +417,7 @@ extension DownloadEngineTests {
         let chunks = try await db.chunks(downloadID: planned.id)
         XCTAssertEqual(chunks.filter { $0.status == .split }.count, 3, "the 200 and both 100s were split")
         XCTAssertEqual(chunks.filter { $0.status == .done }.map(\.limit), [50, 50, 50, 50])
-        XCTAssertEqual(chunks.filter { $0.status == .done }.map(\.offset).sorted(), [0, 50, 100, 150], "the two 100s split in parallel, so their halves may land in either order")
+        XCTAssertEqual(chunks.filter { $0.status == .done }.compactMap(\.offset).sorted(), [0, 50, 100, 150], "the two 100s split in parallel, so their halves may land in either order")
         XCTAssertTrue(chunks.first?.lastError?.contains("split into 2 and 3") == true, chunks.first?.lastError ?? "")
         XCTAssertEqual(try readBack(try XCTUnwrap(record.outputPath)).count, 51, "no duplicates from the split")
     }

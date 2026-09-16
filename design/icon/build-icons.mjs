@@ -38,7 +38,7 @@ function squirclePath() {
 const SQUIRCLE = squirclePath();
 
 // Sheet palette (DESIGN-TOKENS.md, Day), plus the icon's own grounds.
-const p = { ground: '#EDEFE9', paper: '#FFFFFF', land: '#F4F5F1', line2: '#BEC5BA', grat: '#C5D3E2', water: '#DCE7F0', muted2: '#8A948E', accent: '#B8236B', accentSoft: 'rgba(184,35,107,0.06)' };
+const p = { ground: '#EDEFE9', paper: '#FFFFFF', land: '#F6F7F3', coast: '#A6BBD0', line2: '#BEC5BA', grat: '#CBD7E4', water: '#DCE7F0', muted2: '#8A948E', accent: '#B8236B', accentSoft: 'rgba(184,35,107,0.07)' };
 const backSheets = ['#D6DBD3', '#E4E7E1'];
 
 // ---- Geography -------------------------------------------------------------
@@ -98,17 +98,23 @@ function extentRect(geojson, proj) {
 }
 
 // The map fragment inside `box`: water, mainland, graticule, the island, its extent.
-function mapFragment(box, islandW, islandY, gratStep, strokeW, dash) {
+// `extentOf` is the island by default; pass a lon/lat GeoJSON polygon to box a
+// different area (used by the coast variant).
+function mapFragment(box, islandW, islandY, gratStep, strokeW, dash, extentOf = island) {
   const win = windowFor(box, islandW, islandY);
   const proj = project(win);
-  const ext = extentRect(island, proj);
+  const ext = extentRect(extentOf, proj);
   const g = [];
   for (let x = box.x + gratStep / 2; x < box.x + box.w; x += gratStep) g.push(`M${x} ${box.y}V${box.y + box.h}`);
   for (let y = box.y + gratStep / 2; y < box.y + box.h; y += gratStep) g.push(`M${box.x} ${y}H${box.x + box.w}`);
+  // Linework only: land and water as two paper tones, the coast as a thin line.
+  // Magenta is kept for the extent, the one geometric element, so nothing organic
+  // ever reads as a solid blob.
+  const land = mainland.map(m => pathFor(m, proj)).join('') + pathFor(island, proj);
   return `<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" fill="${p.water}"/>
-      <path d="${mainland.map(m => pathFor(m, proj)).join('')}" fill="${p.land}" fill-rule="evenodd"/>
+      <path d="${land}" fill="${p.land}" fill-rule="evenodd"/>
       <path d="${g.join('')}" stroke="${p.grat}" stroke-width="4" fill="none"/>
-      <path d="${pathFor(island, proj)}" fill="${p.accent}" fill-rule="evenodd"/>
+      <path d="${land}" fill="none" stroke="${p.coast}" stroke-width="5" stroke-linejoin="round"/>
       <rect x="${ext.x.toFixed(1)}" y="${ext.y.toFixed(1)}" width="${ext.w.toFixed(1)}" height="${ext.h.toFixed(1)}" fill="${p.accentSoft}" stroke="${p.accent}" stroke-width="${strokeW}" stroke-dasharray="${dash}"/>`;
 }
 
@@ -138,9 +144,19 @@ const SOFT = `<filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><fe
 function conceptA() {
   const tile = { x: 0, y: 0, w: 1024, h: 1024 };
   const body = `<g>
-      ${mapFragment(tile, 0.56, 0.58, 160, 16, '46 30')}
+      ${mapFragment(tile, 0.56, 0.58, 160, 18, '46 30')}
     </g>`;
   return svgDoc('A · Footprint', 'The tile is the survey sheet: the Solent coast, the graticule, the Isle of Wight as the layer and its dashed extent.', '', body);
+}
+
+// A2 · Coast: the same sheet, the extent over the Southampton Water shoreline instead.
+function conceptA2() {
+  const tile = { x: 0, y: 0, w: 1024, h: 1024 };
+  const solent = { type: 'Polygon', coordinates: [[[-1.52, 50.78], [-1.10, 50.78], [-1.10, 50.925], [-1.52, 50.925], [-1.52, 50.78]]] };
+  const body = `<g>
+      ${mapFragment(tile, 0.56, 0.86, 160, 18, '46 30', solent)}
+    </g>`;
+  return svgDoc('A2 · Coast', 'The tile is the survey sheet; the extent boxes a stretch of the mainland shore, with the island below.', '', body);
 }
 
 // B · Sheet: a white map sheet with margins and ticks on the pale ground.
@@ -191,9 +207,10 @@ function conceptC() {
 }
 
 const concepts = [
-  { key: 'A', file: 'A-footprint.svg', name: 'A · Footprint', svg: conceptA(), why: 'The tile is the sheet. Real geography: the Solent coast along the top, the Isle of Wight as the layer in magenta, and the dashed extent that is its true bounding box.', tradeoff: 'Pale and quiet on a light desktop.' },
-  { key: 'B', file: 'B-sheet.svg', name: 'B · Sheet', svg: conceptB(), why: 'The same map on a white sheet with margins and ticks, lying on the pale ground. The marginalia are the signature.', tradeoff: 'The ticks vanish below 64px; at Finder sizes it is a white square with a magenta island.' },
-  { key: 'C', file: 'C-pulled-layer.svg', name: 'C · Pulled layer', svg: conceptC(), why: 'Three sheets from a server, the white front one lifted away carrying the island. The only concept that shows what the app does: extraction.', tradeoff: 'Busiest silhouette; a stack can read as a generic layers glyph.' },
+  { key: 'A', file: 'A-footprint.svg', name: 'A · Footprint', svg: conceptA(), why: 'The tile is the sheet, drawn as linework: paper land, pale water, a thin coast. The only magenta is the dashed extent, the true bounding box of the Isle of Wight.', tradeoff: 'Pale and quiet on a light desktop.' },
+  { key: 'A2', file: 'A2-coast.svg', name: 'A2 · Coast', svg: conceptA2(), why: 'The same sheet with the extent over a stretch of the mainland shore, Southampton Water and the harbours, and the island running off the bottom.', tradeoff: 'The box no longer hugs one feature, so it reads as an area rather than a layer.' },
+  { key: 'B', file: 'B-sheet.svg', name: 'B · Sheet', svg: conceptB(), why: 'The same map on a white sheet with margins and ticks, lying on the pale ground. The marginalia are the signature.', tradeoff: 'The ticks vanish below 64px; at Finder sizes it is a white square with a magenta box.' },
+  { key: 'C', file: 'C-pulled-layer.svg', name: 'C · Pulled layer', svg: conceptC(), why: 'Three sheets from a server, the white front one lifted away carrying the map. The only concept that shows what the app does: extraction.', tradeoff: 'Busiest silhouette; a stack can read as a generic layers glyph.' },
 ];
 
 // ---- Preview page ----------------------------------------------------------

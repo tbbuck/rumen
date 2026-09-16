@@ -67,6 +67,7 @@ private struct TitleBar: View {
             Color.clear.frame(width: 64)   // traffic lights live here
             PathBar()
             ColumnSearchField()
+            AppearanceToggle()
         }
         .padding(.trailing, 14)
         .frame(height: 48)

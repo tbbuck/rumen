@@ -123,3 +123,41 @@ struct ColumnSearchField: View {
         .overlay(RoundedRectangle(cornerRadius: 7).stroke(focused ? Palette.accent : Palette.line2, lineWidth: 1))
     }
 }
+
+/// Day · night · auto, three small icons in the title bar. Remembered across launches.
+struct AppearanceToggle: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        HStack(spacing: 2) {
+            AppearanceButton(symbol: "sun.max", help: "Day", isOn: model.appearanceOverride == .light) { model.setAppearance(.light) }
+            AppearanceButton(symbol: "moon", help: "Night", isOn: model.appearanceOverride == .dark) { model.setAppearance(.dark) }
+            AppearanceButton(symbol: "circle.lefthalf.filled", help: "Follow the system", isOn: model.appearanceOverride == nil) { model.setAppearance(nil) }
+        }
+        .padding(2)
+        .background(Palette.bg, in: RoundedRectangle(cornerRadius: 7))
+        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Palette.line2, lineWidth: 1))
+    }
+}
+
+private struct AppearanceButton: View {
+    let symbol: String
+    let help: String
+    let isOn: Bool
+    let action: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(isOn ? Palette.accent : (hovered ? Palette.ink : Palette.muted2))
+                .frame(width: 24, height: 24)
+                .background(isOn ? Palette.accentSoft : (hovered ? Palette.line : .clear), in: RoundedRectangle(cornerRadius: 5))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .hoverTracking($hovered, hand: !isOn)
+        .help(help)
+    }
+}

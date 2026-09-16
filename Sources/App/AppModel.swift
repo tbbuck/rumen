@@ -110,6 +110,11 @@ final class AppModel {
             engine = DownloadEngine(client: client, database: db, crawler: crawler,
                                     stagingDirectory: AppDatabase.defaultURL().deletingLastPathComponent().appendingPathComponent("staging"))
             if let dir = try await db.setting("download_dir") { downloadDirectory = URL(fileURLWithPath: dir) }
+            switch try await db.setting("appearance") {
+            case "light": appearanceOverride = .light
+            case "dark": appearanceOverride = .dark
+            default: appearanceOverride = nil
+            }
             try await db.markInterruptedDownloads()
             try await reloadServers()
             await reloadRuns()
@@ -739,5 +744,14 @@ extension AppModel {
             try? await database.deleteDownload(id: run.id)
         }
         await reloadRuns()
+    }
+}
+
+extension AppModel {
+    /// Day, night, or follow the system; remembered in the app database.
+    func setAppearance(_ scheme: ColorScheme?) {
+        appearanceOverride = scheme
+        let value: String? = scheme == .light ? "light" : (scheme == .dark ? "dark" : nil)
+        Task { try? await database?.setSetting("appearance", value) }
     }
 }

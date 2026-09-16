@@ -1,0 +1,8 @@
+// Exposes the locally-installed DuckDB C API to Swift as `import CDuckDB`.
+// Absolute header path avoids header-search-path juggling; the link flags live
+// in Package.swift (DuckDBKit's linkerSettings). Path is pinned to Homebrew's
+// DuckDB v1.5.5; bundling a copy for distribution is an M5 concern.
+module CDuckDB [system] {
+    header "/opt/homebrew/opt/duckdb/include/duckdb.h"
+    export *
+}

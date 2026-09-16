@@ -1,0 +1,43 @@
+name: CI
+
+# Build + engine/kit tests on every push to main and every PR. No signing here — that's
+# the release workflow's job (M8).
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    # macos-26 (Apple Silicon): matches the macOS 26 deployment target + Xcode 26. Building on
+    # an older runner OS crashed actool for the sibling app, so the runner OS must match the
+    # target. arm64 → Homebrew at /opt/homebrew, matching Package.swift's link path.
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install build tools + DuckDB
+        run: brew install xcodegen duckdb
+
+      - name: Engine + kit tests
+        run: swift test
+
+      - name: Build app (Release, unsigned)
+        run: |
+          xcodegen generate
+          xcodebuild \
+            -project ArcGISExplorer.xcodeproj \
+            -scheme ArcGISExplorer \
+            -configuration Release \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+            -quiet build

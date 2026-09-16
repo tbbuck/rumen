@@ -1,0 +1,54 @@
+name: ArcGISExplorer
+options:
+  bundleIdPrefix: com.moomoomoo
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+
+# Regenerate the .xcodeproj (which is gitignored) with `xcodegen generate`.
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    # Local dev signs ad-hoc so no Apple Team is required to build/run.
+    # M8 switches to Developer ID + hardened runtime + notarization.
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    DEVELOPMENT_TEAM: ""
+    ENABLE_HARDENED_RUNTIME: NO
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+
+packages:
+  ArcGISCore:
+    path: .
+
+targets:
+  ArcGISExplorer:
+    type: application
+    platform: macOS
+    sources:
+      - Sources/App
+    dependencies:
+      - package: ArcGISCore
+        product: DuckDBKit
+      - package: ArcGISCore
+        product: ArcGISKit
+    # MapTiler key comes from Config/maptiler.xcconfig (+ untracked …local.xcconfig); no key
+    # is committed. It flows MAPTILER_API_KEY → Info.plist MapTilerAPIKey → MapConfig (M6).
+    configFiles:
+      Debug: Config/maptiler.xcconfig
+      Release: Config/maptiler.xcconfig
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.moomoomoo.ArcGISExplorer
+        PRODUCT_NAME: ArcGIS Explorer
+        # Manual Info.plist (not generated) so the custom MapTilerAPIKey key can be filled by
+        # build-setting substitution from $(MAPTILER_API_KEY).
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Config/Info.plist
+        # libduckdb is linked from Homebrew (absolute install name) for now.
+        LIBRARY_SEARCH_PATHS:
+          - "/opt/homebrew/opt/duckdb/lib"
+        LD_RUNPATH_SEARCH_PATHS:
+          - "/opt/homebrew/opt/duckdb/lib"

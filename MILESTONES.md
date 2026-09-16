@@ -10,7 +10,7 @@ commit per logical unit.
 
 ---
 
-## M0 — Scaffold & engine  *(de-risk the toolchain)*
+## M0 — Scaffold & engine  *(de-risk the toolchain)* — ✅ done 2026-09-16
 **Goal:** a building, testing, signed-ad-hoc app with a migrated DuckDB app database.
 - **Deliverables**
   - `Package.swift` (`ArcGISCore`: `CDuckDB`, `DuckDBKit`, `ArcGISKit`, tests) and

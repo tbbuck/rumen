@@ -1,0 +1,10 @@
+// MapTiler basemap key — injected into Info.plist as MapTilerAPIKey (used from M6).
+// This committed file ships NO key. To render basemap tiles, create an untracked
+//   Config/maptiler.local.xcconfig
+// containing:
+//   MAPTILER_API_KEY = your_key_here
+// (it is git-ignored and overrides the empty default below).
+
+MAPTILER_API_KEY =
+
+#include? "maptiler.local.xcconfig"

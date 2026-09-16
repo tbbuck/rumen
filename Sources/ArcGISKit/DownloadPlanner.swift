@@ -30,7 +30,7 @@ public enum DownloadPlanner {
         let size = Int64(max(1, pageSize))
         let pages = max(1, Int((count + size - 1) / size))
         return (0..<pages).map { i in
-            DownloadChunk(downloadID: downloadID, seq: i, kind: .offset, offset: Int64(i) * size)
+            DownloadChunk(downloadID: downloadID, seq: i, kind: .offset, offset: Int64(i) * size, limit: Int(size))
         }
     }
 
@@ -42,7 +42,7 @@ public enum DownloadPlanner {
         var lo = minOID
         while lo <= maxOID {
             let hi = min(maxOID, lo + size - 1)
-            chunks.append(DownloadChunk(downloadID: downloadID, seq: chunks.count, kind: .oidRange, lo: lo, hi: hi))
+            chunks.append(DownloadChunk(downloadID: downloadID, seq: chunks.count, kind: .oidRange, lo: lo, hi: hi, limit: Int(size)))
             lo = hi + 1
         }
         return chunks
@@ -54,7 +54,8 @@ public enum DownloadPlanner {
         let size = max(1, pageSize)
         return stride(from: 0, to: ids.count, by: size).enumerated().map { seq, start in
             DownloadChunk(downloadID: downloadID, seq: seq, kind: .oidList,
-                          lo: ids[start], hi: ids[min(start + size, ids.count) - 1], objectIDs: Array(ids[start..<min(start + size, ids.count)]))
+                          lo: ids[start], hi: ids[min(start + size, ids.count) - 1], objectIDs: Array(ids[start..<min(start + size, ids.count)]),
+                          limit: size)
         }
     }
 
@@ -65,7 +66,7 @@ public enum DownloadPlanner {
         switch chunk.kind {
         case .offset:
             options.offset = chunk.offset.map(Int.init)
-            options.count = pageSize
+            options.count = chunk.limit ?? pageSize
             if canOrderBy { options.orderBy = (oidField, true) }
         case .oidRange:
             let base = whereClause.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -80,4 +81,32 @@ public enum DownloadPlanner {
     /// The OID-list id fetch is capped (decision 14): beyond it the run pauses and asks for a
     /// manual partitioning where clause.
     public static let objectIDListCap = 5_000_000
+}
+
+extension DownloadPlanner {
+    /// The smallest page worth asking for; below it a refusal is a real error, not size.
+    public static let minimumSplit = 25
+
+    /// Halves a chunk the server refused whole. Nil when it cannot be split further.
+    public static func split(_ chunk: DownloadChunk, pageSize: Int, firstSeq: Int) -> [DownloadChunk]? {
+        switch chunk.kind {
+        case .offset:
+            let limit = chunk.limit ?? pageSize
+            guard limit >= minimumSplit * 2, let offset = chunk.offset else { return nil }
+            let half = limit / 2
+            return [DownloadChunk(downloadID: chunk.downloadID, seq: firstSeq, kind: .offset, offset: offset, limit: half),
+                    DownloadChunk(downloadID: chunk.downloadID, seq: firstSeq + 1, kind: .offset, offset: offset + Int64(half), limit: limit - half)]
+        case .oidRange:
+            guard let lo = chunk.lo, let hi = chunk.hi, hi - lo + 1 >= Int64(minimumSplit * 2) else { return nil }
+            let mid = lo + (hi - lo) / 2
+            return [DownloadChunk(downloadID: chunk.downloadID, seq: firstSeq, kind: .oidRange, lo: lo, hi: mid, limit: Int(mid - lo + 1)),
+                    DownloadChunk(downloadID: chunk.downloadID, seq: firstSeq + 1, kind: .oidRange, lo: mid + 1, hi: hi, limit: Int(hi - mid))]
+        case .oidList:
+            guard let ids = chunk.objectIDs, ids.count >= minimumSplit * 2 else { return nil }
+            let half = ids.count / 2
+            let a = Array(ids[..<half]), b = Array(ids[half...])
+            return [DownloadChunk(downloadID: chunk.downloadID, seq: firstSeq, kind: .oidList, lo: a.first, hi: a.last, objectIDs: a, limit: a.count),
+                    DownloadChunk(downloadID: chunk.downloadID, seq: firstSeq + 1, kind: .oidList, lo: b.first, hi: b.last, objectIDs: b, limit: b.count)]
+        }
+    }
 }

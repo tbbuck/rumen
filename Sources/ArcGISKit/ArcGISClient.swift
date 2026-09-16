@@ -147,7 +147,7 @@ public actor ArcGISClient {
     /// `params` are query parameters for GET and the form body for POST; `f=json` is added
     /// unless the caller set `f`.
     public func request(_ method: HTTPMethod, url: URL, params: [String: String] = [:],
-                        server: ServerConnection) async throws -> Data {
+                        server: ServerConnection, maxAttempts: Int? = nil) async throws -> Data {
         var params = params
         if params["f"] == nil { params["f"] = "json" }
         if let token = server.token, params["token"] == nil { params["token"] = token }
@@ -162,7 +162,7 @@ public actor ArcGISClient {
             do {
                 return try await performOnce(request, url: url)
             } catch let error as ArcGISClientError {
-                guard error.isRetryable, attempt < retry.maxAttempts else { throw error }
+                guard error.isRetryable, attempt < (maxAttempts ?? retry.maxAttempts) else { throw error }
                 let delay = retry.delay(beforeRetry: attempt)
                 if delay > 0 { try await Task.sleep(for: .seconds(delay)) }
                 attempt += 1
@@ -198,8 +198,8 @@ public actor ArcGISClient {
     /// cache it verbatim.
     public func json<T: Decodable>(_ type: T.Type, _ method: HTTPMethod = .get, url: URL,
                                    params: [String: String] = [:],
-                                   server: ServerConnection) async throws -> (value: T, raw: Data) {
-        let data = try await request(method, url: url, params: params, server: server)
+                                   server: ServerConnection, maxAttempts: Int? = nil) async throws -> (value: T, raw: Data) {
+        let data = try await request(method, url: url, params: params, server: server, maxAttempts: maxAttempts)
         do {
             return (try ArcGISJSON.decode(type, from: data), data)
         } catch {

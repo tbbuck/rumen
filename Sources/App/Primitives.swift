@@ -3,7 +3,7 @@ import ArcGISKit
 
 /// Transport, strategy and state in form: `PBF`, `Done`, `Paused`.
 struct Chip: View {
-    enum Style { case accent, yes, warn, no }
+    enum Style { case accent, yes, warn, no, muted }
     let text: String
     var style: Style = .accent
 
@@ -16,10 +16,16 @@ struct Chip: View {
     }
 
     private var foreground: Color {
-        switch style { case .accent: Palette.accent; case .yes: Palette.yes; case .warn: Palette.warn; case .no: Palette.no }
+        switch style { case .accent: Palette.accent; case .yes: Palette.yes; case .warn: Palette.warn; case .no: Palette.no; case .muted: Palette.muted }
     }
     private var background: Color {
-        switch style { case .accent: Palette.accentSoft; case .yes: Palette.yesSoft; case .warn: Palette.warnSoft; case .no: Palette.no.opacity(0.14) }
+        switch style {
+        case .accent: Palette.accentSoft
+        case .yes: Palette.yesSoft
+        case .warn: Palette.warnSoft
+        case .no: Palette.no.opacity(0.14)
+        case .muted: Palette.line
+        }
     }
 }
 
@@ -70,12 +76,9 @@ struct ExtentLocator: View {
     var body: some View {
         Canvas { context, size in
             let outer = CGRect(x: 0.5, y: 0.5, width: size.width - 1, height: size.height - 1)
-            var framePath = Path(outer)
             let frameStroke = style == .table ? StrokeStyle(lineWidth: 1, dash: [2, 2]) : StrokeStyle(lineWidth: 1)
-            context.stroke(framePath, with: .color(Palette.line2), style: frameStroke)
-            framePath = Path()
+            context.stroke(Path(outer), with: .color(Palette.line2), style: frameStroke)
             guard style != .table, let extent, let frame, frame.width > 0, frame.height > 0 else { return }
-            // Map lon/lat into the frame; y flips (north up).
             let sx = (size.width - 2) / frame.width
             let sy = (size.height - 2) / frame.height
             var rect = CGRect(x: 1 + (extent.minX - frame.minX) * sx,
@@ -97,28 +100,79 @@ struct ExtentLocator: View {
     }
 }
 
-/// Primary: 30px, radius 6, accent fill. One per view.
-struct PrimaryButtonStyle: ButtonStyle {
-    var small = false
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.sheetUI(small ? 12 : 13, .semibold))
-            .foregroundStyle(Palette.onAccent)
-            .padding(.horizontal, small ? 10 : 12)
-            .frame(height: small ? 26 : 30)
-            .background(Palette.accent.opacity(configuration.isPressed ? 0.85 : 1), in: RoundedRectangle(cornerRadius: 6))
+// MARK: - Hover
+
+/// Hover tracking with the tokens' motion rules: `.12s ease`, none under Reduce Motion, and a
+/// pointing hand for anything that acts like a link.
+struct HoverTracking: ViewModifier {
+    @Binding var isHovered: Bool
+    var hand = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { hovering in
+                if reduceMotion { isHovered = hovering } else { withAnimation(.easeInOut(duration: 0.12)) { isHovered = hovering } }
+                if hand { if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() } }
+            }
     }
 }
 
-/// Secondary actions are links, not outlined buttons.
+extension View {
+    func hoverTracking(_ isHovered: Binding<Bool>, hand: Bool = false) -> some View {
+        modifier(HoverTracking(isHovered: isHovered, hand: hand))
+    }
+}
+
+/// Primary: 30px, radius 6, accent fill; brightens on hover, dims when pressed. One per view.
+struct PrimaryButtonStyle: ButtonStyle {
+    var small = false
+    func makeBody(configuration: Configuration) -> some View {
+        PrimaryButtonBody(configuration: configuration, small: small)
+    }
+
+    private struct PrimaryButtonBody: View {
+        let configuration: Configuration
+        let small: Bool
+        @State private var hovered = false
+        @Environment(\.isEnabled) private var isEnabled
+
+        var body: some View {
+            configuration.label
+                .font(.sheetUI(small ? 12 : 13, .semibold))
+                .foregroundStyle(Palette.onAccent)
+                .padding(.horizontal, small ? 10 : 12)
+                .frame(height: small ? 26 : 30)
+                .background(Palette.accent, in: RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(hovered && !configuration.isPressed ? 0.12 : 0)))
+                .opacity(configuration.isPressed ? 0.85 : (isEnabled ? 1 : 0.45))
+                .hoverTracking($hovered, hand: isEnabled)
+        }
+    }
+}
+
+/// Secondary actions are links, not outlined buttons: accent text, underline on hover only.
 struct LinkButtonStyle: ButtonStyle {
     var size: CGFloat = 13
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.sheetUI(size))
-            .foregroundStyle(Palette.accent)
-            .underline(configuration.isPressed)
-            .contentShape(Rectangle())
+        LinkButtonBody(configuration: configuration, size: size)
+    }
+
+    private struct LinkButtonBody: View {
+        let configuration: Configuration
+        let size: CGFloat
+        @State private var hovered = false
+        @Environment(\.isEnabled) private var isEnabled
+
+        var body: some View {
+            configuration.label
+                .font(.sheetUI(size))
+                .foregroundStyle(isEnabled ? Palette.accent : Palette.muted2)
+                .underline(hovered && isEnabled)
+                .opacity(configuration.isPressed ? 0.7 : 1)
+                .contentShape(Rectangle())
+                .hoverTracking($hovered, hand: isEnabled)
+        }
     }
 }
 
@@ -164,5 +218,22 @@ struct ErrorText: View {
             .foregroundStyle(Palette.no)
             .textSelection(.enabled)
             .frame(maxWidth: 720, alignment: .leading)
+    }
+}
+
+/// Run progress: 6px, radius 3; `yes` when done, `warn` when paused, `accent` while running.
+struct ProgressBar: View {
+    let fraction: Double
+    var color: Color = Palette.accent
+    var height: CGFloat = 6
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Palette.line)
+                Capsule().fill(color).frame(width: max(0, min(1, fraction)) * proxy.size.width)
+            }
+        }
+        .frame(height: height)
     }
 }

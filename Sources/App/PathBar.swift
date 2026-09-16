@@ -75,6 +75,7 @@ private struct PathSegmentView: View {
     @Environment(AppModel.self) private var model
     let segment: PathSegment
     let isCurrent: Bool
+    @State private var hovered = false
 
     var body: some View {
         Button {
@@ -82,12 +83,13 @@ private struct PathSegmentView: View {
         } label: {
             Text(segment.label)
                 .font(.sheetUI(13, isCurrent ? .semibold : .regular))
-                .foregroundStyle(isCurrent ? Palette.ink : Palette.muted)
+                .foregroundStyle(isCurrent || hovered ? Palette.ink : Palette.muted)
                 .padding(.horizontal, 6).padding(.vertical, 3)
-                .background(isCurrent ? Palette.accentSoft : .clear, in: RoundedRectangle(cornerRadius: 5))
+                .background(isCurrent ? Palette.accentSoft : (hovered ? Palette.line.opacity(0.7) : .clear), in: RoundedRectangle(cornerRadius: 5))
                 .lineLimit(1)
         }
         .buttonStyle(.plain)
+        .hoverTracking($hovered, hand: !isCurrent)
     }
 }
 

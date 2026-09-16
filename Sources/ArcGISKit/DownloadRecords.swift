@@ -23,6 +23,8 @@ public enum DownloadStatus: String, Sendable, Equatable {
 
 public enum ChunkStatus: String, Sendable, Equatable {
     case pending, done, failed
+    /// Replaced by smaller chunks after the server refused it whole.
+    case split
 }
 
 /// A row of `download`.
@@ -83,6 +85,8 @@ public struct DownloadChunk: Sendable, Equatable, Identifiable {
     public var hi: Int64?
     public var offset: Int64?
     public var objectIDs: [Int64]?
+    /// Page size for this chunk; nil means the run's page size.
+    public var limit: Int?
     public var count: Int64?
     public var status: ChunkStatus
     public var attempts: Int
@@ -91,8 +95,8 @@ public struct DownloadChunk: Sendable, Equatable, Identifiable {
     public var id: Int { seq }
 
     public init(downloadID: Int64, seq: Int, kind: Kind, lo: Int64? = nil, hi: Int64? = nil, offset: Int64? = nil,
-                objectIDs: [Int64]? = nil, count: Int64? = nil, status: ChunkStatus = .pending, attempts: Int = 0,
-                lastError: String? = nil) {
+                objectIDs: [Int64]? = nil, limit: Int? = nil, count: Int64? = nil, status: ChunkStatus = .pending,
+                attempts: Int = 0, lastError: String? = nil) {
         self.downloadID = downloadID
         self.seq = seq
         self.kind = kind
@@ -100,6 +104,7 @@ public struct DownloadChunk: Sendable, Equatable, Identifiable {
         self.hi = hi
         self.offset = offset
         self.objectIDs = objectIDs
+        self.limit = limit
         self.count = count
         self.status = status
         self.attempts = attempts
@@ -195,11 +200,11 @@ extension AppDatabase {
         do {
             for c in chunks {
                 try query("""
-                    INSERT INTO download_chunk (download_id, seq, kind, lo, hi, "offset", object_ids, count, status, attempts, last_error)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    INSERT INTO download_chunk (download_id, seq, kind, lo, hi, "offset", object_ids, "limit", count, status, attempts, last_error)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """, [.int(c.downloadID), .int(Int64(c.seq)), .string(c.kind.rawValue), .optional(c.lo), .optional(c.hi),
                           .optional(c.offset), .optional(c.objectIDs.map { $0.map(String.init).joined(separator: ",") }),
-                          .optional(c.count), .string(c.status.rawValue), .int(Int64(c.attempts)), .optional(c.lastError)])
+                          .optional(c.limit), .optional(c.count), .string(c.status.rawValue), .int(Int64(c.attempts)), .optional(c.lastError)])
             }
             try execScript("COMMIT;")
         } catch {
@@ -210,15 +215,16 @@ extension AppDatabase {
 
     public func chunks(downloadID: Int64) throws -> [DownloadChunk] {
         try query("""
-            SELECT download_id, seq, kind, lo, hi, "offset", object_ids, count, status, attempts, last_error
+            SELECT download_id, seq, kind, lo, hi, "offset", object_ids, "limit", count, status, attempts, last_error
             FROM download_chunk WHERE download_id = ? ORDER BY seq;
             """, [.int(downloadID)]).rows.map { r in
             DownloadChunk(downloadID: r[0].int64 ?? 0, seq: r[1].intValue ?? 0,
                           kind: r[2].stringValue.flatMap(DownloadChunk.Kind.init(rawValue:)) ?? .offset,
                           lo: r[3].int64, hi: r[4].int64, offset: r[5].int64,
                           objectIDs: r[6].stringValue.map { $0.split(separator: ",").compactMap { Int64($0) } },
-                          count: r[7].int64, status: r[8].stringValue.flatMap(ChunkStatus.init(rawValue:)) ?? .pending,
-                          attempts: r[9].intValue ?? 0, lastError: r[10].stringValue)
+                          limit: r[7].intValue, count: r[8].int64,
+                          status: r[9].stringValue.flatMap(ChunkStatus.init(rawValue:)) ?? .pending,
+                          attempts: r[10].intValue ?? 0, lastError: r[11].stringValue)
         }
     }
 
@@ -226,5 +232,16 @@ extension AppDatabase {
         try query("""
             UPDATE download_chunk SET status = ?, count = ?, attempts = ?, last_error = ? WHERE download_id = ? AND seq = ?;
             """, [.string(status.rawValue), .optional(count), .int(Int64(attempts)), .optional(error), .int(downloadID), .int(Int64(seq))])
+    }
+}
+
+extension AppDatabase {
+    /// Runs still marked running belong to a process that is gone (quit, crash): park them as
+    /// paused so they can be resumed. Call once at launch, before anything starts.
+    @discardableResult
+    public func markInterruptedDownloads() throws -> Int {
+        try query("UPDATE download SET status = 'paused', error = ? WHERE status = 'running';",
+                  [.string("Interrupted when the app quit; resume to continue.")])
+        return try query("SELECT changes();").rows.first?.first?.intValue ?? 0
     }
 }

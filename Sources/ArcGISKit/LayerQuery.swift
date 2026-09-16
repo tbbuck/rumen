@@ -91,9 +91,10 @@ public struct QueryOptions: Sendable, Equatable {
 
 extension ArcGISClient {
     /// Runs a feature query (page, distinct values, or statistics) and decodes the feature set.
-    public func features(_ server: ServerConnection, layerURL: URL, options: QueryOptions) async throws -> (value: FeatureSet, raw: Data) {
+    public func features(_ server: ServerConnection, layerURL: URL, options: QueryOptions,
+                         maxAttempts: Int? = nil) async throws -> (value: FeatureSet, raw: Data) {
         try await json(FeatureSet.self, .post, url: layerURL.appendingPathComponent("query"),
-                       params: options.params, server: server)
+                       params: options.params, server: server, maxAttempts: maxAttempts)
     }
 
     /// `returnExtentOnly=true` for a where clause, optionally in another spatial reference.
@@ -114,10 +115,12 @@ public struct ObjectIDsResponse: Decodable, Sendable, Equatable {
 
 extension ArcGISClient {
     /// The raw `f=pbf` body of a feature query, for `PBFDecoder`.
-    public func featuresPBF(_ server: ServerConnection, layerURL: URL, options: QueryOptions) async throws -> Data {
+    public func featuresPBF(_ server: ServerConnection, layerURL: URL, options: QueryOptions,
+                            maxAttempts: Int? = nil) async throws -> Data {
         var params = options.params
         params["f"] = "pbf"
-        return try await request(.post, url: layerURL.appendingPathComponent("query"), params: params, server: server)
+        return try await request(.post, url: layerURL.appendingPathComponent("query"), params: params, server: server,
+                                 maxAttempts: maxAttempts)
     }
 
     /// Every object id matching `where`, as the server lists them.

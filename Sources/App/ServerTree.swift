@@ -84,10 +84,13 @@ private struct TreeRow: View {
     private var isSelected: Bool { model.selection == node.id }
     private var isLoading: Bool { model.loadingNodes.contains(node.id) }
     private var isDimmed: Bool { node.extractable == false }
+    @State private var hovered = false
 
     var body: some View {
         HStack(spacing: 7) {
-            if node.isExpandable {
+            if isLoading {
+                ProgressView().controlSize(.mini).frame(width: 10, height: 10)
+            } else if node.isExpandable {
                 Button {
                     Task { await model.toggleExpanded(node) }
                 } label: {
@@ -116,9 +119,7 @@ private struct TreeRow: View {
                 Caption("stale", size: 10.5, color: Palette.warn)
             }
             Spacer(minLength: 4)
-            if isLoading {
-                ProgressView().controlSize(.mini).frame(width: 22, height: 15)
-            } else if model.nodeErrors[node.id] != nil {
+            if model.nodeErrors[node.id] != nil {
                 Image(systemName: "exclamationmark.circle").font(.system(size: 11)).foregroundStyle(Palette.no)
                     .frame(width: 22, height: 15)
             } else {
@@ -129,11 +130,12 @@ private struct TreeRow: View {
         .padding(.trailing, 14)
         .frame(height: 27)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isSelected ? Palette.accentSoft : .clear)
+        .background(isSelected ? Palette.accentSoft : (hovered ? Palette.line.opacity(0.55) : .clear))
         .overlay(alignment: .leading) {
             if isSelected { Rectangle().fill(Palette.accent).frame(width: 2) }
         }
         .contentShape(Rectangle())
+        .hoverTracking($hovered)
         .onTapGesture { Task { await model.select(node.id) } }
         .help(model.nodeErrors[node.id] ?? "")
     }

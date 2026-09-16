@@ -19,6 +19,8 @@ final class StubTransport: HTTPTransport, @unchecked Sendable {
     private var concurrent = 0
     private(set) var maxConcurrent = 0
     var delay: Duration = .zero
+    /// Awaited before answering; lets a test hold selected requests open (cancellation-aware).
+    var gate: (@Sendable (URLRequest) async throws -> Void)?
 
     init(_ handler: @escaping Handler) { self.handler = handler }
 
@@ -33,6 +35,7 @@ final class StubTransport: HTTPTransport, @unchecked Sendable {
         }
         defer { lock.withLock { concurrent -= 1 } }
         if delay > .zero { try await Task.sleep(for: delay) }
+        if let gate { try await gate(request) }
         let reply = try handler(request, index)
         let response = HTTPURLResponse(url: request.url!, statusCode: reply.status, httpVersion: "HTTP/1.1",
                                        headerFields: ["Content-Type": "application/json"])!

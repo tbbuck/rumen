@@ -35,6 +35,11 @@ struct ArcGISExplorerApp: App {
                     if let url = Self.openArgument { await model.openFromLaunch(url) }
                     if let tab = Self.tabArgument, let chosen = LayerTab(rawValue: tab.capitalizedFirst) { model.layerTab = chosen }
                     if Self.runArgument == "preview" { await model.querySession?.preview() }
+                    if Self.runArgument == "download", let layer = model.currentLayer {
+                        var request = DownloadRequest(layerID: layer.id, outputDirectory: model.downloadDirectory)
+                        request.overwrite = true
+                        await model.startDownload(request)
+                    }
                 }
         }
         .windowStyle(.hiddenTitleBar)

@@ -49,6 +49,23 @@ commit per logical unit.
   `NSTableView` results grid ported to the Sheet palette, and per-layer history that
   restores a past query. `--tab` and `--run preview` launch arguments for scripted captures.
   132 tests; verified on sampleserver6.
+- **M4 complete.** PBF decoder (dequantisation with per-part deltas and the upper-left y
+  flip, validated feature for feature against JSON pages of three real layers), Esri
+  geometry → ISO WKB with orientation-based ring assembly, the download engine (offset /
+  OID-range / OID-list planning from probes, bounded parallel fetching, per-run staging in
+  DuckDB through the Appender with chunk-tagged rows, validation of every page against the
+  plan, pause on token errors, resume without refetching, sticky JSON fallback), GeoParquet
+  export from the WKB column with our own `geo` metadata (types, bbox, PROJJSON from
+  DuckDB's CRS registry) plus optional domain-label columns and a SHA-256, and the UI: the
+  Download tab (plan sentence, format / spatial reference / labels / where / output path,
+  manual strategy only when automatic failed, run history), the transfers strip and drawer
+  with chunk grid, progress bars, and per-state actions, overwrite confirmation, resume
+  after relaunch. Also: hover states on links, buttons, rows, segments, and tabs; a spinner
+  in place of the chevron while a service loads. Found live: sampleserver6 times out on a
+  1,000-county page, so refused chunks are now halved until they fit (per-chunk limits,
+  migration 0002). Runs left running by a quit are parked as paused at launch. 156 tests; a
+  real 4-page, 3,219-county download verified with the DuckDB CLI (geometry typed
+  `epsg:4326` from our PROJJSON, 0 null and 6 source-invalid geometries reported).
 
 ---
 
@@ -121,7 +138,7 @@ commit per logical unit.
   the maximum page size.
 - **Demo:** filter a layer, count, preview, page.
 
-## M4 — Download engine & GeoParquet  *(the core)*
+## M4 — Download engine & GeoParquet  *(the core)* — ✅ done 2026-09-16
 **Goal:** complete, correct, resumable layer downloads to GeoParquet.
 - **Deliverables**
   - PBF decoder with dequantisation; Esri JSON decoder; both → WKB with the ring

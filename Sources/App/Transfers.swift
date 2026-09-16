@@ -1,0 +1,272 @@
+import SwiftUI
+import AppKit
+import ArcGISKit
+
+/// A run as the transfers UI shows it: the record plus names and live progress.
+struct TransferRun: Identifiable, Equatable {
+    let record: DownloadRecord
+    let layerName: String
+    let serviceName: String
+    let serverName: String
+    let progress: DownloadProgress?
+    let chunks: [ChunkStatus]
+    let startedRunningAt: Date?
+
+    var id: Int64 { record.id }
+    var status: DownloadStatus { progress?.status ?? record.status }
+
+    var dotColor: Color {
+        switch status {
+        case .running: Palette.accent
+        case .complete: Palette.yes
+        case .paused: Palette.warn
+        case .failed: Palette.no
+        default: Palette.muted2
+        }
+    }
+
+    var statusChip: (String, Chip.Style)? {
+        switch status {
+        case .complete: ("Done", .yes)
+        case .paused: ("Paused", .warn)
+        case .failed: ("Failed", .no)
+        case .cancelled: ("Cancelled", .muted)
+        default: nil
+        }
+    }
+
+    var fraction: Double {
+        guard let p = progress, p.chunksTotal > 0 else { return status == .complete ? 1 : 0 }
+        return Double(p.chunksDone) / Double(p.chunksTotal)
+    }
+
+    /// "138 of 207 requests, 4.2k features/s, 1:40 left" while running; a summary otherwise.
+    var stats: String {
+        switch status {
+        case .running:
+            guard let p = progress else { return "Starting…" }
+            var parts = ["\(p.chunksDone.grouped) of \(p.chunksTotal.grouped) requests"]
+            if let started = startedRunningAt {
+                let elapsed = Date().timeIntervalSince(started)
+                if elapsed > 1, p.features > 0 {
+                    let rate = Double(p.features) / elapsed
+                    parts.append(rate >= 1000 ? "\((rate / 1000).formatted(.number.precision(.fractionLength(1))))k features/s"
+                                              : "\(Int(rate)) features/s")
+                    if p.chunksDone > 0 {
+                        let remaining = Double(p.chunksTotal - p.chunksDone) * (elapsed / Double(p.chunksDone))
+                        parts.append("\(Self.clock(remaining)) left")
+                    }
+                }
+            }
+            return parts.joined(separator: ", ")
+        case .complete:
+            let n = record.featureCount ?? 0
+            let size = ByteCountFormatter.string(fromByteCount: record.bytes ?? 0, countStyle: .file)
+            return "\(n.grouped) features, \(size) fetched, finished \(Age.text(record.finishedAt))."
+        case .paused, .failed:
+            return record.error ?? status.rawValue
+        case .cancelled:
+            return "Cancelled; \(chunks.filter { $0 == .done }.count) of \(chunks.count) requests kept."
+        case .planned:
+            return "Planned, not started."
+        }
+    }
+
+    static func clock(_ seconds: Double) -> String {
+        let s = Int(seconds.rounded())
+        return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
+    }
+
+    /// "Census / states, where 1=1, WGS 84, GeoParquet" — or the output path once done.
+    var targetLine: String {
+        if status == .complete, let path = record.outputPath { return path }
+        let sr = record.outWkid == 4326 ? "WGS 84" : "EPSG:\(record.outWkid)"
+        return "\(serviceName) / \(layerName), where \(record.whereClause), \(sr), \(record.format.label)"
+    }
+}
+
+/// 40px bar along the bottom: the most relevant run, or nothing moving. Click opens the drawer.
+struct TransfersStrip: View {
+    @Environment(AppModel.self) private var model
+    @State private var hovered = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text("Transfers").font(.sheetUI(12.5, .semibold)).foregroundStyle(Palette.muted)
+            if let run = model.headlineRun {
+                StatusDot(color: run.dotColor)
+                Text("\(run.layerName), \(run.serviceName)").font(.sheetUI(12.5)).foregroundStyle(Palette.ink).lineLimit(1)
+                ProgressBar(fraction: run.fraction, color: run.status == .complete ? Palette.yes : (run.status == .paused ? Palette.warn : Palette.accent), height: 4)
+                    .frame(width: 220)
+                Text(run.stats).font(.sheetMono(11)).foregroundStyle(Palette.muted).lineLimit(1)
+                Spacer()
+                Button("Show all \(model.runs.count)") { model.showTransfers = true }.buttonStyle(LinkButtonStyle(size: 12.5))
+            } else {
+                StatusDot(color: Palette.muted2)
+                Caption("Nothing moving", size: 12.5, color: Palette.muted2)
+                Spacer()
+            }
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 40)
+        .frame(maxWidth: .infinity)
+        .background(hovered ? Palette.line.opacity(0.5) : Palette.panel)
+        .overlay(alignment: .top) { Rectangle().fill(Palette.line).frame(height: 1) }
+        .contentShape(Rectangle())
+        .hoverTracking($hovered, hand: model.headlineRun != nil)
+        .onTapGesture { if model.headlineRun != nil { model.showTransfers = true } }
+    }
+}
+
+/// The strip grown to 340px: header + scrolling run rows.
+struct TransfersDrawer: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Text("Transfers").font(.sheetUI(12.5, .semibold)).foregroundStyle(Palette.muted)
+                Caption(summary, size: 12.5)
+                Spacer()
+                Button {
+                    model.showTransfers = false
+                } label: {
+                    Image(systemName: "chevron.down").font(.system(size: 11, weight: .medium)).foregroundStyle(Palette.muted)
+                }
+                .buttonStyle(LinkButtonStyle())
+                .help("Collapse")
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 40)
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(model.runs) { run in
+                        RunRow(run: run)
+                        Rectangle().fill(Palette.line).frame(height: 1)
+                    }
+                    if model.runs.isEmpty {
+                        Caption("No transfers yet. Start one from a layer's Download tab.").padding(16)
+                    }
+                }
+            }
+        }
+        .frame(height: 340)
+        .frame(maxWidth: .infinity)
+        .background(Palette.panel)
+        .overlay(alignment: .top) { Rectangle().fill(Palette.line).frame(height: 1) }
+        .shadow(color: .black.opacity(0.25), radius: 9, y: -6)
+    }
+
+    private var summary: String {
+        let runs = model.runs
+        let running = runs.filter { $0.status == .running }.count
+        let inFlight = runs.compactMap(\.progress).reduce(0) { $0 + $1.chunksInFlight }
+        var s = "\(runs.count) run\(runs.count == 1 ? "" : "s")"
+        if running > 0 { s += ", \(running) running" }
+        if inFlight > 0, let host = model.currentServer?.host { s += ", \(inFlight) request\(inFlight == 1 ? "" : "s") in flight to \(host)" }
+        return s
+    }
+}
+
+/// One run: who · progress · actions.
+private struct RunRow: View {
+    @Environment(AppModel.self) private var model
+    let run: TransferRun
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 24) {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 8) {
+                    Text(run.layerName).font(.sheetUI(13.5, .bold)).foregroundStyle(Palette.ink).lineLimit(1)
+                    Chip(text: run.record.transport.rawValue.uppercased())
+                    Chip(text: run.record.strategy.label.capitalizedFirst)
+                    if let (text, style) = run.statusChip { Chip(text: text, style: style) }
+                }
+                Text(run.targetLine).font(.sheetMono(11)).foregroundStyle(Palette.muted).lineLimit(1).truncationMode(.middle)
+                    .textSelection(.enabled)
+                Text(run.stats).font(.sheetUI(12.5)).foregroundStyle(run.status == .failed ? Palette.no : Palette.muted).lineLimit(2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Group {
+                if run.status == .running, !run.chunks.isEmpty {
+                    ChunkGrid(statuses: run.chunks, inFlight: run.progress?.chunksInFlight ?? 0)
+                } else {
+                    ProgressBar(fraction: run.fraction, color: run.status == .complete ? Palette.yes : (run.status == .paused ? Palette.warn : Palette.accent))
+                        .padding(.top, 6)
+                }
+            }
+            .frame(width: 220)
+            RunActions(run: run).frame(width: 214, alignment: .leading)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+    }
+}
+
+/// 23 columns of 7px cells: pending `line`, done `accent`, in flight `accent-soft` + ring,
+/// failed `no`. Rows grow with the plan; cells shrink to a 3px minimum rather than scroll.
+struct ChunkGrid: View {
+    let statuses: [ChunkStatus]
+    let inFlight: Int
+
+    var body: some View {
+        Canvas { context, size in
+            let columns = 23
+            let gap: CGFloat = 2
+            let rows = max(1, (statuses.count + columns - 1) / columns)
+            let cellW = (size.width - gap * CGFloat(columns - 1)) / CGFloat(columns)
+            let cellH = max(3, min(7, (size.height - gap * CGFloat(rows - 1)) / CGFloat(rows)))
+            var inFlightLeft = inFlight
+            for (index, status) in statuses.enumerated() {
+                let x = CGFloat(index % columns) * (cellW + gap)
+                let y = CGFloat(index / columns) * (cellH + gap)
+                let rect = CGRect(x: x, y: y, width: cellW, height: cellH)
+                let path = Path(roundedRect: rect, cornerRadius: 1.5)
+                switch status {
+                case .done: context.fill(path, with: .color(Palette.accent))
+                case .failed: context.fill(path, with: .color(Palette.no))
+                case .split: context.fill(path, with: .color(Palette.line2))
+                case .pending:
+                    if inFlightLeft > 0 {
+                        inFlightLeft -= 1
+                        context.fill(path, with: .color(Palette.accentSoft))
+                        context.stroke(Path(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), cornerRadius: 1.5), with: .color(Palette.accent), lineWidth: 1)
+                    } else {
+                        context.fill(path, with: .color(Palette.line))
+                    }
+                }
+            }
+        }
+        .frame(height: CGFloat(max(1, (statuses.count + 22) / 23)) * 9 - 2)
+        .frame(maxHeight: 60)
+    }
+}
+
+/// Every state has its next step.
+private struct RunActions: View {
+    @Environment(AppModel.self) private var model
+    let run: TransferRun
+
+    var body: some View {
+        HStack(spacing: 14) {
+            switch run.status {
+            case .running:
+                Button("Pause") { model.cancelDownload(run.id) }.buttonStyle(LinkButtonStyle())
+                    .help("Stops after the requests in flight; the run can be resumed")
+            case .complete:
+                Button("Show in Finder") { model.reveal(run.record.outputPath) }.buttonStyle(LinkButtonStyle())
+                Button("Re-export") {}.buttonStyle(LinkButtonStyle()).disabled(true).help("Arrives with milestone M7")
+                Button("Map") {}.buttonStyle(LinkButtonStyle()).disabled(true).help("Arrives with milestone M6")
+            case .paused:
+                if run.record.error?.contains("token") == true {
+                    Button("Sign in and resume") {}.buttonStyle(PrimaryButtonStyle(small: true)).disabled(true).help("Arrives with milestone M8")
+                } else {
+                    Button("Resume") { Task { await model.resumeDownload(run.id) } }.buttonStyle(PrimaryButtonStyle(small: true))
+                }
+                Button("Remove") { Task { await model.removeDownload(run.id) } }.buttonStyle(LinkButtonStyle())
+            case .failed, .cancelled, .planned:
+                Button(run.status == .failed ? "Retry" : "Resume") { Task { await model.resumeDownload(run.id) } }.buttonStyle(LinkButtonStyle())
+                Button("Remove") { Task { await model.removeDownload(run.id) } }.buttonStyle(LinkButtonStyle())
+            }
+        }
+    }
+}

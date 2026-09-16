@@ -172,6 +172,14 @@ public actor DownloadEngine {
         let usedJSON: Bool
     }
 
+    private enum ChunkOutcome: Sendable {
+        case fetched(FetchedChunk)
+        case failed(seq: Int, error: ArcGISClientError)
+    }
+
+    /// Engine requests retry less than the interactive client: a refused chunk is split instead.
+    private static let attemptsPerChunk = 2
+
     private func run(_ id: Int64, progress: @escaping @Sendable (DownloadProgress) -> Void) async throws -> DownloadRecord {
         var record = try await db.download(id: id)
         let target = try await db.layer(id: record.layerID)
@@ -201,16 +209,16 @@ public actor DownloadEngine {
         let outWkid = record.outWkid
         let startedAsJSON = record.transport == .json
         func report(_ status: DownloadStatus, inFlight: Int, message: String? = nil) {
-            progress(DownloadProgress(downloadID: id, status: status, chunksDone: done, chunksTotal: chunks.count,
+            progress(DownloadProgress(downloadID: id, status: status, chunksDone: done, chunksTotal: chunks.filter { $0.status != .split }.count,
                                       chunksInFlight: inFlight, chunksFailed: failed, features: features, bytes: bytes, message: message))
         }
         report(.running, inFlight: 0)
 
-        var pending = chunks.filter { $0.status != .done }
+        var pending = chunks.filter { $0.status != .done && $0.status != .split }
         var outcome: (status: DownloadStatus, error: String?)? = nil
 
         do {
-            let switchedToJSON: Bool = try await withThrowingTaskGroup(of: FetchedChunk.self) { group in
+            let switchedToJSON: Bool = try await withThrowingTaskGroup(of: ChunkOutcome.self) { group in
                 var useJSON = startedAsJSON
                 var inFlight = 0
                 var attempts = Dictionary(uniqueKeysWithValues: chunks.map { ($0.seq, $0.attempts) })
@@ -220,39 +228,64 @@ public actor DownloadEngine {
                     let json = useJSON
                     let hasZ = source.hasZ, hasM = source.hasM
                     let client = self.client
+                    let attempts = Self.attemptsPerChunk
                     group.addTask {
                         try Task.checkCancellation()
-                        if !json {
-                            do {
-                                let data = try await client.featuresPBF(connection, layerURL: url, options: options)
-                                return FetchedChunk(seq: chunk.seq, page: try PBFDecoder.decode(data), bytes: data.count, usedJSON: false)
-                            } catch is PBFError {
-                                // Fall through to JSON for this chunk; the run switches transport below.
-                            } catch ArcGISClientError.server(let code, _, _, _) where code != 498 && code != 499 {
-                                // The server refused the PBF request itself; JSON may still work.
+                        do {
+                            if !json {
+                                do {
+                                    let data = try await client.featuresPBF(connection, layerURL: url, options: options, maxAttempts: attempts)
+                                    return .fetched(FetchedChunk(seq: chunk.seq, page: try PBFDecoder.decode(data), bytes: data.count, usedJSON: false))
+                                } catch is PBFError {
+                                    // Fall through to JSON for this chunk; the run switches transport below.
+                                } catch ArcGISClientError.server(let code, _, _, _) where code != 498 && code != 499 {
+                                    // The server refused the PBF request itself; JSON may still work.
+                                }
                             }
+                            let (set, raw) = try await client.features(connection, layerURL: url, options: options, maxAttempts: attempts)
+                            return .fetched(FetchedChunk(seq: chunk.seq, page: FeaturePage(json: set, hasZ: hasZ, hasM: hasM), bytes: raw.count, usedJSON: true))
+                        } catch let error as ArcGISClientError {
+                            return .failed(seq: chunk.seq, error: error)
                         }
-                        let (set, raw) = try await client.features(connection, layerURL: url, options: options)
-                        return FetchedChunk(seq: chunk.seq, page: FeaturePage(json: set, hasZ: hasZ, hasM: hasM), bytes: raw.count, usedJSON: true)
                     }
                     inFlight += 1
                 }
                 while inFlight < concurrency, !pending.isEmpty { enqueue(pending.removeFirst()) }
 
                 while inFlight > 0 {
+                    guard let next = try await group.next() else { break }
+                    inFlight -= 1
                     let fetched: FetchedChunk
-                    do {
-                        guard let next = try await group.next() else { break }
-                        fetched = next
-                    } catch is CancellationError {
-                        throw CancellationError()
-                    } catch let error as ArcGISClientError {
+                    switch next {
+                    case .failed(let seq, let error):
                         if case .cancelled = error { throw CancellationError() }
-                        if case .tokenRequired = error { outcome = (.paused, error.description) } else { outcome = (.failed, error.description) }
+                        attempts[seq, default: 0] += 1
+                        if case .tokenRequired = error {
+                            outcome = (.paused, error.description)
+                            try await db.updateChunk(downloadID: id, seq: seq, status: .pending, count: nil, attempts: attempts[seq] ?? 1, error: error.description)
+                            group.cancelAll()
+                            throw error
+                        }
+                        // The server could not serve this chunk whole: halve it and carry on.
+                        if let index = chunks.firstIndex(where: { $0.seq == seq }),
+                           let halves = DownloadPlanner.split(chunks[index], pageSize: pageSize, firstSeq: (chunks.map(\.seq).max() ?? 0) + 1) {
+                            try await db.updateChunk(downloadID: id, seq: seq, status: .split, count: nil, attempts: attempts[seq] ?? 1,
+                                                     error: "split into \(halves[0].seq + 1) and \(halves[1].seq + 1): \(error.description)")
+                            try await db.insertChunks(halves)
+                            chunks[index].status = .split
+                            chunks.append(contentsOf: halves)
+                            pending.append(contentsOf: halves)
+                            report(.running, inFlight: inFlight, message: "request \(seq + 1) refused, split in two")
+                            while inFlight < concurrency, !pending.isEmpty { enqueue(pending.removeFirst()) }
+                            continue
+                        }
+                        outcome = (.failed, DownloadError.chunkFailed(seq: seq, message: error.description).description)
+                        try await db.updateChunk(downloadID: id, seq: seq, status: .failed, count: nil, attempts: attempts[seq] ?? 1, error: error.description)
                         group.cancelAll()
                         throw error
+                    case .fetched(let f):
+                        fetched = f
                     }
-                    inFlight -= 1
                     if fetched.usedJSON, !useJSON { useJSON = true }   // PBF failed once: JSON for the rest of the run
                     let seq = fetched.seq
                     attempts[seq, default: 0] += 1
@@ -262,17 +295,18 @@ public actor DownloadEngine {
                     // Validate the chunk against its plan.
                     switch chunk.kind {
                     case .offset:
-                        if page.exceededTransferLimit, page.features.count < pageSize {
-                            outcome = (.failed, DownloadError.shortPageWithMore(seq: seq, got: page.features.count, expected: pageSize).description)
+                        let expected = chunk.limit ?? pageSize
+                        if page.exceededTransferLimit, page.features.count < expected {
+                            outcome = (.failed, DownloadError.shortPageWithMore(seq: seq, got: page.features.count, expected: expected).description)
                             try await db.updateChunk(downloadID: id, seq: seq, status: .failed, count: Int64(page.features.count),
                                                      attempts: attempts[seq] ?? 1, error: outcome?.error)
                             group.cancelAll()
-                            throw DownloadError.shortPageWithMore(seq: seq, got: page.features.count, expected: pageSize)
+                            throw DownloadError.shortPageWithMore(seq: seq, got: page.features.count, expected: expected)
                         }
                         if page.exceededTransferLimit, seq == chunks.map(\.seq).max() {
                             // The count was stale or the server lied: extend the plan by one page.
-                            let extra = DownloadChunk(downloadID: id, seq: seq + 1, kind: .offset,
-                                                      offset: (chunk.offset ?? 0) + Int64(pageSize))
+                            let extra = DownloadChunk(downloadID: id, seq: (chunks.map(\.seq).max() ?? seq) + 1, kind: .offset,
+                                                      offset: (chunk.offset ?? 0) + Int64(expected), limit: expected)
                             try await db.insertChunks([extra])
                             chunks.append(extra)
                             pending.append(extra)

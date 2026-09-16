@@ -25,7 +25,7 @@ struct LayerPage: View {
                         case .fields: FieldsTab(fields: fields)
                         case .raw: RawJSONView()
                         case .query: Caption("Loading…")
-                        case .download: Pending(text: "Downloads arrive with milestone M4.")
+                        case .download: DownloadTab(layer: layer, service: service)
                         case .map: Pending(text: "The map arrives with milestone M6.")
                         }
                     }
@@ -75,18 +75,7 @@ private struct LayerTabs: View {
         VStack(spacing: 0) {
             HStack(spacing: 24) {
                 ForEach(LayerTab.allCases) { tab in
-                    Button {
-                        selection = tab
-                    } label: {
-                        Text(tab.rawValue)
-                            .font(.sheetUI(13, .medium))
-                            .foregroundStyle(selection == tab ? Palette.ink : Palette.muted)
-                            .padding(.bottom, 8)
-                            .overlay(alignment: .bottom) {
-                                if selection == tab { Rectangle().fill(Palette.accent).frame(height: 2) }
-                            }
-                    }
-                    .buttonStyle(.plain)
+                    TabButton(tab: tab, isOn: selection == tab) { selection = tab }
                 }
                 Spacer()
             }
@@ -348,4 +337,27 @@ func srName(_ wkid: Int) -> String {
 
 extension String {
     var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() }
+}
+
+/// One text tab: muted, ink on hover, ink with a 2px accent underline when active.
+private struct TabButton: View {
+    let tab: LayerTab
+    let isOn: Bool
+    let action: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(tab.rawValue)
+                .font(.sheetUI(13, .medium))
+                .foregroundStyle(isOn || hovered ? Palette.ink : Palette.muted)
+                .padding(.bottom, 8)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(isOn ? Palette.accent : (hovered ? Palette.line2 : .clear)).frame(height: 2)
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .hoverTracking($hovered, hand: !isOn)
+    }
 }

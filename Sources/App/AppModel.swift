@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import AppKit
 import Observation
 import ArcGISKit
 import SQLiteKit
@@ -36,6 +37,7 @@ final class AppModel {
     private(set) var database: AppDatabase?
     private let client = ArcGISClient()
     private var crawler: Crawler?
+    private var engine: DownloadEngine?
 
     // Servers + tree
     private(set) var servers: [ServerRecord] = []
@@ -73,6 +75,17 @@ final class AppModel {
     private(set) var errorText: String?
     private(set) var deepCrawlStatus: String?
 
+    // Transfers
+    var showTransfers = false
+    private(set) var runs: [TransferRun] = []
+    private(set) var transfersError: String?
+    private(set) var downloadDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("ArcGIS Explorer", isDirectory: true)
+    private var liveProgress: [Int64: DownloadProgress] = [:]
+    private var liveChunks: [Int64: [ChunkStatus]] = [:]
+    private var runStarted: [Int64: Date] = [:]
+    var pendingOverwrite: DownloadRequest?
+
     // MARK: - Startup
 
     /// Opens the app database, migrates it, loads `spatial` for extents, and shows the most
@@ -84,8 +97,14 @@ final class AppModel {
             try await db.migrate()
             try await db.loadSpatial()
             database = db
-            crawler = Crawler(client: client, database: db)
+            let crawler = Crawler(client: client, database: db)
+            self.crawler = crawler
+            engine = DownloadEngine(client: client, database: db, crawler: crawler,
+                                    stagingDirectory: AppDatabase.defaultURL().deletingLastPathComponent().appendingPathComponent("staging"))
+            if let dir = try await db.setting("download_dir") { downloadDirectory = URL(fileURLWithPath: dir) }
+            try await db.markInterruptedDownloads()
             try await reloadServers()
+            await reloadRuns()
             if let first = servers.first { await selectServer(first.id) }
             phase = .ready
         } catch {
@@ -471,4 +490,138 @@ final class AppModel {
     }
 
     func dismissError() { errorText = nil }
+}
+
+// MARK: - Transfers
+
+extension AppModel {
+    /// The run the strip shows: running > paused > latest.
+    var headlineRun: TransferRun? {
+        runs.first { $0.status == .running } ?? runs.first { $0.status == .paused } ?? runs.first
+    }
+
+    func outputPath(for layer: LayerRecord, service: ServiceRecord) -> URL {
+        guard let server = currentServer else { return downloadDirectory }
+        return Exporter.outputPath(directory: downloadDirectory, server: server, service: service, layer: layer, format: .geoParquet)
+    }
+
+    func reloadRuns() async {
+        guard let database else { return }
+        do {
+            let records = try await database.downloads()
+            var built = [TransferRun]()
+            for record in records {
+                let layer = try? await database.layer(id: record.layerID)
+                var service: ServiceRecord? = nil
+                if let layer { service = try? await database.service(id: layer.serviceID) }
+                var server: ServerRecord? = nil
+                if let service { server = try? await database.server(id: service.serverID) }
+                let chunks: [ChunkStatus]
+                if let live = liveChunks[record.id] { chunks = live }
+                else if record.status == .running || record.status == .paused || record.status == .failed || record.status == .cancelled {
+                    chunks = (try? await database.chunks(downloadID: record.id).map(\.status)) ?? []
+                } else { chunks = [] }
+                built.append(TransferRun(record: record, layerName: layer?.name ?? "layer \(record.layerID)",
+                                         serviceName: service?.shortName ?? "", serverName: server?.friendlyName ?? "",
+                                         progress: liveProgress[record.id], chunks: chunks, startedRunningAt: runStarted[record.id]))
+            }
+            runs = built
+        } catch {
+            transfersError = String(describing: error)
+        }
+    }
+
+    func startDownload(_ request: DownloadRequest) async {
+        guard let engine, let database else { return }
+        transfersError = nil
+        do {
+            let record = try await engine.start(request) { [weak self] progress in
+                Task { @MainActor in await self?.progressed(progress) }
+            }
+            runStarted[record.id] = Date()
+            showTransfers = true
+            await reloadRuns()
+            _ = database
+        } catch DownloadError.notExtractable(let reason) {
+            transfersError = reason
+        } catch {
+            transfersError = String(describing: error)
+        }
+    }
+
+    private func progressed(_ progress: DownloadProgress) async {
+        liveProgress[progress.downloadID] = progress
+        if runStarted[progress.downloadID] == nil { runStarted[progress.downloadID] = Date() }
+        if let database { liveChunks[progress.downloadID] = (try? await database.chunks(downloadID: progress.downloadID).map(\.status)) ?? [] }
+        if progress.status != .running {
+            liveProgress[progress.downloadID] = nil
+            liveChunks[progress.downloadID] = nil
+            runStarted[progress.downloadID] = nil
+            if progress.status == .failed, let message = progress.message, message.contains("already exists") {
+                // The output exists: ask before overwriting (SPEC §5.7). Re-run with consent.
+                if let record = try? await database?.download(id: progress.downloadID), let layer = currentLayer, layer.id == record.layerID {
+                    var request = DownloadRequest(layerID: record.layerID, outputDirectory: downloadDirectory)
+                    request.whereClause = record.whereClause
+                    request.outWkid = record.outWkid
+                    request.domainLabels = record.domainLabels
+                    request.overwrite = true
+                    pendingOverwrite = request
+                    try? await database?.deleteDownload(id: record.id)
+                }
+            }
+            if progress.status == .complete, let layer = currentLayer { _ = layer }
+        }
+        await reloadRuns()
+    }
+
+    func resumeDownload(_ id: Int64) async {
+        guard let engine else { return }
+        transfersError = nil
+        do {
+            _ = try await engine.resume(downloadID: id, overwrite: true, outputDirectory: downloadDirectory) { [weak self] progress in
+                Task { @MainActor in await self?.progressed(progress) }
+            }
+            runStarted[id] = Date()
+            await reloadRuns()
+        } catch {
+            transfersError = String(describing: error)
+        }
+    }
+
+    func cancelDownload(_ id: Int64) {
+        Task { await engine?.cancel(downloadID: id) }
+    }
+
+    func removeDownload(_ id: Int64) async {
+        guard let database else { return }
+        do {
+            let record = try await database.download(id: id)
+            if let staging = record.stagingPath { try? FileManager.default.removeItem(atPath: staging) }
+            try await database.deleteDownload(id: id)
+            await reloadRuns()
+        } catch {
+            transfersError = String(describing: error)
+        }
+    }
+
+    func chooseDownloadDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.directoryURL = downloadDirectory
+        panel.prompt = "Use this folder"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        downloadDirectory = url
+        Task { try? await database?.setSetting("download_dir", url.path) }
+    }
+
+    func reveal(_ path: String?) {
+        guard let path else { return }
+        if FileManager.default.fileExists(atPath: path) {
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+        } else {
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path).deletingLastPathComponent()])
+        }
+    }
 }

@@ -88,19 +88,11 @@ enum SheetFonts {
 }
 
 /// Relative ages in the copy voice ("14 minutes ago", "yesterday").
-@MainActor
 enum Age {
-    private static let formatter: RelativeDateTimeFormatter = {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .full
-        f.dateTimeStyle = .named
-        return f
-    }()
-
     static func text(_ date: Date?, now: Date = Date()) -> String {
         guard let date else { return "never" }
         if now.timeIntervalSince(date) < 60 { return "just now" }
-        return formatter.localizedString(for: date, relativeTo: now)
+        return date.formatted(Date.RelativeFormatStyle(presentation: .named, unitsStyle: .wide))
     }
 
     /// Older than this, a cached node is flagged stale in `warn`.

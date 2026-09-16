@@ -430,3 +430,20 @@ extension AppDatabase {
         try query("UPDATE layer SET transport = ? WHERE id = ?;", [.string(transport), .int(layerID)])
     }
 }
+
+// MARK: - Settings
+
+extension AppDatabase {
+    public func setting(_ key: String) throws -> String? {
+        try query("SELECT value FROM setting WHERE key = ?;", [.string(key)]).rows.first?.first?.stringValue
+    }
+
+    public func setSetting(_ key: String, _ value: String?) throws {
+        if let value {
+            try query("INSERT INTO setting (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value;",
+                      [.string(key), .string(value)])
+        } else {
+            try query("DELETE FROM setting WHERE key = ?;", [.string(key)])
+        }
+    }
+}

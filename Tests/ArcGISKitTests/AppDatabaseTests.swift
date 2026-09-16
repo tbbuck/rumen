@@ -109,3 +109,23 @@ func XCTAssertThrowsErrorAsync<T>(
         handler(error)
     }
 }
+
+extension AppDatabaseTests {
+    func testInterruptedRunsAreParkedAsPaused() async throws {
+        let db = try AppDatabase(path: dbPath)
+        try await db.migrate()
+        let running = try await db.createDownload(layerID: 1, transport: .pbf, strategy: .offset, whereClause: "1=1",
+                                                  outWkid: 4326, format: .geoParquet, domainLabels: false)
+        try await db.setDownloadStatus(id: running.id, status: .running)
+        let done = try await db.createDownload(layerID: 1, transport: .pbf, strategy: .offset, whereClause: "1=1",
+                                               outWkid: 4326, format: .geoParquet, domainLabels: false)
+        try await db.setDownloadOutput(id: done.id, path: "/x", sha256: "0", featureCount: 1, invalidGeometries: 0, bytes: 1)
+        let parked = try await db.markInterruptedDownloads()
+        XCTAssertEqual(parked, 1)
+        let a = try await db.download(id: running.id)
+        XCTAssertEqual(a.status, .paused)
+        XCTAssertTrue(a.error?.contains("Interrupted") == true)
+        let b = try await db.download(id: done.id)
+        XCTAssertEqual(b.status, .complete)
+    }
+}

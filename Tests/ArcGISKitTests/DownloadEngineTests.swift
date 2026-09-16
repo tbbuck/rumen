@@ -17,6 +17,7 @@ private final class StubLayer: @unchecked Sendable {
     var tokenExpiredAtOffset: Int? = nil     // page that answers 499
     var lieAboutMore = false                 // short page with exceededTransferLimit
     var rejectPBF = false
+    var refuseLimitAbove: Int? = nil        // pages asking for more than this get a 500 envelope
     var seenFailures: Set<Int> = []
     var requestLog: [String] = []
 
@@ -49,11 +50,12 @@ private final class StubLayer: @unchecked Sendable {
         var exceeded = false
         if let offset = params["resultOffset"].flatMap(Int.init) {
             let count = params["resultRecordCount"].flatMap(Int.init) ?? pageSize
+            if let cap = refuseLimitAbove, count > cap { return .json(#"{"error":{"code":500,"message":"Error performing query operation","details":[]}}"#) }
             let failOnce = lock.withLock { failSeqOnce.contains(offset) && !seenFailures.contains(offset) }
             if failOnce { lock.withLock { _ = seenFailures.insert(offset) }; return .json("busy", status: 503) }
             if alwaysFailOffsets.contains(offset) { return .json("broken", status: 500) }
             if tokenExpiredAtOffset == offset { return .json(#"{"error":{"code":499,"message":"Token Required","details":[]}}"#) }
-            ids = Array((offset + 1)...max(offset, min(featureCount, offset + count)))
+            ids = offset < featureCount ? Array((offset + 1)...min(featureCount, offset + count)) : []
             if offset + count < featureCount { exceeded = true }
             if lieAboutMore { ids = Array(ids.prefix(3)); exceeded = true }
         } else if let list = params["objectIds"] {
@@ -282,11 +284,23 @@ final class DownloadEngineTests: XCTestCase {
 
     func testCancelLeavesAResumableRun() async throws {
         stub.pageSize = 1
-        transport.delay = .milliseconds(30)   // give the cancel something to interrupt
-        let planned = try await engine.start(request()) { [engine] progress in
-            if progress.chunksDone >= 5 { Task { await engine?.cancel(downloadID: progress.downloadID) } }
+        let held = HeldGate()
+        transport.gate = { request in
+            if let offset = request.encodedParams.split(separator: "&").first(where: { $0.hasPrefix("resultOffset=") })
+                .flatMap({ Int($0.dropFirst("resultOffset=".count)) }), offset >= 6 {
+                try await held.waitUntilOpen()   // Task.sleep inside throws once the run is cancelled
+            }
         }
+        let planned = try await engine.start(request())
+        // Let the first pages land, then cancel while later ones are held open.
+        for _ in 0..<200 {
+            let done = try await db.chunks(downloadID: planned.id).filter { $0.status == .done }.count
+            if done >= 5 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        await engine.cancel(downloadID: planned.id)
         let record = try await engine.wait(downloadID: planned.id)
+        await held.open()
         XCTAssertEqual(record.status, .cancelled)
         XCTAssertTrue(record.status.isResumable)
     }
@@ -378,5 +392,57 @@ final class DownloadEngineTests: XCTestCase {
         XCTAssertEqual(paged.params["resultRecordCount"], "10")
         XCTAssertEqual(paged.params["orderByFields"], "OID ASC")
         XCTAssertEqual(paged.params["outSR"], "27700")
+    }
+}
+
+/// A gate that stays shut until opened; waiting is cancellable through `Task.sleep`.
+private actor HeldGate {
+    private var isOpen = false
+    func open() { isOpen = true }
+    func waitUntilOpen() async throws {
+        while !isOpen { try await Task.sleep(for: .milliseconds(10)) }
+    }
+}
+
+extension DownloadEngineTests {
+    /// sampleserver6 refused a 1,000-county page after 60 s; the engine must halve and carry on.
+    func testRefusedChunksAreSplitUntilTheyFit() async throws {
+        stub.pageSize = 200                 // one planned chunk for 51 features
+        stub.refuseLimitAbove = 60          // …which the server refuses; halves of 100 too; quarters of 50 pass
+        try await recrawlLayer()
+        let planned = try await engine.start(request())
+        let record = try await engine.wait(downloadID: planned.id)
+        XCTAssertEqual(record.status, .complete, record.error ?? "")
+        XCTAssertEqual(record.featureCount, 51)
+        let chunks = try await db.chunks(downloadID: planned.id)
+        XCTAssertEqual(chunks.filter { $0.status == .split }.count, 3, "the 200 and both 100s were split")
+        XCTAssertEqual(chunks.filter { $0.status == .done }.map(\.limit), [50, 50, 50, 50])
+        XCTAssertEqual(chunks.filter { $0.status == .done }.map(\.offset), [0, 50, 100, 150])
+        XCTAssertTrue(chunks.first?.lastError?.contains("split into 2 and 3") == true, chunks.first?.lastError ?? "")
+        XCTAssertEqual(try readBack(try XCTUnwrap(record.outputPath)).count, 51, "no duplicates from the split")
+    }
+
+    func testUnsplittableRefusalFailsTheRun() async throws {
+        stub.pageSize = 30
+        stub.refuseLimitAbove = 10          // 30 → 15 (below the 50 floor: cannot split) → failed
+        try await recrawlLayer()
+        let planned = try await engine.start(request())
+        let record = try await engine.wait(downloadID: planned.id)
+        XCTAssertEqual(record.status, .failed)
+        XCTAssertTrue(record.error?.contains("Error performing query operation") == true, record.error ?? "")
+    }
+
+    func testSplitMaths() {
+        let offset = DownloadChunk(downloadID: 1, seq: 0, kind: .offset, offset: 100, limit: 1000)
+        let halves = try! XCTUnwrap(DownloadPlanner.split(offset, pageSize: 1000, firstSeq: 7))
+        XCTAssertEqual(halves.map { ($0.seq, $0.offset!, $0.limit!) }.map { "\($0.0):\($0.1)+\($0.2)" }, ["7:100+500", "8:600+500"])
+        let odd = DownloadChunk(downloadID: 1, seq: 0, kind: .offset, offset: 0, limit: 75)
+        XCTAssertEqual(DownloadPlanner.split(odd, pageSize: 75, firstSeq: 1)?.map(\.limit), [37, 38])
+        XCTAssertNil(DownloadPlanner.split(DownloadChunk(downloadID: 1, seq: 0, kind: .offset, offset: 0, limit: 49), pageSize: 49, firstSeq: 1))
+        let range = DownloadChunk(downloadID: 1, seq: 0, kind: .oidRange, lo: 1, hi: 100, limit: 100)
+        XCTAssertEqual(DownloadPlanner.split(range, pageSize: 100, firstSeq: 1)?.map { "\($0.lo!)-\($0.hi!)" }, ["1-50", "51-100"])
+        let list = DownloadChunk(downloadID: 1, seq: 0, kind: .oidList, objectIDs: Array(1...60), limit: 60)
+        XCTAssertEqual(DownloadPlanner.split(list, pageSize: 60, firstSeq: 1)?.map { $0.objectIDs!.count }, [30, 30])
+        XCTAssertNil(DownloadPlanner.split(DownloadChunk(downloadID: 1, seq: 0, kind: .oidList, objectIDs: Array(1...40), limit: 40), pageSize: 40, firstSeq: 1))
     }
 }

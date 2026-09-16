@@ -5,6 +5,7 @@ import ArcGISKit
 /// transfers strip — the Directory layout.
 struct ExplorerView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         @Bindable var model = model
@@ -18,8 +19,9 @@ struct ExplorerView: View {
                 DetailPane()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            TransfersStrip()
+            if model.showTransfers { TransfersDrawer() } else { TransfersStrip() }
         }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.showTransfers)
         .background(Palette.bg)
         .ignoresSafeArea(.container, edges: .top)
         .sheet(item: $model.pendingAdd) { pending in
@@ -27,6 +29,20 @@ struct ExplorerView: View {
         }
         .sheet(item: $model.settingsServer) { server in
             ServerSettingsSheet(server: server)
+        }
+        .alert("Replace the existing file?", isPresented: Binding(get: { model.pendingOverwrite != nil }, set: { if !$0 { model.pendingOverwrite = nil } })) {
+            Button("Replace", role: .destructive) {
+                if let request = model.pendingOverwrite { Task { await model.startDownload(request) } }
+                model.pendingOverwrite = nil
+            }
+            Button("Keep it", role: .cancel) { model.pendingOverwrite = nil }
+        } message: {
+            if let request = model.pendingOverwrite, let layer = model.currentLayer, let service = model.currentService {
+                let path = model.outputPath(for: layer, service: service).path
+                let age = (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date).map { Age.text($0) } ?? "unknown age"
+                Text("\(path)\nwritten \(age). Replacing it cannot be undone.")
+                    .onAppear { _ = request }
+            }
         }
         .overlay(alignment: .bottom) {
             if let error = model.errorText {

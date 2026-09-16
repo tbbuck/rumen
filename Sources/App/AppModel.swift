@@ -114,12 +114,10 @@ final class AppModel {
             try await db.migrate()
             try await db.loadSpatial()
             database = db
-            let cookies: @Sendable (ServerRecord) async -> String? = { Keychain.cookie(for: $0) }
-            let crawler = Crawler(client: client, database: db, cookieProvider: cookies)
+            let crawler = Crawler(client: client, database: db)
             self.crawler = crawler
             engine = DownloadEngine(client: client, database: db, crawler: crawler,
-                                    stagingDirectory: AppDatabase.defaultURL().deletingLastPathComponent().appendingPathComponent("staging"),
-                                    cookieProvider: cookies)
+                                    stagingDirectory: AppDatabase.defaultURL().deletingLastPathComponent().appendingPathComponent("staging"))
             if let dir = try await db.setting("download_dir") { downloadDirectory = URL(fileURLWithPath: dir) }
             switch try await db.setting("appearance") {
             case "light": appearanceOverride = .light
@@ -128,12 +126,27 @@ final class AppModel {
             }
             try await db.markInterruptedDownloads()
             try await reloadServers()
+            try await moveCookiesOutOfKeychain()
             await reloadRuns()
             // Land on the start page: the user picks a server rather than being dropped into one.
             phase = .ready
         } catch {
             phase = .failed(String(describing: error))
         }
+    }
+
+    /// One-off: cookies were briefly kept in the Keychain (decision 17 moved them to the app
+    /// DB). Any still there are copied across and removed.
+    private func moveCookiesOutOfKeychain() async throws {
+        guard let database, try await database.setting("cookies_moved_from_keychain") == nil else { return }
+        for server in servers where server.cookie == nil {
+            if let cookie = KeychainMigration.cookie(forRoot: server.rootURL) {
+                try await database.setCookie(serverID: server.id, cookie: cookie)
+                try KeychainMigration.remove(forRoot: server.rootURL)
+            }
+        }
+        try await database.setSetting("cookies_moved_from_keychain", "1")
+        try await reloadServers()
     }
 
     private func reloadServers() async throws {
@@ -270,9 +283,9 @@ final class AppModel {
                 currentLayerInfo = info
                 pathContent = PathBarContent.build(server: server, service: service, layer: layer)
                 querySession = QuerySession(layer: layer, service: service, fields: fields, info: info,
-                                            client: client, database: database, connection: server.connection(cookie: Keychain.cookie(for: server)))
+                                            client: client, database: database, connection: server.connection())
                 mapSession = MapSession(layer: layer, service: service, client: client, database: database,
-                                        connection: server.connection(cookie: Keychain.cookie(for: server)),
+                                        connection: server.connection(),
                                         storedRuns: runs.filter { $0.record.layerID == layer.id && $0.status == .complete }.map(\.record),
                                         querySet: nil, queryWkid: nil)
                 await assessCurrentLayer()
@@ -480,26 +493,19 @@ final class AppModel {
                    origin: String = "", referer: String = "") async {
         guard pendingAdd != nil else { return }   // Return and the button can both fire; add once
         pendingAdd = nil
-        do {
-            // The cookie must be in place before the first request; it is read by root URL.
-            try Keychain.setCookie(cookie, forRoot: pending.location.rootURL)
-        } catch {
-            errorText = String(describing: error)
-            return
-        }
-        await open(pending.text, friendlyName: friendlyName, headerOverrides: (origin, referer))
+        await open(pending.text, friendlyName: friendlyName, headerOverrides: (origin, referer), cookie: cookie)
     }
 
     /// Opens any ArcGIS URL: registers or touches its server, crawls as needed, and lands on
     /// the node it names.
     private func open(_ text: String, friendlyName: String?,
-                      headerOverrides: (origin: String?, referer: String?)? = nil) async {
+                      headerOverrides: (origin: String?, referer: String?)? = nil, cookie: String? = nil) async {
         guard let crawler else { return }
         let root = (try? ArcGISURL.parse(text))?.rootURL.absoluteString ?? text
         openingStatus = OpeningStatus(url: root, step: "Opening…")
         defer { openingStatus = nil }
         do {
-            let opened = try await crawler.open(text, friendlyName: friendlyName, headerOverrides: headerOverrides, progress: { event in
+            let opened = try await crawler.open(text, friendlyName: friendlyName, headerOverrides: headerOverrides, cookie: cookie, progress: { event in
                 Task { @MainActor in self.openingProgress(event) }
             })
             openingStatus?.step = "Building the tree…"
@@ -578,7 +584,7 @@ final class AppModel {
     func saveSettings(_ server: ServerRecord, name: String, origin: String, referer: String, cookie: String) async {
         guard let database else { return }
         do {
-            try Keychain.setCookie(cookie, forRoot: server.rootURL)
+            try await database.setCookie(serverID: server.id, cookie: cookie)
             try await database.renameServer(id: server.id, friendlyName: name)
             try await database.setHeaderOverrides(serverID: server.id, origin: origin, referer: referer)
             try await reloadServers()
@@ -590,7 +596,6 @@ final class AppModel {
     func forget(_ server: ServerRecord) async {
         guard let database else { return }
         do {
-            try Keychain.setCookie(nil, forRoot: server.rootURL)
             try await database.forgetServer(id: server.id)
             try await reloadServers()
             if currentServer?.id == server.id {

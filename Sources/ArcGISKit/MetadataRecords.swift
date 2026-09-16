@@ -18,11 +18,13 @@ public struct ServerRecord: Sendable, Equatable, Identifiable {
     public let createdAt: Date
     public var lastVisitedAt: Date?
     public var lastDeepCrawlAt: Date?
+    /// A raw `Cookie` header for every request to this server, as curl's `-b` (decision 17).
+    public var cookie: String?
 
     public init(id: Int64, rootURL: URL, friendlyName: String, originOverride: String? = nil,
                 refererOverride: String? = nil, authKind: String = "none", username: String? = nil,
                 tokenServiceURL: String? = nil, arcgisVersion: Double? = nil, createdAt: Date = Date(),
-                lastVisitedAt: Date? = nil, lastDeepCrawlAt: Date? = nil) {
+                lastVisitedAt: Date? = nil, lastDeepCrawlAt: Date? = nil, cookie: String? = nil) {
         self.id = id
         self.rootURL = rootURL
         self.friendlyName = friendlyName
@@ -35,6 +37,7 @@ public struct ServerRecord: Sendable, Equatable, Identifiable {
         self.createdAt = createdAt
         self.lastVisitedAt = lastVisitedAt
         self.lastDeepCrawlAt = lastDeepCrawlAt
+        self.cookie = cookie
     }
 
     public var headers: ServerHeaders {
@@ -42,7 +45,7 @@ public struct ServerRecord: Sendable, Equatable, Identifiable {
     }
 
     /// The connection for this server; the token (from the Keychain) is supplied by the caller.
-    public func connection(token: String? = nil, cookie: String? = nil) -> ServerConnection {
+    public func connection(token: String? = nil) -> ServerConnection {
         ServerConnection(rootURL: rootURL, headers: headers, token: token, cookie: cookie)
     }
 

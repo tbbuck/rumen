@@ -96,7 +96,7 @@ struct ServerSettingsSheet: View {
             name = server.friendlyName
             origin = server.originOverride ?? ""
             referer = server.refererOverride ?? ""
-            cookie = Keychain.cookie(for: server) ?? ""
+            cookie = server.cookie ?? ""
         }
     }
 

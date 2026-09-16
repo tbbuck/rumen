@@ -300,7 +300,9 @@ Coded-value domains are exported as the raw code; an opt-in option (off by defau
 - An API key can be pasted instead of a username/password and is sent the same way.
 - A raw **Cookie** header can be set per server (the add sheet's Advanced section and
   server settings), sent verbatim on every request like curl's `-b`, with the session's own
-  cookie handling off for that server. It lives in the Keychain, keyed by the root URL.
+  cookie handling off for that server. It is stored on the server row in the app DB
+  (decision 17): a first cut kept it in the Keychain, which prompted on every rebuild for
+  what is a low-value session cookie. Tokens and passwords still go in the Keychain.
 
 ## 6. Non-functional requirements
 
@@ -471,6 +473,10 @@ owned by `AppDatabase`). DuckDB never holds app state.
     the system library needs no bundling. DuckDB remains the spatial and data engine:
     extent reprojection now, staging, export, and map data later. This departs from the
     tree's "DuckDB first" default deliberately.
+17. **Per-server cookies live in the app DB** — accepted 2026-09-17. A raw `Cookie` header
+    (curl `-b`) is a low-value session credential; a first cut in the Keychain prompted on
+    every rebuild and got in the way of resuming downloads. Tokens and passwords (M8) still
+    go in the Keychain.
 
 ## 10. Open questions
 1. ~~**Design direction**: reuse DuckLake Explorer's Stratum system or give this app

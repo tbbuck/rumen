@@ -63,6 +63,13 @@ final class MetadataStoreTests: XCTestCase {
         XCTAssertEqual(updated.arcgisVersion, 10.91)
         XCTAssertEqual(updated.headers.origin, "https://portal.example")
         XCTAssertEqual(updated.headers.referer, "https://sampleserver6.arcgisonline.com/")
+        try await db.setCookie(serverID: s.id, cookie: "  agsession=abc; x=1 ")
+        let withCookie = try await db.server(id: s.id)
+        XCTAssertEqual(withCookie.cookie, "agsession=abc; x=1", "trimmed, on the row")
+        XCTAssertEqual(withCookie.connection().cookie, "agsession=abc; x=1", "and on every connection")
+        try await db.setCookie(serverID: s.id, cookie: "   ")
+        let cleared = try await db.server(id: s.id)
+        XCTAssertNil(cleared.cookie, "blank clears it")
 
         try await db.forgetServer(id: s.id)
         let remaining = try await db.servers()

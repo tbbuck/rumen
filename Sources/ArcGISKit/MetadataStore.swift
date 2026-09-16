@@ -21,7 +21,7 @@ extension AppDatabase {
 
     private static let serverColumns = """
         id, root_url, friendly_name, origin_override, referer_override, auth_kind, username,
-        token_service_url, arcgis_version, created_at, last_visited_at, last_deep_crawl_at
+        token_service_url, arcgis_version, created_at, last_visited_at, last_deep_crawl_at, cookie
         """
 
     /// Registers a server root, or touches `last_visited_at` on an existing one. The friendly
@@ -100,13 +100,21 @@ extension AppDatabase {
     }
 
     private static func serverRecord(_ r: [SQLValue]) throws -> ServerRecord {
-        guard r.count == 12, let id = r[0].int64, let urlText = r[1].stringValue, let url = URL(string: urlText),
+        guard r.count == 13, let id = r[0].int64, let urlText = r[1].stringValue, let url = URL(string: urlText),
               let name = r[2].stringValue, let auth = r[5].stringValue, let created = r[9].dateFromMicros
         else { throw MetadataStoreError.unexpectedRow("server") }
         return ServerRecord(id: id, rootURL: url, friendlyName: name, originOverride: r[3].stringValue,
                             refererOverride: r[4].stringValue, authKind: auth, username: r[6].stringValue,
                             tokenServiceURL: r[7].stringValue, arcgisVersion: r[8].doubleValue, createdAt: created,
-                            lastVisitedAt: r[10].dateFromMicros, lastDeepCrawlAt: r[11].dateFromMicros)
+                            lastVisitedAt: r[10].dateFromMicros, lastDeepCrawlAt: r[11].dateFromMicros,
+                            cookie: r[12].stringValue)
+    }
+
+    /// Blank clears it.
+    public func setCookie(serverID: Int64, cookie: String?) throws {
+        let trimmed = cookie?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let bind: SQLBind = trimmed.isEmpty ? .null : .string(trimmed)
+        try query("UPDATE server SET cookie = ? WHERE id = ?;", [bind, .int(serverID)])
     }
 
     // MARK: - Services

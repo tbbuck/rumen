@@ -305,11 +305,25 @@ private struct StartServerRow: View {
     let services: Int?
     @State private var hovered = false
     @State private var forgetHovered = false
+    @State private var editHovered = false
     @State private var confirmForget = false
 
     var body: some View {
         HStack(spacing: 6) {
             openButton
+            Button {
+                model.settingsServer = server
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(editHovered ? Palette.ink : Palette.muted2)
+                    .frame(width: 22, height: 22)
+                    .background(editHovered ? Palette.line : .clear, in: RoundedRectangle(cornerRadius: 5))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .hoverTracking($editHovered, hand: true)
+            .help("Settings: name, cookie, Origin and Referer headers")
             Button {
                 confirmForget = true
             } label: {

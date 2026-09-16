@@ -38,8 +38,7 @@ function squirclePath() {
 const SQUIRCLE = squirclePath();
 
 // Sheet palette (DESIGN-TOKENS.md, Day), plus the icon's own grounds.
-const p = { ground: '#EDEFE9', paper: '#FFFFFF', land: '#F6F7F3', coast: '#A6BBD0', line2: '#BEC5BA', grat: '#CBD7E4', water: '#DCE7F0', muted2: '#8A948E', accent: '#B8236B', accentSoft: 'rgba(184,35,107,0.07)' };
-const backSheets = ['#D6DBD3', '#E4E7E1'];
+const p = { ground: '#EDEFE9', paper: '#FFFFFF', land: '#F6F7F3', coast: '#A6BBD0', line2: '#BEC5BA', grat: '#CBD7E4', water: '#DCE7F0', muted2: '#8A948E', accent: '#B8236B', accentSoft: 'rgba(184,35,107,0.07)', ghost: '#9FB0BF', ghostGrat: 'rgba(34,42,38,0.09)' };
 
 // ---- Geography -------------------------------------------------------------
 
@@ -109,10 +108,25 @@ function mapFragment(box, featH, gratStep, strokeW, dash, feature = smooth) {
   const g = [];
   for (let x = box.x + gratStep / 2; x < box.x + box.w; x += gratStep) g.push(`M${x} ${box.y}V${box.y + box.h}`);
   for (let y = box.y + gratStep / 2; y < box.y + box.h; y += gratStep) g.push(`M${box.x} ${y}H${box.x + box.w}`);
+  // The layer is drawn the way the app draws a selected feature: a tinted fill with
+  // a magenta outline, not a solid slab.
   return `<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" fill="${p.water}"/>
       <path d="${g.join('')}" stroke="${p.grat}" stroke-width="4" fill="none"/>
-      <path d="${pathFor(feature, proj)}" fill="${p.accent}" fill-rule="evenodd"/>
+      <path d="${pathFor(feature, proj)}" fill="${p.accent}" fill-opacity="0.32" stroke="${p.accent}" stroke-width="${strokeW}" stroke-linejoin="round" fill-rule="evenodd"/>
       <rect x="${ext.x.toFixed(1)}" y="${ext.y.toFixed(1)}" width="${ext.w.toFixed(1)}" height="${ext.h.toFixed(1)}" fill="${p.accentSoft}" stroke="${p.accent}" stroke-width="${strokeW}" stroke-dasharray="${dash}"/>`;
+}
+
+// A quieter sheet for the back of a stack: the graticule, and optionally the same
+// layer as a grey outline, so the stack reads as several layers of one place.
+function ghostFragment(box, featH, gratStep, feature, withOutline) {
+  const win = windowFor(box, featH, feature);
+  const proj = project(win);
+  const g = [];
+  for (let x = box.x + gratStep / 2; x < box.x + box.w; x += gratStep) g.push(`M${x} ${box.y}V${box.y + box.h}`);
+  for (let y = box.y + gratStep / 2; y < box.y + box.h; y += gratStep) g.push(`M${box.x} ${y}H${box.x + box.w}`);
+  const outline = withOutline ? `<path d="${pathFor(feature, proj)}" fill="none" stroke="${p.ghost}" stroke-width="10" stroke-linejoin="round"/>` : '';
+  return `<path d="${g.join('')}" stroke="${p.ghostGrat}" stroke-width="4" fill="none"/>
+      ${outline}`;
 }
 
 // ---- Concepts --------------------------------------------------------------
@@ -138,7 +152,7 @@ function svgDoc(name, comment, defs, body) {
 const SOFT = `<filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="16"/></filter>`;
 
 // A · Footprint: the tile is the sheet.
-function conceptA(feature = smooth, name = 'A · Footprint') {
+function conceptA(feature = bold, name = 'A · Footprint') {
   const tile = { x: 0, y: 0, w: 1024, h: 1024 };
   const body = `<g>
       ${mapFragment(tile, 0.62, 160, 18, '46 30', feature)}
@@ -147,7 +161,7 @@ function conceptA(feature = smooth, name = 'A · Footprint') {
 }
 
 // B · Sheet: a white map sheet with margins and ticks on the pale ground.
-function conceptB() {
+function conceptB(feature = bold) {
   const sheet = { x: 156, y: 156, w: 712, h: 712 };
   const map = { x: 202, y: 202, w: 620, h: 620 };
   const ticks = [];
@@ -160,44 +174,42 @@ function conceptB() {
     <rect x="${sheet.x}" y="${sheet.y}" width="${sheet.w}" height="${sheet.h}" rx="26" fill="${p.paper}"/>
     <path d="${ticks.join('')}" stroke="${p.muted2}" stroke-width="5" fill="none"/>
     <g clip-path="url(#map)">
-      ${mapFragment(map, 0.68, 96, 14, '40 26')}
+      ${mapFragment(map, 0.68, 96, 14, '40 26', feature)}
     </g>
     <rect x="${map.x}" y="${map.y}" width="${map.w}" height="${map.h}" fill="none" stroke="${p.line2}" stroke-width="4"/>`;
   return svgDoc('B · Sheet', 'A white map sheet with margins and ticks on the pale ground; the Solent, the island and its extent drawn on it.', defs, body);
 }
 
-// C · Pulled layer: the front sheet of a stack lifted away.
-function conceptC() {
-  const w = 500, h = 580, rx = 30;
-  const sheets = [
-    { x: 196, y: 332, fill: backSheets[0] },
-    { x: 246, y: 282, fill: backSheets[1] },
-  ];
-  const front = { x: 330, y: 132, w, h };
+// C · Pulled layer: three distinct sheets from one server, the front one lifted away.
+// Back sheet: blank paper. Middle: paper with the graticule. Front, white and pulled
+// up-right: the layer highlighted, with its extent.
+function conceptC(feature = bold) {
+  const w = 480, h = 560, rx = 28;
+  const back = { x: 168, y: 356, w, h, fill: '#D9DED6' };
+  const mid = { x: 246, y: 262, w, h, fill: '#EDEFEA' };
+  const front = { x: 344, y: 120, w, h };
   const defs = `${SOFT}
+    <clipPath id="back"><rect x="${back.x}" y="${back.y}" width="${w}" height="${h}" rx="${rx}"/></clipPath>
+    <clipPath id="mid"><rect x="${mid.x}" y="${mid.y}" width="${w}" height="${h}" rx="${rx}"/></clipPath>
     <clipPath id="front"><rect x="${front.x}" y="${front.y}" width="${w}" height="${h}" rx="${rx}"/></clipPath>`;
-  const back = sheets.map(s => {
-    const g = [];
-    for (let x = s.x + 48; x < s.x + w; x += 96) g.push(`M${x} ${s.y}V${s.y + h}`);
-    for (let y = s.y + 48; y < s.y + h; y += 96) g.push(`M${s.x} ${y}H${s.x + w}`);
-    return `<rect x="${s.x}" y="${s.y + 20}" width="${w}" height="${h}" rx="${rx}" fill="#000" opacity="0.18" filter="url(#soft)"/>
-    <rect x="${s.x}" y="${s.y}" width="${w}" height="${h}" rx="${rx}" fill="${s.fill}"/>
-    <path d="${g.join('')}" stroke="rgba(34,42,38,0.08)" stroke-width="4" fill="none"/>`;
-  }).join('\n    ');
+  const sheet = (s, clip, content) => `<rect x="${s.x}" y="${s.y + 22}" width="${w}" height="${h}" rx="${rx}" fill="#000" opacity="0.26" filter="url(#soft)"/>
+    <g clip-path="url(#${clip})">
+      <rect x="${s.x}" y="${s.y}" width="${w}" height="${h}" fill="${s.fill ?? p.paper}"/>
+      ${content}
+    </g>
+    <rect x="${s.x}" y="${s.y}" width="${w}" height="${h}" rx="${rx}" fill="none" stroke="${p.line2}" stroke-width="3"/>`;
   const body = `<rect width="1024" height="1024" fill="${p.ground}"/>
-    ${back}
-    <rect x="${front.x}" y="${front.y + 26}" width="${w}" height="${h}" rx="${rx}" fill="#000" opacity="0.28" filter="url(#soft)"/>
-    <g clip-path="url(#front)">
-      ${mapFragment(front, 0.7, 96, 14, '40 26')}
-    </g>`;
-  return svgDoc('C · Pulled layer', 'Three sheets from a server; the white front one is lifted away carrying the island. Extraction as a gesture.', defs, body);
+    ${sheet(back, 'back', '')}
+    ${sheet(mid, 'mid', ghostFragment(mid, 0.7, 96, feature, false))}
+    ${sheet(front, 'front', mapFragment(front, 0.7, 96, 14, '40 26', feature))}`;
+  return svgDoc('C · Pulled layer', 'Three sheets from one server: blank paper, gridded paper, and the white front sheet lifted away with the layer highlighted. Extraction as a gesture.', defs, body);
 }
 
 const concepts = [
-  { key: 'A', file: 'A-footprint.svg', name: 'A · Footprint', svg: conceptA(), why: 'The tile is the sheet: graticule, pale water, Great Britain and Ireland as the layer in magenta, and the dashed extent that is their true bounding box. Smooth generalisation.', tradeoff: 'Pale ground, so quiet on a light desktop.' },
-  { key: 'A2', file: 'A-bold.svg', name: 'A · bolder', svg: conceptA(bold, 'A · bolder'), why: 'The same frame with the coastline generalised harder: wider closing and opening radii, coarser simplification.', tradeoff: 'Loses the Highlands and the Cornish toe to a rounder outline.' },
+  { key: 'A', file: 'A-footprint.svg', name: 'A · Footprint', svg: conceptA(), why: 'The tile is the sheet: graticule, pale water, Great Britain and Ireland as the layer, drawn as the app draws a selected feature (tinted fill, magenta outline), and the dashed extent that is their true bounding box.', tradeoff: 'Pale ground, so quiet on a light desktop.' },
+  { key: 'A2', file: 'A-smooth.svg', name: 'A · smoother coast', svg: conceptA(smooth, 'A · smoother coast'), why: 'The same frame with the less generalised coastline, for comparison.', tradeoff: 'The Highland lochs bring back texture that reads as noise at 32px.' },
   { key: 'B', file: 'B-sheet.svg', name: 'B · Sheet', svg: conceptB(), why: 'The same map on a white sheet with margins and ticks, lying on the pale ground. The marginalia are the signature.', tradeoff: 'The ticks vanish below 64px; at Finder sizes it is a white square with a magenta shape.' },
-  { key: 'C', file: 'C-pulled-layer.svg', name: 'C · Pulled layer', svg: conceptC(), why: 'Three sheets from a server, the white front one lifted away carrying the map. The only concept that shows what the app does: extraction.', tradeoff: 'Busiest silhouette; a stack can read as a generic layers glyph.' },
+  { key: 'C', file: 'C-pulled-layer.svg', name: 'C · Pulled layer', svg: conceptC(), why: 'Three sheets from one server: blank paper at the back, gridded paper in the middle, and the white front sheet lifted away with the layer highlighted. The only concept that shows what the app does: extraction.', tradeoff: 'Busiest silhouette; a stack can read as a generic layers glyph.' },
 ];
 
 // ---- Preview page ----------------------------------------------------------

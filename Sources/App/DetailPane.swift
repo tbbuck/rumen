@@ -16,8 +16,12 @@ struct DetailPane: View {
 
     @ViewBuilder private var pageContent: some View {
         Group {
-            if model.isSearching {
+            if let opening = model.openingStatus {
+                OpeningPage(status: opening)
+            } else if model.isSearching {
                 ColumnSearchResults()
+            } else if model.currentServer == nil {
+                StartPage()
             } else {
             switch model.selection {
             case .none:
@@ -223,5 +227,114 @@ struct FactGrid: View {
             }
         }
         .frame(maxWidth: 880, alignment: .leading)
+    }
+}
+
+/// Where the app is going and what the crawler is doing, while a server opens.
+private struct OpeningPage: View {
+    let status: OpeningStatus
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Opening \(URL(string: status.url)?.host ?? status.url)")
+                .font(.sheetDisplay(24)).foregroundStyle(Palette.ink).tracking(-0.24)
+            Text(status.url).font(.sheetMono(12)).foregroundStyle(Palette.muted).textSelection(.enabled)
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Caption(status.step).lineLimit(2)
+            }
+            Caption("Every folder and service is listed once; after that the server opens from cache.", color: Palette.muted2)
+        }
+        .frame(maxWidth: 720, alignment: .leading)
+        .padding(.top, 22).padding(.horizontal, 36)
+    }
+}
+
+/// The first screen: known servers to pick from, and a field for any ArcGIS URL.
+private struct StartPage: View {
+    @Environment(AppModel.self) private var model
+    @State private var draft = ""
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(model.servers.isEmpty ? "Open a server" : "Where to?")
+                        .font(.sheetDisplay(24)).foregroundStyle(Palette.ink).tracking(-0.24)
+                    Caption(model.servers.isEmpty
+                            ? "Paste any ArcGIS URL: a services root, a folder, a service, a layer, or a query someone sent you."
+                            : "Pick a server you have opened before, or paste any ArcGIS URL.")
+                }
+                if !model.servers.isEmpty {
+                    SectionHeading("Servers")
+                    VStack(spacing: 0) {
+                        ForEach(model.servers) { server in
+                            StartServerRow(server: server, services: model.serverServiceCounts[server.id])
+                            Rectangle().fill(Palette.line).frame(height: 1)
+                        }
+                    }
+                    .frame(maxWidth: 880)
+                }
+                SectionHeading(model.servers.isEmpty ? "URL" : "Or paste a URL")
+                HStack(spacing: 10) {
+                    TextField("https://gis.example.gov.uk/arcgis/rest/services", text: $draft)
+                        .textFieldStyle(SheetFieldStyle(mono: true))
+                        .frame(maxWidth: 560)
+                        .onSubmit { open() }
+                    Button("Open") { open() }
+                        .buttonStyle(PrimaryButtonStyle(small: true))
+                        .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                Caption("Any URL in the hierarchy works, for example …/arcgis/rest/services/Trailheads/FeatureServer/0. ⌘L edits the bar above.", color: Palette.muted2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 22).padding(.horizontal, 36).padding(.bottom, 24)
+        }
+    }
+
+    private func open() {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        Task { await model.openText(text) }
+    }
+}
+
+private struct StartServerRow: View {
+    @Environment(AppModel.self) private var model
+    let server: ServerRecord
+    let services: Int?
+    @State private var hovered = false
+
+    var body: some View {
+        Button {
+            Task { await model.selectServer(server.id) }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "server.rack").font(.system(size: 13)).foregroundStyle(Palette.muted).frame(width: 18)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(server.friendlyName).font(.sheetUI(13, .semibold)).foregroundStyle(Palette.ink).lineLimit(1)
+                    Text(server.rootURL.absoluteString).font(.sheetMono(11.5)).foregroundStyle(Palette.muted).lineLimit(1)
+                }
+                Spacer(minLength: 12)
+                Caption(summary, size: 11.5, color: Palette.muted2).lineLimit(1)
+            }
+            .padding(.horizontal, 8)
+            .frame(minHeight: 46)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(hovered ? Palette.line.opacity(0.55) : .clear, in: RoundedRectangle(cornerRadius: 6))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .hoverTracking($hovered, hand: true)
+    }
+
+    private var summary: String {
+        var parts = [String]()
+        if let services { parts.append(services == 1 ? "1 service" : "\(services.grouped) services") }
+        if let version = server.arcgisVersion {
+            parts.append("ArcGIS Server \(version.formatted(.number.precision(.fractionLength(0...2))))")
+        }
+        parts.append("visited \(Age.text(server.lastVisitedAt))")
+        return parts.joined(separator: " · ")
     }
 }

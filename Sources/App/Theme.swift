@@ -70,8 +70,27 @@ enum SheetFonts {
         }
     }
 
-    /// Fira Code at a variable weight with `liga` and `calt` disabled.
+    nonisolated(unsafe) private static var monoCache: [String: NSFont] = [:]
+    private static let monoLock = NSLock()
+
+    /// Fira Code at a variable weight with `liga` and `calt` disabled. Built once per size and
+    /// weight: a variable-font instance is not free, and tree rows ask for it constantly.
     static func mono(size: CGFloat, weight: Double) -> NSFont? {
+        let key = "\(size)|\(weight)"
+        monoLock.lock()
+        let cached = monoCache[key]
+        monoLock.unlock()
+        if let cached { return cached }
+        let font = build(size: size, weight: weight)
+        if let font {
+            monoLock.lock()
+            monoCache[key] = font
+            monoLock.unlock()
+        }
+        return font
+    }
+
+    private static func build(size: CGFloat, weight: Double) -> NSFont? {
         let wghtAxis = 0x77676874 as NSNumber   // 'wght'
         let attributes: [NSFontDescriptor.AttributeName: Any] = [
             .family: "Fira Code",

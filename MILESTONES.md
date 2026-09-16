@@ -81,6 +81,17 @@ commit per logical unit.
   GeoParquet read back through the spatial engine with a DuckDB where box and display
   simplification, and the Query tab's last preview. The transfers Map action opens a finished
   run on the map. 174 tests.
+- **Polish after first use (post-M6).** Map: feature-state hover with tweened fades, the
+  clicked feature cross-faded between two highlight slots while the rest dim, page calls
+  queued on the page's own ready flag (a `setData` reparse makes `isStyleLoaded()` false, so
+  calls parked on a second `load` were lost), page errors in the unified log; sample loads
+  stream with "Waiting for the server…" then bytes, total, and percentage (unencoded so the
+  length is honest). Tree: single-tap handler reading the click count (a double-tap gesture
+  had been holding every click), atomic page swaps, debounced and cached filter capped at 300
+  rows, the mono font cached. Raw tab in an `NSTextView` with off-main pretty-printing. New
+  screens: a **start page** (known servers with counts, or a URL field) instead of landing
+  in the last server, and an **opening page** that names the server and the crawler's
+  current step while a new server is added; "Start page" in the recents popover.
 
 ---
 

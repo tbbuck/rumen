@@ -12,23 +12,36 @@ struct ServerTree: View {
                 TreeFilterField()
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(model.treeFilter.trimmingCharacters(in: .whitespaces).isEmpty ? model.visibleRows : model.filteredRows) { row in
+                        let filtering = !model.treeFilter.trimmingCharacters(in: .whitespaces).isEmpty
+                        ForEach(filtering ? model.filteredRows : model.visibleRows) { row in
                             TreeRow(row: row, frame: model.tree?.extent)
+                        }
+                        if filtering, model.filteredOverflow > 0 {
+                            Caption("\(AppModel.filterRowCap) shown, \(model.filteredOverflow) more match. Keep typing.", size: 11, color: Palette.muted2)
+                                .padding(.horizontal, 16).padding(.top, 8)
                         }
                     }
                     .padding(.bottom, 12)
                 }
             } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("No servers yet").font(.sheetUI(14, .bold)).foregroundStyle(Palette.ink)
-                    Caption("Paste an ArcGIS URL into the bar above.", size: 11, color: Palette.muted2)
+                    if let opening = model.openingStatus {
+                        Text("Opening…").font(.sheetUI(14, .bold)).foregroundStyle(Palette.ink)
+                        Caption(opening.step, size: 11, color: Palette.muted2).lineLimit(3)
+                    } else if model.servers.isEmpty {
+                        Text("No servers yet").font(.sheetUI(14, .bold)).foregroundStyle(Palette.ink)
+                        Caption("Paste an ArcGIS URL into the bar above.", size: 11, color: Palette.muted2)
+                    } else {
+                        Text(model.servers.count == 1 ? "1 server known" : "\(model.servers.count) servers known").font(.sheetUI(14, .bold)).foregroundStyle(Palette.ink)
+                        Caption("Pick one on the right.", size: 11, color: Palette.muted2)
+                    }
                 }
                 .padding(.horizontal, 16)
                 Spacer()
             }
         }
         .padding(.top, 14)
-        .frame(maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Palette.panel)
     }
 }
@@ -163,19 +176,26 @@ private struct TreeRow: View {
 private struct TreeFilterField: View {
     @Environment(AppModel.self) private var model
     @FocusState private var focused: Bool
+    /// Typed text; the model's filter follows it after a short pause so typing stays fluid.
+    @State private var draft = ""
 
     var body: some View {
-        @Bindable var model = model
         HStack(spacing: 6) {
             Image(systemName: "line.3.horizontal.decrease").font(.system(size: 10)).foregroundStyle(Palette.muted2)
-            TextField("Filter", text: $model.treeFilter)
+            TextField("Filter", text: $draft)
                 .textFieldStyle(.plain)
                 .font(.sheetUI(12))
                 .foregroundStyle(Palette.ink)
                 .focused($focused)
-                .onExitCommand { model.treeFilter = ""; focused = false }
-            if !model.treeFilter.isEmpty {
-                Button { model.treeFilter = "" } label: {
+                .onExitCommand { draft = ""; model.treeFilter = ""; focused = false }
+                .task(id: draft) {
+                    if draft.isEmpty { model.treeFilter = ""; return }
+                    try? await Task.sleep(for: .milliseconds(120))
+                    if !Task.isCancelled { model.treeFilter = draft }
+                }
+                .onChange(of: model.treeFilter) { if model.treeFilter.isEmpty { draft = "" } }
+            if !draft.isEmpty {
+                Button { draft = ""; model.treeFilter = "" } label: {
                     Image(systemName: "xmark.circle.fill").font(.system(size: 10)).foregroundStyle(Palette.muted2)
                 }
                 .buttonStyle(.plain)

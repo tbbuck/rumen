@@ -31,6 +31,24 @@ struct PathBar: View {
                 Spacer(minLength: 8)
                 Text(content.tail).font(.sheetMono(11)).foregroundStyle(Palette.muted2)
             } else {
+                if !model.servers.isEmpty {
+                    Button {
+                        model.showRecents = true
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "server.rack").font(.system(size: 11)).foregroundStyle(Palette.muted)
+                            Text("Servers").font(.sheetUI(13)).foregroundStyle(Palette.ink)
+                        }
+                        .padding(.horizontal, 6).padding(.vertical, 3)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Known servers")
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(Palette.muted2)
+                        .frame(width: 12)
+                }
                 Text("Paste an ArcGIS URL, or press ⌘L")
                     .font(.sheetUI(13)).foregroundStyle(Palette.muted2)
                 Spacer()

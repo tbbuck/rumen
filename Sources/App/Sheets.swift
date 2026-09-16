@@ -140,11 +140,18 @@ struct RecentServersPopover: View {
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 Rectangle().fill(Palette.line).frame(height: 1)
             }
-            Button("Add a server…") {
-                model.showRecents = false
-                model.beginURLEdit()
+            HStack(spacing: 16) {
+                Button("Add a server…") {
+                    model.showRecents = false
+                    model.beginURLEdit()
+                }
+                .buttonStyle(LinkButtonStyle())
+                Button("Start page") {
+                    model.showRecents = false
+                    model.showStartPage()
+                }
+                .buttonStyle(LinkButtonStyle())
             }
-            .buttonStyle(LinkButtonStyle())
             .padding(12)
         }
         .frame(width: 320)

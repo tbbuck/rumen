@@ -83,6 +83,12 @@ final class AppModel {
     var appearanceOverride: ColorScheme?
     private(set) var errorText: String?
     private(set) var deepCrawlStatus: String?
+    /// While a server is being opened: where, and what the crawler is doing right now.
+    private(set) var openingStatus: OpeningStatus?
+    /// Cached service counts per server, for the start page.
+    private(set) var serverServiceCounts: [Int64: Int] = [:]
+    private var treeVersion = 0
+    @ObservationIgnored private var filterCache: (needle: String, version: Int, rows: [TreeRowItem], overflow: Int)?
 
     // Transfers
     var showTransfers = false
@@ -119,7 +125,7 @@ final class AppModel {
             try await db.markInterruptedDownloads()
             try await reloadServers()
             await reloadRuns()
-            if let first = servers.first { await selectServer(first.id) }
+            // Land on the start page: the user picks a server rather than being dropped into one.
             phase = .ready
         } catch {
             phase = .failed(String(describing: error))
@@ -130,6 +136,25 @@ final class AppModel {
         guard let database else { return }
         servers = try await database.servers()
         if let current = currentServer { currentServer = servers.first { $0.id == current.id } }
+        var counts = [Int64: Int]()
+        for server in servers { counts[server.id] = try await database.services(serverID: server.id).count }
+        serverServiceCounts = counts
+    }
+
+    /// Back to the start page: no server, no tree, no selection.
+    func showStartPage() {
+        currentServer = nil
+        tree = nil
+        expanded = []
+        selection = nil
+        pathContent = nil
+        clearPage()
+    }
+
+    /// The start page's URL field: same path as the bar.
+    func openText(_ text: String) async {
+        urlDraft = text
+        await submitURL()
     }
 
     // MARK: - Tree
@@ -158,6 +183,7 @@ final class AppModel {
         }
         layersByService = byService
         tree = TreeBuilder.build(server: server, services: services, layersByService: byService)
+        treeVersion += 1
     }
 
     /// The flattened, currently visible rows (server header is drawn separately).
@@ -453,8 +479,14 @@ final class AppModel {
     /// the node it names.
     private func open(_ text: String, friendlyName: String?) async {
         guard let crawler else { return }
+        let root = (try? ArcGISURL.parse(text))?.rootURL.absoluteString ?? text
+        openingStatus = OpeningStatus(url: root, step: "Reading the service directory…")
+        defer { openingStatus = nil }
         do {
-            let opened = try await crawler.open(text, friendlyName: friendlyName)
+            let opened = try await crawler.open(text, friendlyName: friendlyName, progress: { event in
+                Task { @MainActor in self.openingProgress(event) }
+            })
+            openingStatus?.step = "Building the tree…"
             try await reloadServers()
             if currentServer?.id != opened.server.id {
                 currentServer = opened.server
@@ -487,6 +519,20 @@ final class AppModel {
             }
         } catch {
             errorText = String(describing: error)
+        }
+    }
+
+    private func openingProgress(_ event: CrawlEvent) {
+        guard openingStatus != nil else { return }
+        switch event {
+        case .directory(let folder, let services):
+            openingStatus?.step = "Listed \(folder.isEmpty ? "the root" : folder): \(services) services"
+        case .service(let name, let layers):
+            openingStatus?.step = "Read \(name): \(layers) layers"
+        case .layer(let name):
+            openingStatus?.step = "Reading \(name)…"
+        case .failed(let what, let error):
+            openingStatus?.step = "\(what): \(error)"
         }
     }
 
@@ -706,20 +752,34 @@ extension AppModel {
 
     /// Tree rows matching the filter box: every node whose name contains the text, with its
     /// usual indent, regardless of what is expanded.
-    var filteredRows: [TreeRowItem] {
-        guard let tree else { return [] }
+    var filteredRows: [TreeRowItem] { filtered().rows }
+    /// Matches beyond the cap, so the tree can say "keep typing".
+    var filteredOverflow: Int { filtered().overflow }
+    static let filterRowCap = 300
+
+    private func filtered() -> (rows: [TreeRowItem], overflow: Int) {
+        guard let tree else { return ([], 0) }
         let needle = treeFilter.trimmingCharacters(in: .whitespaces)
+        if let cached = filterCache, cached.needle == needle, cached.version == treeVersion {
+            return (cached.rows, cached.overflow)
+        }
         var rows = [TreeRowItem]()
+        var overflow = 0
         func walk(_ nodes: [TreeNode]) {
             for node in nodes {
-                if node.name.localizedCaseInsensitiveContains(needle) {
-                    rows.append(TreeRowItem(node: node, indent: Self.indentPublic(for: node)))
+                if node.name.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) != nil {
+                    if rows.count < Self.filterRowCap {
+                        rows.append(TreeRowItem(node: node, indent: Self.indentPublic(for: node)))
+                    } else {
+                        overflow += 1
+                    }
                 }
                 walk(node.children)
             }
         }
         walk(tree.children)
-        return rows
+        filterCache = (needle, treeVersion, rows, overflow)
+        return (rows, overflow)
     }
 
     static func indentPublic(for node: TreeNode) -> CGFloat {
@@ -775,4 +835,10 @@ extension AppModel {
         let value: String? = scheme == .light ? "light" : (scheme == .dark ? "dark" : nil)
         Task { try? await database?.setSetting("appearance", value) }
     }
+}
+
+/// What the app is doing while a server opens, for the opening page.
+struct OpeningStatus: Equatable {
+    var url: String
+    var step: String
 }

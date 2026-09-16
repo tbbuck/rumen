@@ -12,7 +12,11 @@ struct MapTab: View {
                 Chip(text: chipText)
                 if session.isLoading {
                     Text(loadingText).font(.sheetUI(12.5)).foregroundStyle(Palette.muted).lineLimit(1)
-                    ProgressView().controlSize(.small)
+                    if let fraction = session.transfer?.fraction {
+                        ProgressBar(fraction: fraction, height: 4).frame(width: 120)
+                    } else {
+                        ProgressView().controlSize(.small)
+                    }
                 } else {
                     Text(session.caption).font(.sheetUI(12.5)).foregroundStyle(Palette.muted).lineLimit(2)
                 }
@@ -43,10 +47,12 @@ struct MapTab: View {
     /// trustworthy, otherwise the bytes so far.
     private var loadingText: String {
         guard let transfer = session.transfer else { return "Waiting for the server…" }
-        if let fraction = transfer.fraction {
-            return "Receiving… \(Int((fraction * 100).rounded()))%"
+        let received = transfer.received.formatted(.byteCount(style: .file))
+        if let expected = transfer.expected, let fraction = transfer.fraction {
+            let total = expected.formatted(.byteCount(style: .file))
+            return "Receiving… \(received) of \(total), \(Int((fraction * 100).rounded()))%"
         }
-        return "Receiving… \(transfer.received.formatted(.byteCount(style: .file)))"
+        return "Receiving… \(received)"
     }
 
     private var chipText: String {

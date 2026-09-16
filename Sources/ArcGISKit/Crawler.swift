@@ -47,14 +47,15 @@ public actor Crawler {
     /// Parses `text`, registers its server root (or touches an existing one), runs a
     /// shallow crawl for a new server, and — when the URL names a service or layer — crawls
     /// that service so the target rows exist. Errors surface verbatim.
-    public func open(_ text: String, friendlyName: String? = nil) async throws -> Opened {
+    public func open(_ text: String, friendlyName: String? = nil,
+                     progress: (@Sendable (CrawlEvent) -> Void)? = nil) async throws -> Opened {
         let location = try ArcGISURL.parse(text)
         let existing = try await db.server(rootURL: location.rootURL)
         let server = try await db.addServer(rootURL: location.rootURL,
                                             friendlyName: friendlyName ?? location.rootURL.host ?? "server")
         let isNew = existing == nil
         if isNew {
-            try await shallowCrawl(serverID: server.id)
+            try await shallowCrawl(serverID: server.id, progress: progress)
         }
         var service: ServiceRecord?
         var layer: LayerRecord?
@@ -62,11 +63,11 @@ public actor Crawler {
             service = try await db.service(serverID: server.id, url: serviceURL)
             if service == nil {
                 // Not in the (possibly stale) listing: re-list its folder, then look again.
-                try await crawlDirectory(serverID: server.id, folderPath: location.folderPath ?? "")
+                try await crawlDirectory(serverID: server.id, folderPath: location.folderPath ?? "", progress: progress)
                 service = try await db.service(serverID: server.id, url: serviceURL)
             }
             if let found = service, found.type.hasLayers {
-                try await crawlService(serviceID: found.id)
+                try await crawlService(serviceID: found.id, progress: progress)
                 service = try await db.service(id: found.id)
                 if let layerID = location.layerID {
                     layer = try await db.layer(serviceID: found.id, layerID: layerID)

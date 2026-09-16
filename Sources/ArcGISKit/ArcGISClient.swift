@@ -224,7 +224,10 @@ public actor ArcGISClient {
         let response: HTTPURLResponse
         do {
             if let progress {
-                (data, response) = try await transport.perform(request, progress: progress)
+                // Unencoded, so Content-Length counts the bytes that arrive and the percentage is honest.
+                var streamed = request
+                streamed.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+                (data, response) = try await transport.perform(streamed, progress: progress)
             } else {
                 (data, response) = try await transport.perform(request)
             }

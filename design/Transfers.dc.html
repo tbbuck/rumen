@@ -1,0 +1,199 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cabin:wght@400;500;600;700&amp;family=Fira+Code:wght@400;500&amp;display=swap">
+  <style>
+    body { margin: 0; }
+    a { color: #B8236B; text-decoration: none; } a:hover { color: #8F1A53; text-decoration: underline; }
+    .root { font-family: "Cabin", "Gill Sans", "Helvetica Neue", sans-serif; color: var(--ink); background: var(--backdrop); box-sizing: border-box; padding: 20px; -webkit-font-smoothing: antialiased; }
+    .root.day { --backdrop:#DFE3DC; --bg:#F2F4F0; --panel:#FAFBF8; --line:#D6DBD2; --line2:#BEC5BA; --grat:#C5D3E2; --water:#DCE7F0; --ink:#222A26; --muted:#5E6863; --muted2:#8A948E; --accent:#B8236B; --accent-soft:rgba(184,35,107,.10); --on-accent:#FFFFFF; --yes:#2E7D4F; --yes-soft:rgba(46,125,79,.12); --no:#B3382D; --warn:#B8781F; --warn-soft:rgba(184,120,31,.14); --shadow:0 30px 70px -30px rgba(34,42,38,.42); }
+    .root.night { --backdrop:#11161B; --bg:#1A2128; --panel:#212930; --line:#33404A; --line2:#445362; --grat:#34506A; --water:#22303D; --ink:#E7EAE6; --muted:#A2ACA6; --muted2:#7B867F; --accent:#EA6AA6; --accent-soft:rgba(234,106,166,.14); --on-accent:#2A0F1D; --yes:#62B98A; --yes-soft:rgba(98,185,138,.16); --no:#E07A70; --warn:#E2A64B; --warn-soft:rgba(226,166,75,.16); --shadow:0 40px 90px -30px rgba(0,0,0,.7); }
+    .root.night a { color: #EA6AA6; }
+    .mono { font-family: "Fira Code", "SF Mono", Menlo, monospace; font-variant-numeric: tabular-nums; }
+    .win { width: 100%; height: 100%; background: var(--bg); border: 1px solid var(--line2); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; display: flex; flex-direction: column; }
+    .titlebar { height: 48px; flex: 0 0 48px; display: flex; align-items: center; gap: 14px; padding: 0 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
+    .lights { display: flex; gap: 8px; margin-right: 4px; }
+    .light { width: 12px; height: 12px; border-radius: 6px; }
+    .pathbar { flex: 1 1 auto; height: 30px; display: flex; align-items: center; gap: 2px; padding: 0 10px; border: 1px solid var(--line2); border-radius: 7px; background: var(--bg); font-size: 13px; box-sizing: border-box; overflow: hidden; white-space: nowrap; }
+    .pathbar .seg { padding: 3px 6px; border-radius: 5px; color: var(--muted); }
+    .pathbar .seg.host { color: var(--ink); display: flex; align-items: center; gap: 6px; }
+    .pathbar .seg.here { color: var(--ink); font-weight: 600; background: var(--accent-soft); }
+    .pathbar .sep { width: 12px; height: 12px; color: var(--muted2); flex: 0 0 12px; }
+    .pathbar .tail { margin-left: auto; font-size: 11px; color: var(--muted2); }
+    .search { display: flex; align-items: center; gap: 6px; width: 190px; height: 30px; padding: 0 9px; border: 1px solid var(--line2); border-radius: 7px; background: var(--bg); color: var(--muted2); font-size: 12.5px; box-sizing: border-box; }
+    .body { flex: 1 1 auto; display: flex; min-height: 0; }
+    .tree { width: 288px; flex: 0 0 288px; background: var(--panel); border-right: 1px solid var(--line); padding: 14px 0 0; display: flex; flex-direction: column; overflow: hidden; }
+    .server { padding: 0 16px 12px; display: flex; flex-direction: column; gap: 2px; }
+    .server .n { font-size: 14px; font-weight: 700; }
+    .server .v { font-size: 11px; color: var(--muted2); }
+    .row { display: flex; align-items: center; gap: 7px; height: 27px; padding-right: 14px; font-size: 13px; white-space: nowrap; }
+    .row.sel { background: var(--accent-soft); font-weight: 600; box-shadow: inset 2px 0 0 var(--accent); }
+    .row.dim { color: var(--muted2); }
+    .row .id { font-size: 10.5px; color: var(--muted2); width: 14px; text-align: right; flex: 0 0 14px; }
+    .row .kind { font-size: 9.5px; color: var(--muted2); margin-left: 6px; }
+    .chev { width: 10px; height: 10px; flex: 0 0 10px; color: var(--muted2); }
+    .loc { margin-left: auto; width: 22px; height: 15px; flex: 0 0 22px; color: var(--line2); }
+    .loc .ext { fill: var(--accent-soft); stroke: var(--accent); }
+    .row.dim .loc .ext { fill: none; stroke: var(--muted2); stroke-dasharray: 1.5 1.5; }
+    .detail { flex: 1 1 auto; min-width: 0; padding: 22px 36px 0; display: flex; flex-direction: column; gap: 18px; overflow: hidden; }
+    .h1 .name { font-size: 24px; font-weight: 700; letter-spacing: -0.01em; }
+    .h1 .sub { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+    .tabs { display: flex; gap: 24px; border-bottom: 1px solid var(--line); font-size: 13px; font-weight: 500; color: var(--muted); }
+    .tabs span { padding: 0 0 8px; }
+    .tabs span.on { color: var(--ink); box-shadow: inset 0 -2px 0 var(--accent); }
+    .extract { max-width: 720px; display: flex; flex-direction: column; gap: 12px; }
+    .extract .say { font-size: 15px; line-height: 1.5; }
+    .extract .say strong { color: var(--yes); font-weight: 700; }
+    .actions { display: flex; align-items: center; gap: 18px; }
+    .btn { height: 30px; padding: 0 12px; display: flex; align-items: center; border-radius: 6px; background: var(--accent); color: var(--on-accent); font-size: 13px; font-weight: 600; }
+    .btn.small { height: 26px; padding: 0 10px; font-size: 12px; }
+    .actions a { font-size: 13px; }
+    .dl { display: grid; grid-template-columns: 136px minmax(0, 1fr) 126px minmax(0, 1fr); gap: 6px 20px; font-size: 12.5px; max-width: 880px; }
+    .dl > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .dl .mono { font-size: 12px; }
+    .dl .k { color: var(--muted); }
+    .drawer { flex: 0 0 340px; height: 340px; border-top: 1px solid var(--line2); background: var(--panel); display: flex; flex-direction: column; }
+    .dhead { height: 40px; flex: 0 0 40px; display: flex; align-items: center; gap: 14px; padding: 0 18px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+    .dhead .lab { font-weight: 700; font-size: 13.5px; }
+    .dhead .sum { color: var(--muted); }
+    .dhead .close { margin-left: auto; width: 12px; height: 12px; color: var(--muted); }
+    .runs { padding: 0 18px; display: flex; flex-direction: column; overflow: hidden; }
+    .run { display: grid; grid-template-columns: minmax(0, 1fr) 220px 214px; gap: 24px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
+    .acts a, .acts span { white-space: nowrap; }
+    .run .who { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+    .run .nm { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 700; }
+    .dot { width: 8px; height: 8px; border-radius: 4px; background: var(--muted2); flex: 0 0 8px; }
+    .dot.on { background: var(--accent); }
+    .dot.done { background: var(--yes); }
+    .dot.warn { background: var(--warn); }
+    .chip { font-size: 10.5px; padding: 2px 7px; border-radius: 5px; background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+    .chip.done { background: var(--yes-soft); color: var(--yes); }
+    .chip.warn { background: var(--warn-soft); color: var(--warn); }
+    .run .pth { font-size: 11px; color: var(--muted2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .run .st { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .chunks { display: grid; grid-template-columns: repeat(23, minmax(0, 1fr)); gap: 2px; }
+    .chunk { height: 7px; border-radius: 1.5px; background: var(--line); }
+    .chunk.done { background: var(--accent); }
+    .chunk.live { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+    .chunk.retry { background: var(--warn); }
+    .bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+    .bar div { height: 100%; background: var(--accent); }
+    .bar.done div { background: var(--yes); }
+    .bar.warn div { background: var(--warn); }
+    .acts { display: flex; gap: 14px; justify-content: flex-end; align-items: center; font-size: 12.5px; }
+  </style>
+</helmet>
+<div class="root {{theme}}" style="width: 1180px; height: 760px;">
+  <svg width="0" height="0" style="position: absolute;" aria-hidden="true">
+    <defs>
+      <symbol id="i-host" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"></rect><rect x="2" y="9" width="12" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"></rect><circle cx="4.5" cy="5" r=".9" fill="currentColor"></circle><circle cx="4.5" cy="11" r=".9" fill="currentColor"></circle></symbol>
+      <symbol id="i-chev-down" viewBox="0 0 10 10"><path d="M2 3.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.3"></path></symbol>
+      <symbol id="i-chev-right" viewBox="0 0 10 10"><path d="M3.5 2l3 3-3 3" fill="none" stroke="currentColor" stroke-width="1.3"></path></symbol>
+      <symbol id="i-sep" viewBox="0 0 12 12"><path d="M4.5 2.5 8 6l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.3"></path></symbol>
+      <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.2" fill="none" stroke="currentColor" stroke-width="1.3"></circle><path d="M10.2 10.2 14 14" stroke="currentColor" stroke-width="1.3"></path></symbol>
+    </defs>
+  </svg>
+  <div class="win">
+    <div class="titlebar">
+      <div class="lights"><div class="light" style="background: #E8615A;"></div><div class="light" style="background: #E3B04A;"></div><div class="light" style="background: #5FBE67;"></div></div>
+      <div class="pathbar">
+        <span class="seg host"><svg width="13" height="13"><use href="#i-host"></use></svg>gis.ashcombe.gov.uk</span>
+        <svg class="sep"><use href="#i-sep"></use></svg><span class="seg">Property</span>
+        <svg class="sep"><use href="#i-sep"></use></svg><span class="seg">LLPG</span>
+        <svg class="sep"><use href="#i-sep"></use></svg><span class="seg">MapServer</span>
+        <svg class="sep"><use href="#i-sep"></use></svg><span class="seg here">3 BLPU Addresses</span>
+        <span class="tail mono">arcgis/rest/services</span>
+      </div>
+      <div class="search"><svg width="13" height="13"><use href="#i-search"></use></svg><span>Find a column</span></div>
+    </div>
+    <div class="body">
+      <div class="tree">
+        <div class="server"><span class="n">Ashcombe Borough Council</span><span class="v">ArcGIS Server 11.3, cached 14 minutes ago</span></div>
+        <div class="row" style="padding-left: 14px;"><svg class="chev"><use href="#i-chev-down"></use></svg><span>Planning</span><svg class="loc" viewBox="0 0 22 15"><rect x=".5" y=".5" width="21" height="14" fill="none" stroke="currentColor"></rect><rect class="ext" x="5" y="3" width="10" height="9"></rect></svg></div>
+        <div class="row" style="padding-left: 32px;"><svg class="chev"><use href="#i-chev-right"></use></svg><span>PlanningApplications</span><span class="kind">FeatureServer</span><svg class="loc" viewBox="0 0 22 15"><rect x=".5" y=".5" width="21" height="14" fill="none" stroke="currentColor"></rect><rect class="ext" x="5" y="3" width="10" height="9"></rect></svg></div>
+        <div class="row" style="padding-left: 14px;"><svg class="chev"><use href="#i-chev-down"></use></svg><span>Property</span><svg class="loc" viewBox="0 0 22 15"><rect x=".5" y=".5" width="21" height="14" fill="none" stroke="currentColor"></rect><rect class="ext" x="3" y="2" width="15" height="11"></rect></svg></div>
+        <div class="row" style="padding-left: 32px;"><svg class="chev"><use href="#i-chev-down"></use></svg><span>LLPG</span><span class="kind">MapServer</span><svg class="loc" viewBox="0 0 22 15"><rect x=".5" y=".5" width="21" height="14" fill="none" stroke="currentColor"></rect><rect class="ext" x="3" y="2" width="15" height="11"></rect></svg></div>
+        <div class="row" style="padding-left: 52px;"><span class="id mono">0</span><span>Streets</span><svg class="loc" viewBox="0 0 22 15"><rect x=".5" y=".5" width="21" height="14" fill="none" stroke="currentColor"></rect><rect class="ext" x="3" y="2" width="15" height="11"></rect></svg></div>
+        <div class="row" style="padding-left: 52px;"><span class="id mono">1</span><span>Wards</span><svg class="loc" viewBox="0 0 22 15"><rect x=".5" y=".5" width="21" height="14" fill="none" stroke="currentColor"></rect><rect class="ext" x="2" y="1.5" width="17" height="12"></rect></svg></div>
+        <div class="row" style="padding-left: 52px;"><span class="id mono">2</span><span>Parishes</span><svg class="loc" viewBox="0 0 22 15"><rect x=".5" y=".5" width="21" height="14" fill="none" stroke="currentColor"></rect><rect class="ext" x="2" y="1.5" width="17" height="12"></rect></svg></div>
+        <div class="row sel" style="padding-left: 52px;"><span class="id mono">3</span><span>BLPU Addresses</span><svg class="loc" viewBox="0 0 22 15"><rect x=".5" y=".5" width="21" height="14" fill="none" stroke="currentColor"></rect><rect class="ext" x="4" y="3" width="13" height="9"></rect></svg></div>
+        <div class="row dim" style="padding-left: 52px;"><span class="id mono">4</span><span>Cadastral annotation</span><svg class="loc" viewBox="0 0 22 15"><rect x=".5" y=".5" width="21" height="14" fill="none" stroke="currentColor"></rect><rect class="ext" x="4" y="3" width="13" height="9"></rect></svg></div>
+        <div class="row dim" style="padding-left: 52px;"><span class="id mono">5</span><span>Aerial 2024</span><svg class="loc" viewBox="0 0 22 15"><rect x=".5" y=".5" width="21" height="14" fill="none" stroke="currentColor"></rect><rect class="ext" x="1" y="1" width="20" height="13"></rect></svg></div>
+        <div class="row" style="padding-left: 52px;"><span class="id mono">6</span><span>Cross references</span><svg class="loc" viewBox="0 0 22 15"><rect x=".5" y=".5" width="21" height="14" fill="none" stroke="currentColor" stroke-dasharray="2 2"></rect></svg></div>
+        <div class="row" style="padding-left: 14px;"><svg class="chev"><use href="#i-chev-right"></use></svg><span>Environment</span><svg class="loc" viewBox="0 0 22 15"><rect x=".5" y=".5" width="21" height="14" fill="none" stroke="currentColor"></rect><rect class="ext" x="1" y="4" width="20" height="10"></rect></svg></div>
+        <div class="row" style="padding-left: 14px;"><svg class="chev"><use href="#i-chev-right"></use></svg><span>Highways</span><svg class="loc" viewBox="0 0 22 15"><rect x=".5" y=".5" width="21" height="14" fill="none" stroke="currentColor"></rect><rect class="ext" x="2" y="2" width="18" height="11"></rect></svg></div>
+      </div>
+      <div class="detail">
+        <div class="h1"><div class="name">BLPU Addresses</div><div class="sub">Layer 3 in LLPG (MapServer), Property folder. Cached 14 minutes ago, <a href="#">refresh</a>.</div></div>
+        <div class="tabs"><span class="on">Overview</span><span>Fields</span><span>Query</span><span>Download</span><span>Map</span><span>Raw</span></div>
+        <div class="extract">
+          <div class="say"><strong>Extractable.</strong> PBF through the FeatureServer twin, offset paging at 2,000 records per request. 184,212 features in 93 requests.</div>
+          <div class="actions"><span class="btn">Download as GeoParquet</span><a href="#">Change format or spatial reference</a><a href="#">Preview a sample on the map</a></div>
+        </div>
+        <div class="dl">
+          <span class="k">Geometry</span><span>Point, British National Grid (27700)</span>
+          <span class="k">Object ID field</span><span class="mono">OBJECTID</span>
+          <span class="k">Extent, native</span><span class="mono">320412 88231 to 345880 109774</span>
+          <span class="k">Global ID field</span><span class="mono">GlobalID</span>
+        </div>
+      </div>
+    </div>
+    <div class="drawer">
+      <div class="dhead"><span class="lab">Transfers</span><span class="sum">3 runs, 1 running, 4 requests in flight to gis.ashcombe.gov.uk</span><svg class="close"><use href="#i-chev-down"></use></svg></div>
+      <div class="runs">
+        <div class="run">
+          <div class="who">
+            <div class="nm"><span class="dot on"></span><span>Applications</span><span class="chip">PBF</span><span class="chip">Offset paging</span></div>
+            <div class="pth mono">Planning / PlanningApplications / 0, where 1=1, WGS 84, GeoParquet</div>
+            <div class="st">138 of 207 requests, 271,940 of 412,880 features, 61 MB so far, 4.2k features/s, 1:40 left</div>
+          </div>
+          <div class="chunks"><sc-for list="{{chunks}}" as="c" hint-placeholder-count="207"><div class="chunk {{c.cls}}"></div></sc-for></div>
+          <div class="acts"><a href="#">Pause</a><a href="#">Cancel</a></div>
+        </div>
+        <div class="run">
+          <div class="who">
+            <div class="nm"><span class="dot done"></span><span>Adopted roads</span><span class="chip done">Done</span></div>
+            <div class="pth mono">~/Documents/ArcGIS Explorer/Ashcombe/AdoptedRoads/AdoptedRoads.parquet</div>
+            <div class="st">38,102 features, 9.4 MB, 0 invalid geometries, finished 12 minutes ago in 0:48</div>
+          </div>
+          <div class="bar done"><div style="width: 100%;"></div></div>
+          <div class="acts"><a href="#">Show in Finder</a><a href="#">Re-export</a><a href="#">Map</a></div>
+        </div>
+        <div class="run">
+          <div class="who">
+            <div class="nm"><span class="dot warn"></span><span>Flood zones 2</span><span class="chip warn">Paused</span></div>
+            <div class="pth mono">Environment / FloodZones / 2, where 1=1, WGS 84, GeoParquet</div>
+            <div class="st">Token expired (498) after 41 of 132 requests. Sign in to resume from request 42.</div>
+          </div>
+          <div class="bar warn"><div style="width: 31%;"></div></div>
+          <div class="acts"><span class="btn small">Sign in and resume</span><a href="#">Cancel</a></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script data-dc-script data-props='{"dark":{"editor":"boolean","default":false,"section":"Appearance"},"$preview":{"width":1180,"height":760}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const dark = this.props.dark ?? false;
+    const chunks = [];
+    for (let i = 0; i < 207; i++) {
+      let cls = 'pending';
+      if (i < 138) cls = 'done';
+      else if (i < 142) cls = 'live';
+      if (i === 97) cls = 'retry';
+      chunks.push({ cls });
+    }
+    return { theme: dark ? 'night' : 'day', chunks };
+  }
+}
+</script>
+</body>
+</html>

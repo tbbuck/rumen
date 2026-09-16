@@ -448,8 +448,16 @@ loaded only for staging, export, and map preview.
     The OID-list strategy caps the ID fetch (default 5M OIDs); beyond that the
     download pauses and asks the user to supply a partitioning `where` template
     via the manual strategy. Never seen in practice; kept simple deliberately.
+15. **Design direction: the "Sheet" language on the "Directory" layout** —
+    accepted 2026-09-16. The app has its own token set (Cabin + Fira Code, sheet
+    paper with a magenta accent), not DuckLake Explorer's Stratum; the parsed URL
+    is the window's spine, the layer page is a document that leads with the
+    extractability sentence, every tree node carries an extent locator, the map is
+    a tab drawn as a survey sheet, and transfers live in a bottom strip that opens
+    into a drawer. See [UI-SPEC.md](./UI-SPEC.md), [DESIGN-TOKENS.md](./DESIGN-TOKENS.md)
+    and the frames under `design/`.
 
 ## 10. Open questions
-1. **Design direction**: DuckLake Explorer has a UI-SPEC and design tokens
-   ("Stratum"). Reuse that system for family resemblance, or give this app its own?
-   Being decided in a separate thread; a `UI-SPEC.md` follows.
+1. ~~**Design direction**: reuse DuckLake Explorer's Stratum system or give this app
+   its own?~~ Resolved 2026-09-16 as decision 15: its own, specified in
+   [UI-SPEC.md](./UI-SPEC.md) and [DESIGN-TOKENS.md](./DESIGN-TOKENS.md).

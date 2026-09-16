@@ -92,15 +92,7 @@ private struct TreeRow: View {
             if isLoading {
                 ProgressView().controlSize(.mini).frame(width: 10, height: 10)
             } else if node.isExpandable {
-                Button {
-                    Task { await model.toggleExpanded(node) }
-                } label: {
-                    Image(systemName: model.isExpanded(node.id) ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(Palette.muted2)
-                        .frame(width: 10, height: 10)
-                }
-                .buttonStyle(.plain)
+                ChevronButton(expanded: model.isExpanded(node.id)) { Task { await model.toggleExpanded(node) } }
             } else if let layerID = node.layerID {
                 Text(String(layerID))
                     .font(.sheetMono(10.5))
@@ -125,6 +117,7 @@ private struct TreeRow: View {
                     .frame(width: 22, height: 15)
             } else {
                 ExtentLocator(extent: node.extent, frame: frame, style: locatorStyle)
+                    .help(locatorHelp)
             }
         }
         .padding(.leading, row.indent)
@@ -137,8 +130,18 @@ private struct TreeRow: View {
         }
         .contentShape(Rectangle())
         .hoverTracking($hovered)
+        .onTapGesture(count: 2) { if node.isExpandable { Task { await model.toggleExpanded(node) } } }
         .onTapGesture { Task { await model.select(node.id) } }
         .help(model.nodeErrors[node.id] ?? "")
+    }
+
+    private var locatorHelp: String {
+        switch node.kind {
+        case .table: return "A table: no geometry, so no extent."
+        default:
+            let what = isDimmed ? "Not extractable; its extent is outlined." : "Extent locator: the frame is this server's whole coverage, the box is where this \(node.kind == .folder ? "folder" : "node") sits within it."
+            return what
+        }
     }
 
     private var locatorStyle: ExtentLocator.Style {
@@ -176,5 +179,29 @@ private struct TreeFilterField: View {
         .background(Palette.bg, in: RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).stroke(focused ? Palette.accent : Palette.line2, lineWidth: 1))
         .padding(.horizontal, 16).padding(.bottom, 8)
+    }
+}
+
+/// The disclosure chevron with a full-height square hit target (UI feedback: clicking anywhere
+/// around the chevron toggles).
+private struct ChevronButton: View {
+    let expanded: Bool
+    let action: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(hovered ? Palette.ink : Palette.muted2)
+                .frame(width: 10, height: 10)
+                .frame(width: 22, height: 27)
+                .background(hovered ? Palette.line : .clear, in: RoundedRectangle(cornerRadius: 4))
+                .padding(.horizontal, -6)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .hoverTracking($hovered)
+        .help(expanded ? "Collapse" : "Expand")
     }
 }

@@ -17,12 +17,14 @@ struct MapContent: Equatable {
 struct GeoMapView: NSViewRepresentable {
     let content: MapContent
     let onViewport: (MapViewport) -> Void
+    var onFeature: ([String: String]?) -> Void = { _ in }
 
-    func makeCoordinator() -> Coordinator { Coordinator(onViewport: onViewport) }
+    func makeCoordinator() -> Coordinator { Coordinator(onViewport: onViewport, onFeature: onFeature) }
 
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.userContentController.add(context.coordinator, name: "viewport")
+        configuration.userContentController.add(context.coordinator, name: "feature")
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
         webView.setValue(false, forKey: "drawsBackground")
@@ -44,6 +46,7 @@ struct GeoMapView: NSViewRepresentable {
 
     static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "viewport")
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "feature")
     }
 
     static func styleName(for scheme: ColorScheme) -> String { scheme == .dark ? "dataviz-dark" : "dataviz" }
@@ -65,11 +68,15 @@ struct GeoMapView: NSViewRepresentable {
         weak var webView: WKWebView?
         var style = "dataviz"
         private let onViewport: (MapViewport) -> Void
+        private let onFeature: ([String: String]?) -> Void
         private var loaded = false
         private var pending: MapContent?
         private var applied = MapContent()
 
-        init(onViewport: @escaping (MapViewport) -> Void) { self.onViewport = onViewport }
+        init(onViewport: @escaping (MapViewport) -> Void, onFeature: @escaping ([String: String]?) -> Void) {
+            self.onViewport = onViewport
+            self.onFeature = onFeature
+        }
 
         func reload(_ html: String) {
             loaded = false
@@ -104,6 +111,16 @@ struct GeoMapView: NSViewRepresentable {
         }
 
         func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+            if message.name == "feature" {
+                if let dict = message.body as? [String: Any] {
+                    var properties = [String: String]()
+                    for (key, value) in dict { properties[key] = value is NSNull ? "NULL" : "\(value)" }
+                    onFeature(properties)
+                } else {
+                    onFeature(nil)
+                }
+                return
+            }
             guard message.name == "viewport", let dict = message.body as? [String: Any],
                   let west = dict["west"] as? Double, let south = dict["south"] as? Double,
                   let east = dict["east"] as? Double, let north = dict["north"] as? Double,
@@ -153,7 +170,24 @@ struct GeoMapView: NSViewRepresentable {
       const r = c.getBoundingClientRect();
       window.webkit.messageHandlers.viewport.postMessage({ west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth(), width: r.width, height: r.height, zoom: map.getZoom() });
     }
-    map.on('load', () => { addLayers(); post(); });
+    const HIT = ['f-fill', 'f-line', 'f-pt'];
+    map.on('load', () => {
+      addLayers(); post();
+      for (const id of HIT) {
+        map.on('mouseenter', id, () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', id, () => { map.getCanvas().style.cursor = ''; });
+      }
+      map.on('click', e => {
+        const hits = map.queryRenderedFeatures(e.point, { layers: HIT });
+        if (hits.length) {
+          const p = Object.assign({}, hits[0].properties);
+          p.__geometry = hits[0].geometry.type;
+          window.webkit.messageHandlers.feature.postMessage(p);
+        } else {
+          window.webkit.messageHandlers.feature.postMessage(null);
+        }
+      });
+    });
     map.on('moveend', post);
     map.on('resize', post);
     function whenReady(fn) { if (map.isStyleLoaded() && map.getSource('features')) fn(); else map.once('load', fn); }

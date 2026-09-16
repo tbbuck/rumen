@@ -729,3 +729,15 @@ extension AppModel {
         }
     }
 }
+
+extension AppModel {
+    /// Removes every run that is not running (records and any staging file); output files stay.
+    func clearFinishedDownloads() async {
+        guard let database else { return }
+        for run in runs where run.status != .running {
+            if let staging = run.record.stagingPath { try? FileManager.default.removeItem(atPath: staging) }
+            try? await database.deleteDownload(id: run.id)
+        }
+        await reloadRuns()
+    }
+}

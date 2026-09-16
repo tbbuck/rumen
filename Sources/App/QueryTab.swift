@@ -16,7 +16,7 @@ struct QueryTab: View {
                     Text(nativeLabel).tag(QuerySession.SpatialReferenceChoice.native)
                     Text("WGS 84").tag(QuerySession.SpatialReferenceChoice.wgs84)
                 }
-                .pickerStyle(.segmented).labelsHidden().fixedSize()
+                .pickerStyle(.segmented).labelsHidden().fixedSize().tint(Palette.accent)
                 OrderByPicker(session: session)
                 Toggle("Geometry", isOn: $session.returnGeometry)
                     .toggleStyle(.checkbox).font(.sheetUI(12.5))
@@ -71,7 +71,7 @@ private struct OutFieldsPicker: View {
                 Button(isOn(field.name) ? "✓ \(field.name)" : field.name) { toggle(field.name) }
             }
         } label: {
-            Text(label).font(.sheetUI(12.5))
+            Text(label).font(.sheetUI(12.5)).hoverLabel()
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
@@ -106,7 +106,7 @@ private struct OrderByPicker: View {
             Button(session.orderAscending ? "✓ Ascending" : "Ascending") { session.orderAscending = true }
             Button(session.orderAscending ? "Descending" : "✓ Descending") { session.orderAscending = false }
         } label: {
-            Text(label).font(.sheetUI(12.5))
+            Text(label).font(.sheetUI(12.5)).hoverLabel()
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
@@ -136,7 +136,7 @@ private struct QueryActions: View {
                     Button(field.name) { Task { await session.distinct(field: field.name) } }
                 }
             } label: {
-                Text("Distinct").font(.sheetUI(13)).foregroundStyle(session.canDistinct == nil ? Palette.accent : Palette.muted2)
+                Text("Distinct").font(.sheetUI(13)).foregroundStyle(session.canDistinct == nil ? Palette.accent : Palette.muted2).hoverLabel()
             }
             .menuStyle(.borderlessButton).fixedSize()
             .disabled(session.canDistinct != nil).help(session.canDistinct ?? "Distinct values of one field")
@@ -206,7 +206,19 @@ private struct QueryHistoryList: View {
 
     var body: some View {
         if !session.history.isEmpty {
-            DisclosureGroup(isExpanded: $expanded) {
+            Button {
+                expanded.toggle()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.system(size: 9, weight: .medium)).foregroundStyle(Palette.muted2)
+                    Text("History, \(session.history.count.grouped) quer\(session.history.count == 1 ? "y" : "ies")")
+                        .font(.sheetUI(12.5, .semibold)).foregroundStyle(Palette.muted)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .hoverLabel()
+            if expanded {
                 VStack(spacing: 0) {
                     ForEach(session.history.prefix(12)) { record in
                         Button {
@@ -227,9 +239,6 @@ private struct QueryHistoryList: View {
                         Rectangle().fill(Palette.line).frame(height: 1)
                     }
                 }
-            } label: {
-                Text("History, \(session.history.count) quer\(session.history.count == 1 ? "y" : "ies")")
-                    .font(.sheetUI(12.5, .semibold)).foregroundStyle(Palette.muted)
             }
         }
     }

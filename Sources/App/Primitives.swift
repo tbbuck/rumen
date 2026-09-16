@@ -102,8 +102,9 @@ struct ExtentLocator: View {
 
 // MARK: - Hover
 
-/// Hover tracking with the tokens' motion rules: `.12s ease`, none under Reduce Motion, and a
-/// pointing hand for anything that acts like a link.
+/// Hover tracking with the tokens' motion rules: `.12s ease` scoped to the view, none under
+/// Reduce Motion, and a pointing hand for anything that acts like a link. The cursor is set
+/// outright rather than pushed, and reset when the view goes away, so it can never stick.
 struct HoverTracking: ViewModifier {
     @Binding var isHovered: Bool
     var hand = false
@@ -112,9 +113,16 @@ struct HoverTracking: ViewModifier {
     func body(content: Content) -> some View {
         content
             .onHover { hovering in
-                if reduceMotion { isHovered = hovering } else { withAnimation(.easeInOut(duration: 0.12)) { isHovered = hovering } }
-                if hand { if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() } }
+                isHovered = hovering
+                if hand { (hovering ? NSCursor.pointingHand : NSCursor.arrow).set() }
             }
+            .onDisappear {
+                if isHovered {
+                    isHovered = false
+                    if hand { NSCursor.arrow.set() }
+                }
+            }
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.12), value: isHovered)
     }
 }
 
@@ -124,7 +132,31 @@ extension View {
     }
 }
 
-/// Primary: 30px, radius 6, accent fill; brightens on hover, dims when pressed. One per view.
+/// A subtle pill behind hovered menu labels and links, drawn outside the layout so nothing shifts.
+struct HoverPill: ViewModifier {
+    let on: Bool
+    func body(content: Content) -> some View {
+        content.background(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(on ? Palette.line.opacity(0.7) : .clear)
+                .padding(.horizontal, -6).padding(.vertical, -3))
+    }
+}
+
+/// Menu labels and other clickable text: pill on hover, pointing hand.
+struct HoverLabel: ViewModifier {
+    @State private var hovered = false
+    func body(content: Content) -> some View {
+        content.modifier(HoverPill(on: hovered)).hoverTracking($hovered, hand: true)
+    }
+}
+
+extension View {
+    func hoverLabel() -> some View { modifier(HoverLabel()) }
+}
+
+/// Primary: 30px, radius 6, accent fill; brightens and lifts on hover, dims when pressed. One
+/// per view.
 struct PrimaryButtonStyle: ButtonStyle {
     var small = false
     func makeBody(configuration: Configuration) -> some View {
@@ -144,14 +176,16 @@ struct PrimaryButtonStyle: ButtonStyle {
                 .padding(.horizontal, small ? 10 : 12)
                 .frame(height: small ? 26 : 30)
                 .background(Palette.accent, in: RoundedRectangle(cornerRadius: 6))
-                .overlay(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(hovered && !configuration.isPressed ? 0.12 : 0)))
+                .overlay(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(hovered && !configuration.isPressed && isEnabled ? 0.18 : 0)))
+                .shadow(color: Palette.accent.opacity(hovered && isEnabled ? 0.35 : 0), radius: 6, y: 2)
                 .opacity(configuration.isPressed ? 0.85 : (isEnabled ? 1 : 0.45))
                 .hoverTracking($hovered, hand: isEnabled)
         }
     }
 }
 
-/// Secondary actions are links, not outlined buttons: accent text, underline on hover only.
+/// Secondary actions are links, not outlined buttons: accent text, underline and a soft pill
+/// on hover.
 struct LinkButtonStyle: ButtonStyle {
     var size: CGFloat = 13
     func makeBody(configuration: Configuration) -> some View {
@@ -170,6 +204,7 @@ struct LinkButtonStyle: ButtonStyle {
                 .foregroundStyle(isEnabled ? Palette.accent : Palette.muted2)
                 .underline(hovered && isEnabled)
                 .opacity(configuration.isPressed ? 0.7 : 1)
+                .modifier(HoverPill(on: hovered && isEnabled))
                 .contentShape(Rectangle())
                 .hoverTracking($hovered, hand: isEnabled)
         }

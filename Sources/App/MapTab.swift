@@ -81,9 +81,11 @@ private struct SheetMap: View {
                                  height: max(0, proxy.size.height - margins.top - margins.bottom))
             ZStack(alignment: .topLeading) {
                 Palette.bg
-                GeoMapView(content: session.content) { viewport in
+                GeoMapView(content: session.content, onViewport: { viewport in
                     session.viewportChanged(viewport)
-                }
+                }, onFeature: { properties in
+                    session.featureClicked(properties)
+                })
                 .frame(width: mapRect.width, height: mapRect.height)
                 .offset(x: mapRect.minX, y: mapRect.minY)
                 .clipped()
@@ -91,6 +93,10 @@ private struct SheetMap: View {
                     .frame(width: mapRect.width, height: mapRect.height)
                     .offset(x: mapRect.minX, y: mapRect.minY)
                     .allowsHitTesting(false)
+                if let feature = session.selectedFeature {
+                    FeatureInfoPanel(title: session.layer.name, rows: feature) { session.clearSelection() }
+                        .offset(x: mapRect.minX + 10, y: mapRect.minY + 10)
+                }
                 if let g = session.graticule {
                     ForEach(Array(g.xTicks.enumerated()), id: \.offset) { _, tick in
                         let x = mapRect.minX + tick.position
@@ -117,5 +123,51 @@ private struct TickLabel: View {
     let text: String
     var body: some View {
         Text(text).font(.sheetMono(8.5)).foregroundStyle(Palette.muted2).fixedSize()
+    }
+}
+
+/// The clicked feature's attributes: a small sheet-styled card inside the map frame.
+private struct FeatureInfoPanel: View {
+    let title: String
+    let rows: [(String, String)]
+    let close: () -> Void
+    @State private var closeHovered = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Text(title).font(.sheetUI(13, .bold)).foregroundStyle(Palette.ink).lineLimit(1)
+                Spacer(minLength: 8)
+                Button(action: close) {
+                    Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(closeHovered ? Palette.ink : Palette.muted2)
+                        .frame(width: 18, height: 18)
+                        .background(closeHovered ? Palette.line : .clear, in: RoundedRectangle(cornerRadius: 4))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .hoverTracking($closeHovered, hand: true)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 9)
+            Rectangle().fill(Palette.line).frame(height: 1)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            Text(row.0).font(.sheetUI(11.5)).foregroundStyle(Palette.muted).frame(width: 110, alignment: .leading).lineLimit(1)
+                            Text(row.1).font(.sheetMono(11.5)).foregroundStyle(row.1 == "NULL" ? Palette.muted2 : Palette.ink)
+                                .lineLimit(2).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding(.horizontal, 12).padding(.vertical, 4)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            .frame(maxHeight: 260)
+        }
+        .frame(width: 300)
+        .background(Palette.panel, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.line2, lineWidth: 1))
+        .shadow(color: .black.opacity(0.35), radius: 18, y: 10)
     }
 }

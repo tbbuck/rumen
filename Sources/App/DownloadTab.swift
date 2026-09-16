@@ -26,14 +26,14 @@ struct DownloadTab: View {
                 ForEach(ExportFormat.allCases, id: \.self) { format in Button(format.label) {} }
                 Button("GeoPackage, GeoJSON, FlatGeobuf, CSV arrive with M7") {}.disabled(true)
             } label: {
-                Text("Format: GeoParquet").font(.sheetUI(12.5))
+                Text("Format: GeoParquet").font(.sheetUI(12.5)).hoverLabel()
             }
             .menuStyle(.borderlessButton).fixedSize()
             Picker("", selection: $wgs84) {
-                Text(layer.effectiveWkid.map { "Native (\($0))" } ?? "Native").tag(false)
+                Text(verbatim: layer.effectiveWkid.map { "Native (\($0))" } ?? "Native").tag(false)
                 Text("WGS 84").tag(true)
             }
-            .pickerStyle(.segmented).labelsHidden().fixedSize()
+            .pickerStyle(.segmented).labelsHidden().fixedSize().tint(Palette.accent)
             Toggle("Domain label columns", isOn: $domainLabels).toggleStyle(.checkbox).font(.sheetUI(12.5))
                 .help("Adds a <field>_label column beside each coded-value field")
             Spacer()

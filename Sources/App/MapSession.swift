@@ -3,7 +3,8 @@ import Observation
 import ArcGISKit
 
 /// The Map tab's state for one layer: what is drawn (a server sample, a stored download, or
-/// the query preview), the extent, and the graticule for the current viewport.
+/// the query preview), the extent, the graticule for the current viewport, and the feature
+/// the user clicked.
 @MainActor @Observable
 final class MapSession {
     enum Source: Hashable {
@@ -29,6 +30,8 @@ final class MapSession {
     private(set) var graticule: Graticule?
     private(set) var viewport: MapViewport?
     var storedWhere = ""
+    /// The clicked feature's attributes, in field order, for the info panel.
+    private(set) var selectedFeature: [(String, String)]?
     private var graticuleTask: Task<Void, Never>?
 
     init(layer: LayerRecord, service: ServiceRecord, client: ArcGISClient, database: AppDatabase,
@@ -67,15 +70,16 @@ final class MapSession {
     func load() async {
         isLoading = true
         error = nil
+        selectedFeature = nil
         defer { isLoading = false }
         do {
             switch source {
             case .sample:
-                var options = QueryOptions(outFields: [layer.objectIdField ?? "OBJECTID"], returnGeometry: true, outWkid: 4326, count: sampleSize)
+                var options = QueryOptions(outFields: nil, returnGeometry: true, outWkid: 4326, count: sampleSize)
                 options.geometryPrecision = 6
                 let set = try await client.features(connection, layerURL: layerURL, options: options).value
                 let page = FeaturePage(json: set)
-                let features = page.features.compactMap { $0.geometry.map { GeoJSON.feature($0) } }
+                let features = Self.features(page)
                 content.featuresGeoJSON = GeoJSON.featureCollection(features)
                 let extent = layer.extentWGS84.flatMap { $0.isWorldSized ? nil : $0 }
                 content.fit = extent ?? bounds(of: page) ?? layer.extentWGS84
@@ -101,7 +105,7 @@ final class MapSession {
                     throw MapError.previewNotGeographic
                 }
                 let page = FeaturePage(json: set)
-                let features = page.features.compactMap { $0.geometry.map { GeoJSON.feature($0) } }
+                let features = Self.features(page)
                 content.featuresGeoJSON = GeoJSON.featureCollection(features)
                 content.fit = bounds(of: page) ?? layer.extentWGS84
                 content.fitToken += 1
@@ -111,6 +115,45 @@ final class MapSession {
             self.error = String(describing: error)
         }
     }
+
+    /// GeoJSON features with every attribute as a display string (dates ISO, NULLs named), so
+    /// a click can show them without another request. Keys carry their position so the panel
+    /// keeps field order.
+    static func features(_ page: FeaturePage) -> [String] {
+        page.features.compactMap { feature in
+            guard let geometry = feature.geometry else { return nil }
+            var properties = [String: String]()
+            for (index, (field, value)) in zip(page.fields, feature.attributes).enumerated() {
+                properties[String(format: "%03d|%@", index, field.name)] = QueryGrid.cell(json(value), type: field.type)
+            }
+            return GeoJSON.feature(geometry, properties: properties)
+        }
+    }
+
+    private static func json(_ v: AttributeValue) -> JSONValue? {
+        switch v {
+        case .null: return nil
+        case .int(let i): return .number(Double(i))
+        case .double(let d): return .number(d)
+        case .string(let s): return .string(s)
+        case .bool(let b): return .bool(b)
+        }
+    }
+
+    // MARK: - Selection
+
+    /// A clicked feature (from the web page) or a click on empty map (nil).
+    func featureClicked(_ properties: [String: String]?) {
+        guard let properties else { selectedFeature = nil; return }
+        let ordered = properties.filter { !$0.key.hasPrefix("__") }.sorted { $0.key < $1.key }
+            .map { key, value -> (String, String) in
+                let name = key.split(separator: "|", maxSplits: 1).last.map(String.init) ?? key
+                return (name, value)
+            }
+        selectedFeature = ordered.isEmpty ? [("geometry", properties["__geometry"] ?? "feature")] : ordered
+    }
+
+    func clearSelection() { selectedFeature = nil }
 
     private func bounds(of page: FeaturePage) -> BoundingBox? {
         var box: BoundingBox?

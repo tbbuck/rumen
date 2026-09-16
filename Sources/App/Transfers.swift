@@ -128,6 +128,10 @@ struct TransfersDrawer: View {
                 Text("Transfers").font(.sheetUI(12.5, .semibold)).foregroundStyle(Palette.muted)
                 Caption(summary, size: 12.5)
                 Spacer()
+                if model.runs.contains(where: { $0.status != .running }) {
+                    Button("Clear finished") { Task { await model.clearFinishedDownloads() } }.buttonStyle(LinkButtonStyle(size: 12.5))
+                        .help("Remove every run that is not running; files on disk are kept")
+                }
                 Button {
                     model.showTransfers = false
                 } label: {
@@ -197,6 +201,7 @@ private struct RunRow: View {
             }
             .frame(width: 220)
             RunActions(run: run).frame(width: 214, alignment: .leading)
+            RemoveRunButton(run: run)
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
     }
@@ -268,5 +273,29 @@ private struct RunActions: View {
                 Button("Remove") { Task { await model.removeDownload(run.id) } }.buttonStyle(LinkButtonStyle())
             }
         }
+    }
+}
+
+/// The [x] on a run row: removes it from the list (files on disk are kept). Not while running.
+private struct RemoveRunButton: View {
+    @Environment(AppModel.self) private var model
+    let run: TransferRun
+    @State private var hovered = false
+
+    var body: some View {
+        Button {
+            Task { await model.removeDownload(run.id) }
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(hovered ? Palette.ink : Palette.muted2)
+                .frame(width: 22, height: 22)
+                .background(hovered ? Palette.line : .clear, in: RoundedRectangle(cornerRadius: 5))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .hoverTracking($hovered, hand: run.status != .running)
+        .disabled(run.status == .running)
+        .help(run.status == .running ? "Pause the run before removing it" : "Remove from the list; the file on disk is kept")
     }
 }

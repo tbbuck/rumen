@@ -96,6 +96,22 @@ final class NavigationTests: XCTestCase {
         XCTAssertEqual(BoundingBox.union(of: [.world]), .world, "but stands alone when it is all there is")
         XCTAssertTrue(BoundingBox.world.isWorldSized)
         XCTAssertFalse(a.isWorldSized)
+        // Seen in the wild: an empty layer at 0,0,0,0, a near-world default that dodges the
+        // world check, and a British National Grid default spanning half the globe.
+        let empty = BoundingBox(minX: 0, minY: 0, maxX: 0, maxY: 0)
+        let nearWorld = BoundingBox(minX: -180, minY: -38, maxX: 180, maxY: 73)
+        let bngDefault = BoundingBox(minX: -92, minY: 40, maxX: 88, maxY: 86)
+        let uk = BoundingBox(minX: -7, minY: 49.8, maxX: 2, maxY: 55.7)
+        XCTAssertTrue(empty.isDegenerate)
+        XCTAssertTrue(nearWorld.isDefaultLike)
+        XCTAssertTrue(bngDefault.isDefaultLike)
+        XCTAssertFalse(uk.isDefaultLike)
+        XCTAssertEqual(BoundingBox.union(of: [uk, empty, nearWorld, bngDefault]), uk, "only data shapes the frame")
+        XCTAssertEqual(BoundingBox.union(of: [empty, bngDefault]), bngDefault, "a default stands in when it is all there is")
+        XCTAssertNil(BoundingBox.union(of: [empty]), "an empty box never frames anything")
+        let speck = BoundingBox(minX: 1.4e-06, minY: 0.00047, maxX: 1.56e-05, maxY: 0.000476)   // degrees read as metres
+        XCTAssertTrue(speck.isDefaultLike)
+        XCTAssertEqual(BoundingBox.union(of: [uk, speck]), uk)
         XCTAssertEqual(BoundingBox(json: a.json), a)
         XCTAssertNil(BoundingBox(json: "nope"))
         XCTAssertEqual(BoundingBox(minX: -200, minY: -95, maxX: 200, maxY: 95).clampedToWorld, .world)

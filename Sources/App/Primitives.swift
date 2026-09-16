@@ -78,7 +78,7 @@ struct ExtentLocator: View {
             let outer = CGRect(x: 0.5, y: 0.5, width: size.width - 1, height: size.height - 1)
             let frameStroke = style == .table ? StrokeStyle(lineWidth: 1, dash: [2, 2]) : StrokeStyle(lineWidth: 1)
             context.stroke(Path(outer), with: .color(Palette.line2), style: frameStroke)
-            guard style != .table, let extent, let frame, frame.width > 0, frame.height > 0 else { return }
+            guard style != .table, let extent, !extent.isDegenerate, let frame, !frame.isDegenerate else { return }
             let sx = (size.width - 2) / frame.width
             let sy = (size.height - 2) / frame.height
             var rect = CGRect(x: 1 + (extent.minX - frame.minX) * sx,

@@ -94,7 +94,14 @@ extension AppDatabase {
         guard let spatial else { throw SpatialError.notLoaded }
         guard let e = extent, let xmin = e.xmin, let ymin = e.ymin, let xmax = e.xmax, let ymax = e.ymax,
               let wkid = wkid ?? e.spatialReference?.effectiveWkid else { return nil }
-        if wkid == 4326 {
+        // Seen on ArcGIS Online: an extent in degrees tagged Web Mercator. Metre coordinates that
+        // all fit inside lon/lat range would be a few hundred metres around Null Island, which no
+        // real layer is, so such a box is read as degrees. Only for the Mercator family: an
+        // unknown CRS must still come back as unknown.
+        let webMercator: Set<Int> = [3857, 102100, 102113, 900913, 3785]
+        let looksLikeDegrees = webMercator.contains(wkid)
+            && abs(xmin) <= 180 && abs(xmax) <= 180 && abs(ymin) <= 90 && abs(ymax) <= 90
+        if wkid == 4326 || looksLikeDegrees {
             return BoundingBox(minX: xmin, minY: ymin, maxX: xmax, maxY: ymax).clampedToWorld
         }
         let sql = """

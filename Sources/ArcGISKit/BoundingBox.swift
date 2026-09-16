@@ -24,16 +24,34 @@ public struct BoundingBox: Sendable, Equatable, Codable {
     /// True when the box covers most of the globe — a sign the extent is a default, not data.
     public var isWorldSized: Bool { width >= 300 && height >= 150 }
 
+    /// No area (an empty layer reports 0,0,0,0) or not a number: nothing to draw or frame.
+    public var isDegenerate: Bool {
+        !(minX.isFinite && minY.isFinite && maxX.isFinite && maxY.isFinite) || width <= 0 || height <= 0
+    }
+
+    /// Looks like a server default rather than data: degenerate, world-sized, or spanning
+    /// more of the globe than a single dataset plausibly does (150° of longitude, 100° of
+    /// latitude). Such boxes never shape a frame; they still draw, clipped, when asked.
+    public var isDefaultLike: Bool {
+        isDegenerate || isWorldSized || width >= 150 || height >= 100 || huddlesAtNullIsland
+    }
+
+    /// Within a degree of 0,0: what a mislabelled or empty extent reprojects to, not data.
+    public var huddlesAtNullIsland: Bool {
+        abs(minX) < 1 && abs(maxX) < 1 && abs(minY) < 1 && abs(maxY) < 1
+    }
+
     public func union(_ other: BoundingBox) -> BoundingBox {
         BoundingBox(minX: min(minX, other.minX), minY: min(minY, other.minY),
                     maxX: max(maxX, other.maxX), maxY: max(maxY, other.maxY))
     }
 
-    /// The union of `boxes`, ignoring world-sized ones (a server default, not data) unless
-    /// nothing else is there.
+    /// The union of `boxes`, ignoring default-looking ones (see `isDefaultLike`) unless nothing
+    /// else is there, and degenerate ones always.
     public static func union(of boxes: [BoundingBox]) -> BoundingBox? {
-        let real = boxes.filter { !$0.isWorldSized }
-        let boxes = real.isEmpty ? boxes : real
+        let usable = boxes.filter { !$0.isDegenerate }
+        let real = usable.filter { !$0.isDefaultLike }
+        let boxes = real.isEmpty ? usable : real
         guard var result = boxes.first else { return nil }
         for box in boxes.dropFirst() { result = result.union(box) }
         return result

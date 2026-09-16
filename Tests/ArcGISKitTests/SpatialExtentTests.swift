@@ -50,6 +50,20 @@ final class SpatialExtentTests: XCTestCase {
         XCTAssertEqual(box.minY, 51.50, accuracy: 0.02)
     }
 
+    func testDegreesTaggedAsMetresAreReadAsDegrees() async throws {
+        try await db.loadSpatial()
+        // ArcGIS Online quirk seen on the ONS server: lon/lat values under a 3857 tag.
+        let e = try extent(#"{"xmin":0.155934,"ymin":52.362653,"xmax":1.739635,"ymax":52.974449,"spatialReference":{"wkid":3857}}"#)
+        let maybeBox = try await db.wgs84Extent(of: e, wkid: 3857)
+        let box = try XCTUnwrap(maybeBox)
+        XCTAssertEqual(box.minX, 0.155934, accuracy: 1e-6)
+        XCTAssertEqual(box.maxY, 52.974449, accuracy: 1e-6)
+        let realMercator = try extent(#"{"xmin":-13000,"ymin":6700000,"xmax":-12000,"ymax":6710000,"spatialReference":{"wkid":3857}}"#)
+        let maybeProjected = try await db.wgs84Extent(of: realMercator, wkid: 3857)
+        let projected = try XCTUnwrap(maybeProjected)
+        XCTAssertEqual(projected.minX, -0.1168, accuracy: 0.001, "genuine metres still reproject")
+    }
+
     func testGeographicExtentIsCopiedAndClamped() async throws {
         try await db.loadSpatial()
         let e = try extent(#"{"xmin":-179.62,"ymin":17.88,"xmax":-65.24,"ymax":71.41,"spatialReference":{"wkid":4269,"latestWkid":4269}}"#)

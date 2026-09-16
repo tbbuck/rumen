@@ -47,7 +47,7 @@ final class MapSession {
         self.querySet = querySet
         self.queryWkid = queryWkid
         content.extent = layer.extentWGS84
-        content.fit = layer.extentWGS84.flatMap { $0.isWorldSized ? nil : $0 }
+        content.fit = layer.extentWGS84.flatMap { $0.isDefaultLike ? nil : $0 }
     }
 
     var layerURL: URL { service.url.appendingPathComponent(String(layer.layerID)) }
@@ -86,7 +86,7 @@ final class MapSession {
                 let page = FeaturePage(json: set)
                 let features = Self.features(page)
                 content.featuresGeoJSON = GeoJSON.featureCollection(features)
-                let extent = layer.extentWGS84.flatMap { $0.isWorldSized ? nil : $0 }
+                let extent = layer.extentWGS84.flatMap { $0.isDefaultLike ? nil : $0 }
                 content.fit = extent ?? bounds(of: page) ?? layer.extentWGS84
                 content.fitToken += 1
                 let total = layer.featureCount.map { $0.grouped } ?? "an unknown number of"

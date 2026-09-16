@@ -16,6 +16,7 @@ final class LiveCrawlTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: scratch) }
         let db = try AppDatabase(path: scratch.appendingPathComponent("explorer.duckdb").path)
         try await db.migrate()
+        try await db.loadSpatial()
         let client = ArcGISClient()
         let crawler = Crawler(client: client, database: db)
 

@@ -21,9 +21,17 @@ commit per logical unit.
   JSON, pruning, cascade forget), and the `Crawler` (open-by-URL, shallow/service/deep crawls,
   bulk `layers` with per-layer fallback). 91 tests, plus an opt-in live test that passes
   against sampleserver6.
-- **M1 remaining — waits on UI-SPEC.md:** add-server sheet with friendly name, server
-  settings (header overrides), recents with rename/forget/re-crawl, the sidebar tree with
-  filter, staleness display and Refresh at each level, navigate-to-target on paste.
+- **M1 complete.** The Sheet-on-Directory shell: hidden title bar with the path bar as the
+  spine (segments, mono tail, ⌘L edit mode that takes any pasted URL), the 288px tree with
+  server header, kind labels, staleness captions, and extent locators (WGS 84 boxes derived
+  at crawl time through the spatial extension), directory / service / layer pages, the
+  document-style layer page with Overview (verdict sentence, fact grid, fields), Fields, and
+  Raw tabs, the add-server sheet, server settings (header overrides), the recent-servers
+  popover, a `--open <url>` launch argument, and the transfers strip placeholder. Verified on
+  sampleserver6 by window captures. Found and fixed on the way: DuckDB could not replay a
+  write-ahead log holding `DEFAULT nextval(...)` DDL after a force quit, so ids are now
+  allocated in the INSERT and the app checkpoints after migrating (regression test included).
+  Not yet in the tree: a filter box (cheap, folded into M5 with column search).
 
 ---
 
@@ -47,7 +55,7 @@ commit per logical unit.
   `spatial` loads from `~/.duckdb/extensions`.
 - **Demo:** launch, quit, inspect the DB with the DuckDB CLI.
 
-## M1 — Servers & browsing
+## M1 — Servers & browsing — ✅ done 2026-09-16
 **Goal:** paste any URL, get a named server and a navigable tree.
 - **Deliverables**
   - URL normaliser resolving root / folder / service / layer / query URLs; typed

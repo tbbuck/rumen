@@ -34,8 +34,9 @@ final class AppDatabaseTests: XCTestCase {
     func testOpenCreatesDirectoryMigratesAndHasSchema() async throws {
         let db = try AppDatabase(path: dbPath)
         let report = try await db.migrate()
-        XCTAssertEqual(report.applied, [1])
-        XCTAssertEqual(report.currentVersion, 1)
+        let bundled = try AppDatabase.bundledMigrations().map(\.version)
+        XCTAssertEqual(report.applied, bundled)
+        XCTAssertEqual(report.currentVersion, bundled.last)
         XCTAssertTrue(FileManager.default.fileExists(atPath: dbPath))
 
         let expected = ["download", "download_chunk", "field", "layer", "query_history",
@@ -52,7 +53,8 @@ final class AppDatabaseTests: XCTestCase {
         }
         let reopened = try AppDatabase(path: dbPath)
         let report = try await reopened.migrate()
-        XCTAssertEqual(report, MigrationReport(applied: [], currentVersion: 1))
+        let latest = try AppDatabase.bundledMigrations().last?.version ?? 0
+        XCTAssertEqual(report, MigrationReport(applied: [], currentVersion: latest))
         let value = try await reopened.query("SELECT value FROM setting WHERE key = 'download_dir';").scalarString
         XCTAssertEqual(value, "/tmp/x")
     }
@@ -63,31 +65,31 @@ final class AppDatabaseTests: XCTestCase {
         let db = try AppDatabase(path: dbPath)
         try await db.migrate()
         try await db.query("""
-            INSERT INTO server (root_url, friendly_name, created_at)
-            VALUES ('https://example.com/arcgis/rest/services', 'Example', CAST(now() AS TIMESTAMP));
+            INSERT INTO server (id, root_url, friendly_name, created_at)
+            VALUES (nextval('seq_server'), 'https://example.com/arcgis/rest/services', 'Example', CAST(now() AS TIMESTAMP));
             """)
         let row = try await db.query("SELECT id, auth_kind, origin_override FROM server;").rows[0]
         XCTAssertEqual(row, [.int(1), .string("none"), .null])
 
         await XCTAssertThrowsErrorAsync(
             try await db.query("""
-                INSERT INTO server (root_url, friendly_name, created_at)
-                VALUES ('https://example.com/arcgis/rest/services', 'Dup', CAST(now() AS TIMESTAMP));
+                INSERT INTO server (id, root_url, friendly_name, created_at)
+                VALUES (nextval('seq_server'), 'https://example.com/arcgis/rest/services', 'Dup', CAST(now() AS TIMESTAMP));
                 """)) { error in
             XCTAssertTrue(String(describing: error).lowercased().contains("constraint"), String(describing: error))
         }
 
         try await db.query("""
-            INSERT INTO service (server_id, name, type, url)
-            VALUES (1, 'Roads', 'FeatureServer', 'https://example.com/arcgis/rest/services/Roads/FeatureServer');
+            INSERT INTO service (id, server_id, name, type, url)
+            VALUES (nextval('seq_service'), 1, 'Roads', 'FeatureServer', 'https://example.com/arcgis/rest/services/Roads/FeatureServer');
             """)
         try await db.query("""
-            INSERT INTO layer (service_id, layer_id, name) VALUES (1, 0, 'Centrelines');
+            INSERT INTO layer (id, service_id, layer_id, name) VALUES (nextval('seq_layer'), 1, 0, 'Centrelines');
             """)
         try await db.query("""
-            INSERT INTO field (layer_id, position, name, esri_type, duck_type)
-            VALUES (1, 0, 'OBJECTID', 'esriFieldTypeOID', 'BIGINT'),
-                   (1, 1, 'UPRN', 'esriFieldTypeString', 'VARCHAR');
+            INSERT INTO field (id, layer_id, position, name, esri_type, duck_type)
+            VALUES (nextval('seq_field'), 1, 0, 'OBJECTID', 'esriFieldTypeOID', 'BIGINT'),
+                   (nextval('seq_field'), 1, 1, 'UPRN', 'esriFieldTypeString', 'VARCHAR');
             """)
         let hits = try await db.query("SELECT name FROM field WHERE name ILIKE '%uprn%';")
         XCTAssertEqual(hits.rows, [[.string("UPRN")]])

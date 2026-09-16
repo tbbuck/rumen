@@ -1,0 +1,162 @@
+import SwiftUI
+import ArcGISKit
+
+/// Pasted URL → resolved node preview + friendly name → Add.
+struct AddServerSheet: View {
+    @Environment(AppModel.self) private var model
+    let pending: PendingAdd
+    @State private var friendlyName = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Add a server").font(.sheetDisplay(18))
+            Text(preview).font(.sheetUI(13)).foregroundStyle(Palette.ink).frame(maxWidth: 440, alignment: .leading)
+            Text(pending.location.rootURL.absoluteString).font(.sheetMono(12)).foregroundStyle(Palette.muted)
+            VStack(alignment: .leading, spacing: 6) {
+                Caption("Friendly name")
+                TextField(pending.location.rootURL.host ?? "Name", text: $friendlyName)
+                    .textFieldStyle(SheetFieldStyle())
+                    .onSubmit(add)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { model.pendingAdd = nil }.buttonStyle(LinkButtonStyle())
+                Button("Add", action: add).buttonStyle(PrimaryButtonStyle())
+            }
+        }
+        .padding(22)
+        .frame(width: 480)
+        .background(Palette.panel)
+        .onAppear { friendlyName = pending.location.rootURL.host ?? "" }
+    }
+
+    private func add() {
+        Task { await model.addServer(pending, friendlyName: friendlyName) }
+    }
+
+    private var preview: String {
+        let host = pending.location.rootURL.host ?? "this server"
+        let loc = pending.location
+        if let layer = loc.layerID, let service = loc.servicePath, let type = loc.serviceType {
+            return "This is layer \(layer) of \(service) (\(type.name)) on \(host)."
+        }
+        if let service = loc.servicePath, let type = loc.serviceType {
+            return "This is the \(type.name) service \(service) on \(host)."
+        }
+        if let folder = loc.folderPath {
+            return "This is the \(folder) folder on \(host)."
+        }
+        return "This is the services root of \(host)."
+    }
+}
+
+/// Friendly name, Origin and Referer overrides (defaults shown greyed), auth kind.
+struct ServerSettingsSheet: View {
+    @Environment(AppModel.self) private var model
+    let server: ServerRecord
+    @State private var name = ""
+    @State private var origin = ""
+    @State private var referer = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Server settings").font(.sheetDisplay(18))
+            Text(server.rootURL.absoluteString).font(.sheetMono(12)).foregroundStyle(Palette.muted)
+            field("Friendly name", text: $name, placeholder: server.host)
+            field("Origin header", text: $origin, placeholder: ServerHeaders.resolve(rootURL: server.rootURL).origin, mono: true)
+            field("Referer header", text: $referer, placeholder: ServerHeaders.resolve(rootURL: server.rootURL).referer, mono: true)
+            Caption("Leave a header blank to use the default shown. Both are sent on every request to this server.", size: 11.5, color: Palette.muted2)
+                .frame(maxWidth: 440, alignment: .leading)
+            VStack(alignment: .leading, spacing: 6) {
+                Caption("Sign-in")
+                Caption("Public server. Token sign-in arrives with milestone M8.", size: 12.5, color: Palette.muted2)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { model.settingsServer = nil }.buttonStyle(LinkButtonStyle())
+                Button("Save") {
+                    Task {
+                        await model.saveSettings(server, name: name.isEmpty ? server.host : name, origin: origin, referer: referer)
+                        model.settingsServer = nil
+                    }
+                }
+                .buttonStyle(PrimaryButtonStyle())
+            }
+        }
+        .padding(22)
+        .frame(width: 480)
+        .background(Palette.panel)
+        .onAppear {
+            name = server.friendlyName
+            origin = server.originOverride ?? ""
+            referer = server.refererOverride ?? ""
+        }
+    }
+
+    private func field(_ label: String, text: Binding<String>, placeholder: String, mono: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Caption(label)
+            TextField(placeholder, text: text).textFieldStyle(SheetFieldStyle(mono: mono))
+        }
+    }
+}
+
+/// Known servers by last visit, with rename, re-crawl, forget; "Add a server".
+struct RecentServersPopover: View {
+    @Environment(AppModel.self) private var model
+    @State private var confirmForget: ServerRecord?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(model.servers) { server in
+                HStack(spacing: 10) {
+                    Button {
+                        model.showRecents = false
+                        Task { await model.selectServer(server.id) }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(server.friendlyName).font(.sheetUI(13, model.currentServer?.id == server.id ? .semibold : .regular))
+                                .foregroundStyle(Palette.ink)
+                            Text("\(server.host), visited \(Age.text(server.lastVisitedAt))").font(.sheetUI(11)).foregroundStyle(Palette.muted2)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    Menu {
+                        Button("Rename…") { model.showRecents = false; model.settingsServer = server }
+                        Button("Re-crawl") {
+                            model.showRecents = false
+                            Task { await model.selectServer(server.id); await model.refreshCurrent() }
+                        }
+                        Divider()
+                        Button("Forget…") { confirmForget = server }
+                    } label: {
+                        Image(systemName: "ellipsis").foregroundStyle(Palette.muted)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .frame(width: 20)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                Rectangle().fill(Palette.line).frame(height: 1)
+            }
+            Button("Add a server…") {
+                model.showRecents = false
+                model.beginURLEdit()
+            }
+            .buttonStyle(LinkButtonStyle())
+            .padding(12)
+        }
+        .frame(width: 320)
+        .background(Palette.panel)
+        .confirmationDialog("Forget \(confirmForget?.friendlyName ?? "")?", isPresented: Binding(get: { confirmForget != nil }, set: { if !$0 { confirmForget = nil } })) {
+            Button("Forget", role: .destructive) {
+                if let server = confirmForget { Task { await model.forget(server) } }
+                confirmForget = nil
+                model.showRecents = false
+            }
+        } message: {
+            Text("Cached metadata for this server is removed. Downloaded files on disk are kept.")
+        }
+    }
+}

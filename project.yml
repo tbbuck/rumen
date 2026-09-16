@@ -29,6 +29,8 @@ targets:
     platform: macOS
     sources:
       - Sources/App
+      - path: Resources/Fonts
+        buildPhase: resources
     dependencies:
       - package: ArcGISCore
         product: DuckDBKit

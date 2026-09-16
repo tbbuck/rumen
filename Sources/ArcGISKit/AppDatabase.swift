@@ -9,6 +9,7 @@ import DuckDBKit
 public actor AppDatabase {
     private nonisolated let db: DuckDB
     public let path: String
+    private var spatialLoaded = false
 
     /// `~/Library/Application Support/ArcGIS Explorer/explorer.duckdb`.
     public static func defaultURL() -> URL {
@@ -28,7 +29,10 @@ public actor AppDatabase {
     /// Applies any pending bundled migrations. Safe to call on every launch.
     @discardableResult
     public func migrate() throws -> MigrationReport {
-        try Migrator.apply(try Self.bundledMigrations(), to: db)
+        let report = try Migrator.apply(try Self.bundledMigrations(), to: db)
+        // Flush DDL to the main file: a WAL that still holds it is fragile on replay.
+        try db.run("CHECKPOINT;")
+        return report
     }
 
     /// The migrations shipped in this build's resource bundle, sorted by version.
@@ -65,4 +69,53 @@ public actor AppDatabase {
     }
 
     public nonisolated var engineVersion: String { DuckDB.libraryVersion }
+}
+
+// MARK: - Spatial
+
+public enum SpatialError: Error, CustomStringConvertible, Equatable {
+    case notLoaded
+    public var description: String { "the spatial extension is not loaded on the app database" }
+}
+
+extension AppDatabase {
+    /// Installs (if needed) and loads DuckDB's `spatial` extension on this connection. Needed
+    /// for WGS 84 extents; the download engine loads it on its own staging connections.
+    public func loadSpatial() throws {
+        try db.run("INSTALL spatial;")
+        try db.run("LOAD spatial;")
+        spatialLoaded = true
+    }
+
+    public var isSpatialLoaded: Bool { spatialLoaded }
+
+    /// Reprojects a native-SR extent to a WGS 84 box for the extent locators. Returns nil —
+    /// deliberately, not as an error — when the extent is empty or PROJ does not know the
+    /// spatial reference: the locator then draws no box, which is the honest display.
+    /// Throws if `spatial` has not been loaded.
+    public func wgs84Extent(of extent: Extent?, wkid: Int?) throws -> BoundingBox? {
+        guard spatialLoaded else { throw SpatialError.notLoaded }
+        guard let e = extent, let xmin = e.xmin, let ymin = e.ymin, let xmax = e.xmax, let ymax = e.ymax,
+              let wkid = wkid ?? e.spatialReference?.effectiveWkid else { return nil }
+        if wkid == 4326 {
+            return BoundingBox(minX: xmin, minY: ymin, maxX: xmax, maxY: ymax).clampedToWorld
+        }
+        let sql = """
+            WITH g AS (
+                SELECT ST_Transform(ST_MakeEnvelope(?, ?, ?, ?), ?, 'EPSG:4326', always_xy := true) AS geom
+            )
+            SELECT ST_XMin(geom), ST_YMin(geom), ST_XMax(geom), ST_YMax(geom) FROM g;
+            """
+        let rows: [[DuckValue]]
+        do {
+            rows = try db.run(sql, [.double(xmin), .double(ymin), .double(xmax), .double(ymax),
+                                    .string("EPSG:\(wkid)")]).rows
+        } catch {
+            return nil   // unknown CRS to PROJ — no box, by design (see doc comment)
+        }
+        guard let r = rows.first, r.count == 4, let a = r[0].doubleValue, let b = r[1].doubleValue,
+              let c = r[2].doubleValue, let d = r[3].doubleValue, a.isFinite, b.isFinite, c.isFinite, d.isFinite
+        else { return nil }
+        return BoundingBox(minX: a, minY: b, maxX: c, maxY: d).clampedToWorld
+    }
 }

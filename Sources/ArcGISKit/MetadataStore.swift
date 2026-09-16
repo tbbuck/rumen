@@ -31,8 +31,8 @@ extension AppDatabase {
     public func addServer(rootURL: URL, friendlyName: String, now: Date = Date()) throws -> ServerRecord {
         let name = friendlyName.trimmingCharacters(in: .whitespacesAndNewlines)
         let id = try query("""
-            INSERT INTO server (root_url, friendly_name, created_at, last_visited_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO server (id, root_url, friendly_name, created_at, last_visited_at)
+            VALUES (nextval('seq_server'), ?, ?, ?, ?)
             ON CONFLICT (root_url) DO UPDATE SET last_visited_at = excluded.last_visited_at
             RETURNING id;
             """, [.string(rootURL.absoluteString), .string(name.isEmpty ? (rootURL.host ?? "server") : name),
@@ -126,7 +126,7 @@ extension AppDatabase {
 
     private static let serviceColumns = """
         id, server_id, folder_path, name, type, url, capabilities, max_record_count,
-        supported_query_formats, is_tile_cache, epoch_us(fetched_at)
+        supported_query_formats, is_tile_cache, epoch_us(fetched_at), extent_wgs84_json
         """
 
     /// Records the services listed in a directory (root or folder). New rows get their URL
@@ -140,8 +140,8 @@ extension AppDatabase {
             let type = entry.serviceType
             let url = rootURL.appendingPathComponent(entry.name).appendingPathComponent(type.name)
             let id = try query("""
-                INSERT INTO service (server_id, folder_path, name, type, url)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO service (id, server_id, folder_path, name, type, url)
+                VALUES (nextval('seq_service'), ?, ?, ?, ?, ?)
                 ON CONFLICT (server_id, url) DO UPDATE SET name = excluded.name, folder_path = excluded.folder_path
                 RETURNING id;
                 """, [.int(serverID), .string(folderPath), .string(entry.name), .string(type.name),
@@ -174,13 +174,15 @@ extension AppDatabase {
     }
 
     /// Stores a fetched service definition (and its verbatim JSON).
-    public func updateService(id: Int64, info: ServiceInfo, raw: Data, fetchedAt: Date = Date()) throws {
+    public func updateService(id: Int64, info: ServiceInfo, raw: Data, extentWGS84: BoundingBox? = nil,
+                              fetchedAt: Date = Date()) throws {
         try query("""
             UPDATE service SET capabilities = ?, max_record_count = ?, supported_query_formats = ?,
-                is_tile_cache = ?, raw_json = ?, fetched_at = ?
+                is_tile_cache = ?, raw_json = ?, fetched_at = ?, extent_wgs84_json = ?
             WHERE id = ?;
             """, [.optional(info.capabilities), .optional(info.maxRecordCount), .optional(info.supportedQueryFormats),
-                  .bool(info.isTileCache), .string(String(decoding: raw, as: UTF8.self)), fetchedAt.bindValue, .int(id)])
+                  .bool(info.isTileCache), .string(String(decoding: raw, as: UTF8.self)), fetchedAt.bindValue,
+                  .optional(extentWGS84?.json), .int(id)])
     }
 
     public func services(serverID: Int64) throws -> [ServiceRecord] {
@@ -209,13 +211,14 @@ extension AppDatabase {
     }
 
     private static func serviceRecord(_ r: [DuckValue]) throws -> ServiceRecord {
-        guard r.count == 11, let id = r[0].int64, let serverID = r[1].int64, let folder = r[2].stringValue,
+        guard r.count == 12, let id = r[0].int64, let serverID = r[1].int64, let folder = r[2].stringValue,
               let name = r[3].stringValue, let type = r[4].stringValue, let urlText = r[5].stringValue,
               let url = URL(string: urlText)
         else { throw MetadataStoreError.unexpectedRow("service") }
         return ServiceRecord(id: id, serverID: serverID, folderPath: folder, name: name, type: ServiceType(type),
                              url: url, capabilities: r[6].stringValue, maxRecordCount: r[7].intValue,
                              supportedQueryFormats: r[8].stringValue, isTileCache: r[9].boolValue,
+                             extentWGS84: BoundingBox(json: r[11].stringValue),
                              fetchedAt: r[10].dateFromMicros)
     }
 
@@ -226,7 +229,7 @@ extension AppDatabase {
         global_id_field, has_z, has_m, has_attachments, extent_json, wkid, latest_wkid, max_record_count,
         supported_query_formats, capabilities, supports_pagination, supports_statistics, supports_order_by,
         supports_result_type, transport, extractable, extractable_reason, sibling_layer_id, feature_count,
-        epoch_us(feature_count_at), epoch_us(fetched_at)
+        epoch_us(feature_count_at), epoch_us(fetched_at), extent_wgs84_json
         """
 
     /// Records the layers and tables a service lists. Existing rows keep their crawled detail.
@@ -235,8 +238,8 @@ extension AppDatabase {
         var ids = [Int64]()
         for (summary, isTable) in layers.map({ ($0, false) }) + tables.map({ ($0, true) }) {
             let id = try query("""
-                INSERT INTO layer (service_id, layer_id, name, type, is_table, geometry_type, parent_layer_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO layer (id, service_id, layer_id, name, type, is_table, geometry_type, parent_layer_id)
+                VALUES (nextval('seq_layer'), ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (service_id, layer_id) DO UPDATE SET
                     name = excluded.name, type = excluded.type, is_table = excluded.is_table,
                     geometry_type = excluded.geometry_type, parent_layer_id = excluded.parent_layer_id
@@ -265,7 +268,8 @@ extension AppDatabase {
     }
 
     /// Stores a fetched layer definition, its verbatim JSON, and replaces its fields.
-    public func updateLayer(id: Int64, info: LayerInfo, raw: Data, fetchedAt: Date = Date()) throws {
+    public func updateLayer(id: Int64, info: LayerInfo, raw: Data, extentWGS84: BoundingBox? = nil,
+                            fetchedAt: Date = Date()) throws {
         let sr = info.spatialReference
         try query("BEGIN TRANSACTION;")
         do {
@@ -274,7 +278,7 @@ extension AppDatabase {
                     object_id_field = ?, global_id_field = ?, has_z = ?, has_m = ?, has_attachments = ?,
                     extent_json = ?, wkid = ?, latest_wkid = ?, max_record_count = ?, supported_query_formats = ?,
                     capabilities = ?, supports_pagination = ?, supports_statistics = ?, supports_order_by = ?,
-                    supports_result_type = ?, raw_json = ?, fetched_at = ?
+                    supports_result_type = ?, raw_json = ?, fetched_at = ?, extent_wgs84_json = ?
                 WHERE id = ?;
                 """, [.string(info.name), .optional(info.type), .bool(info.isTable), .optional(info.geometryType),
                       .optional(info.parentLayer?.id), .optional(info.oidField), .optional(info.globalIdField),
@@ -283,12 +287,13 @@ extension AppDatabase {
                       .optional(info.maxRecordCount), .optional(info.supportedQueryFormats), .optional(info.capabilities),
                       .bool(info.canPaginate), .bool(info.canStatistics), .bool(info.canOrderBy),
                       .optional(info.advancedQueryCapabilities?.supportsQueryWithResultType),
-                      .string(String(decoding: raw, as: UTF8.self)), fetchedAt.bindValue, .int(id)])
+                      .string(String(decoding: raw, as: UTF8.self)), fetchedAt.bindValue,
+                      .optional(extentWGS84?.json), .int(id)])
             try query("DELETE FROM field WHERE layer_id = ?;", [.int(id)])
             for (position, field) in info.fields.enumerated() {
                 try query("""
-                    INSERT INTO field (layer_id, position, name, alias, esri_type, duck_type, length, nullable, editable, domain_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    INSERT INTO field (id, layer_id, position, name, alias, esri_type, duck_type, length, nullable, editable, domain_json)
+                    VALUES (nextval('seq_field'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                     """, [.int(id), .int(Int64(position)), .string(field.name), .optional(field.alias),
                           .string(field.type.rawValue), .string(field.type.duckType ?? "SKIP"),
                           .optional(field.length), .optional(field.nullable), .optional(field.editable),
@@ -341,7 +346,7 @@ extension AppDatabase {
     }
 
     private static func layerRecord(_ r: [DuckValue]) throws -> LayerRecord {
-        guard r.count == 30, let id = r[0].int64, let serviceID = r[1].int64, let layerID = r[2].intValue,
+        guard r.count == 31, let id = r[0].int64, let serviceID = r[1].int64, let layerID = r[2].intValue,
               let name = r[3].stringValue, let isTable = r[5].boolValue
         else { throw MetadataStoreError.unexpectedRow("layer") }
         return LayerRecord(
@@ -353,7 +358,8 @@ extension AppDatabase {
             capabilities: r[18].stringValue, supportsPagination: r[19].boolValue, supportsStatistics: r[20].boolValue,
             supportsOrderBy: r[21].boolValue, supportsResultType: r[22].boolValue, transport: r[23].stringValue,
             extractable: r[24].boolValue, extractableReason: r[25].stringValue, siblingLayerID: r[26].int64,
-            featureCount: r[27].int64, featureCountAt: r[28].dateFromMicros, fetchedAt: r[29].dateFromMicros)
+            featureCount: r[27].int64, featureCountAt: r[28].dateFromMicros,
+            extentWGS84: BoundingBox(json: r[30].stringValue), fetchedAt: r[29].dateFromMicros)
     }
 
     private static func fieldRecord(_ r: [DuckValue]) throws -> FieldRecord {

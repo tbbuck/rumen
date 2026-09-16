@@ -47,6 +47,7 @@ final class CrawlerTests: XCTestCase {
         scratch = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
         db = try AppDatabase(path: scratch.appendingPathComponent("explorer.duckdb").path)
         try await db.migrate()
+        try await db.loadSpatial()
         transport = stubServer()
         let client = ArcGISClient(transport: transport, retry: RetryPolicy(maxAttempts: 2, baseDelay: 0))
         crawler = Crawler(client: client, database: db)

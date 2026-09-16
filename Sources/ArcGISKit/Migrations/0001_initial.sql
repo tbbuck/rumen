@@ -1,10 +1,12 @@
 -- ArcGIS Explorer app database, initial schema (SPEC §7.2).
+-- No function-call column defaults: DuckDB cannot bind them when replaying a write-ahead log
+-- after an unclean exit. Ids are allocated with nextval() in the INSERT statements instead.
 -- Metadata cache and download bookkeeping only: downloaded data never lives here.
 -- Raw server JSON is kept verbatim as VARCHAR so normalised columns can be re-derived.
 
 CREATE SEQUENCE seq_server START 1;
 CREATE TABLE server (
-    id                  BIGINT PRIMARY KEY DEFAULT nextval('seq_server'),
+    id                  BIGINT PRIMARY KEY,
     root_url            VARCHAR NOT NULL UNIQUE,     -- normalised .../rest/services
     friendly_name       VARCHAR NOT NULL,
     origin_override     VARCHAR,                     -- NULL = server's own origin
@@ -20,7 +22,7 @@ CREATE TABLE server (
 
 CREATE SEQUENCE seq_service START 1;
 CREATE TABLE service (
-    id                      BIGINT PRIMARY KEY DEFAULT nextval('seq_service'),
+    id                      BIGINT PRIMARY KEY,
     server_id               BIGINT NOT NULL,
     folder_path             VARCHAR NOT NULL DEFAULT '',   -- '' = root; 'A/B' nested
     name                    VARCHAR NOT NULL,              -- as listed, e.g. 'Folder/Name'
@@ -37,7 +39,7 @@ CREATE TABLE service (
 
 CREATE SEQUENCE seq_layer START 1;
 CREATE TABLE layer (
-    id                      BIGINT PRIMARY KEY DEFAULT nextval('seq_layer'),
+    id                      BIGINT PRIMARY KEY,
     service_id              BIGINT NOT NULL,
     layer_id                INTEGER NOT NULL,          -- the server's numeric id
     name                    VARCHAR NOT NULL,
@@ -73,7 +75,7 @@ CREATE TABLE layer (
 
 CREATE SEQUENCE seq_field START 1;
 CREATE TABLE field (
-    id          BIGINT PRIMARY KEY DEFAULT nextval('seq_field'),
+    id          BIGINT PRIMARY KEY,
     layer_id    BIGINT NOT NULL,                       -- layer.id
     position    INTEGER NOT NULL,                      -- order in the layer definition
     name        VARCHAR NOT NULL,
@@ -89,7 +91,7 @@ CREATE TABLE field (
 
 CREATE SEQUENCE seq_download START 1;
 CREATE TABLE download (
-    id                     BIGINT PRIMARY KEY DEFAULT nextval('seq_download'),
+    id                     BIGINT PRIMARY KEY,
     layer_id               BIGINT NOT NULL,
     started_at             TIMESTAMP NOT NULL,
     finished_at            TIMESTAMP,
@@ -126,7 +128,7 @@ CREATE TABLE download_chunk (
 
 CREATE SEQUENCE seq_query_history START 1;
 CREATE TABLE query_history (
-    id           BIGINT PRIMARY KEY DEFAULT nextval('seq_query_history'),
+    id           BIGINT PRIMARY KEY,
     layer_id     BIGINT NOT NULL,
     where_clause VARCHAR NOT NULL,
     out_fields   VARCHAR,

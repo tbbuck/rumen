@@ -38,7 +38,12 @@ function squirclePath() {
 const SQUIRCLE = squirclePath();
 
 // Sheet palette (DESIGN-TOKENS.md, Day), plus the icon's own grounds.
-const p = { ground: '#EDEFE9', paper: '#FFFFFF', land: '#F6F7F3', coast: '#A6BBD0', line2: '#BEC5BA', grat: '#CBD7E4', water: '#DCE7F0', muted2: '#8A948E', accent: '#B8236B', accentSoft: 'rgba(184,35,107,0.07)', ghost: '#9FB0BF', ghostGrat: 'rgba(34,42,38,0.09)' };
+const p = { ground: '#EDEFE9', paper: '#FFFFFF', land: '#D4DECB', landLine: '#A2B297', line2: '#BEC5BA', grat: '#CBD7E4', water: '#DCE7F0', muted2: '#8A948E', accent: '#B8236B', accentSoft: 'rgba(184,35,107,0.10)', ghost: '#9FB0BF', ghostGrat: 'rgba(34,42,38,0.09)' };
+
+// The extent is a query box over part of the layer, not the layer's own bounding
+// box: England and Wales, with the top edge cutting across Britain and Scotland and
+// Ireland left outside.
+const queryExtent = { type: 'Polygon', coordinates: [[[-6.0, 49.9], [1.9, 49.9], [1.9, 55.05], [-6.0, 55.05], [-6.0, 49.9]]] };
 
 // ---- Geography -------------------------------------------------------------
 
@@ -104,15 +109,15 @@ function extentRect(geojson, proj) {
 function mapFragment(box, featH, gratStep, strokeW, dash, feature = smooth) {
   const win = windowFor(box, featH, feature);
   const proj = project(win);
-  const ext = extentRect(feature, proj);
+  const ext = extentRect(queryExtent, proj);
   const g = [];
   for (let x = box.x + gratStep / 2; x < box.x + box.w; x += gratStep) g.push(`M${x} ${box.y}V${box.y + box.h}`);
   for (let y = box.y + gratStep / 2; y < box.y + box.h; y += gratStep) g.push(`M${box.x} ${y}H${box.x + box.w}`);
-  // The layer is drawn the way the app draws a selected feature: a tinted fill with
-  // a magenta outline, not a solid slab.
+  // The layer is land on a sheet: sage fill, thin darker edge. Magenta belongs to
+  // the extent alone, whose faint tint marks what falls inside it.
   return `<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" fill="${p.water}"/>
+      <path d="${pathFor(feature, proj)}" fill="${p.land}" stroke="${p.landLine}" stroke-width="${Math.round(strokeW * 0.35)}" stroke-linejoin="round" fill-rule="evenodd"/>
       <path d="${g.join('')}" stroke="${p.grat}" stroke-width="4" fill="none"/>
-      <path d="${pathFor(feature, proj)}" fill="${p.accent}" fill-opacity="0.32" stroke="${p.accent}" stroke-width="${Math.round(strokeW * 0.4)}" stroke-linejoin="round" fill-rule="evenodd"/>
       <rect x="${ext.x.toFixed(1)}" y="${ext.y.toFixed(1)}" width="${ext.w.toFixed(1)}" height="${ext.h.toFixed(1)}" fill="${p.accentSoft}" stroke="${p.accent}" stroke-width="${strokeW}" stroke-dasharray="${dash}"/>`;
 }
 
@@ -157,7 +162,7 @@ function conceptA(feature = bold, name = 'A · Footprint') {
   const body = `<g>
       ${mapFragment(tile, 0.62, 160, 18, '46 30', feature)}
     </g>`;
-  return svgDoc(name, 'The tile is the survey sheet: graticule, Great Britain and Ireland as the layer in magenta, and their dashed extent.', '', body);
+  return svgDoc(name, 'The tile is the survey sheet: graticule, Great Britain and Ireland as land, and a dashed query extent over England and Wales.', '', body);
 }
 
 // B · Sheet: a white map sheet with margins and ticks on the pale ground.
@@ -206,7 +211,7 @@ function conceptC(feature = bold) {
 }
 
 const concepts = [
-  { key: 'A', file: 'A-footprint.svg', name: 'A · Footprint', svg: conceptA(), why: 'The tile is the sheet: graticule, pale water, Great Britain and Ireland as the layer, drawn as the app draws a selected feature (tinted fill, magenta outline), and the dashed extent that is their true bounding box.', tradeoff: 'Pale ground, so quiet on a light desktop.' },
+  { key: 'A', file: 'A-footprint.svg', name: 'A · Footprint', svg: conceptA(), why: 'The tile is the sheet: graticule, pale water, Great Britain and Ireland as sage land, and a dashed magenta extent boxing England and Wales. The box cuts across the land, so magenta means the extent, not the map.', tradeoff: 'Pale ground, so quiet on a light desktop.' },
   { key: 'A2', file: 'A-smooth.svg', name: 'A · smoother coast', svg: conceptA(smooth, 'A · smoother coast'), why: 'The same frame with the less generalised coastline, for comparison.', tradeoff: 'The Highland lochs bring back texture that reads as noise at 32px.' },
   { key: 'B', file: 'B-sheet.svg', name: 'B · Sheet', svg: conceptB(), why: 'The same map on a white sheet with margins and ticks, lying on the pale ground. The marginalia are the signature.', tradeoff: 'The ticks vanish below 64px; at Finder sizes it is a white square with a magenta shape.' },
   { key: 'C', file: 'C-pulled-layer.svg', name: 'C · Pulled layer', svg: conceptC(), why: 'Three sheets from one server: blank paper at the back, gridded paper in the middle, and the white front sheet lifted away with the layer highlighted. The only concept that shows what the app does: extraction.', tradeoff: 'Busiest silhouette; a stack can read as a generic layers glyph.' },

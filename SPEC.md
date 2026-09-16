@@ -52,7 +52,8 @@ metadata so browsing and searching are instant even when the server is slow.
 - **No OAuth / IWA / PKI / SAML** sign-in. ArcGIS token auth only.
 - **No image service or tile cache extraction.** ImageServer and cached tile
   layers are listed and described, not downloaded.
-- **No attachments download** (deferred; the schema records `hasAttachments`).
+- **No attachments download** and **no relationships or related records** (the
+  `hasAttachments` flag is recorded and shown; nothing is fetched).
 - Not cross-platform; not a general GIS; not a replacement for ArcGIS Pro.
 
 ## 3. Users & primary use cases
@@ -193,7 +194,9 @@ For a selected layer or table:
    in windows sized `maxRecordCount`. If a window still reports
    `exceededTransferLimit`, split it.
 3. **OID list chunking** — when statistics are unsupported: `returnIdsOnly=true`
-   once, then `objectIds=` batches of `maxRecordCount`.
+   once, then `objectIds=` batches of `maxRecordCount`. The ID fetch is capped
+   (default 5M); past the cap the run pauses and asks for a manual partitioning
+   `where` template instead.
 4. **Manual** — offered in the UI only when 1–3 all fail: the user picks a page
    size, a strategy, and optionally a partitioning `where` template. The choice is
    remembered per layer.
@@ -244,7 +247,7 @@ For a selected layer or table:
 | `Geometry` | `GEOMETRY` |
 | `Raster` | skipped, noted in the run summary |
 
-Coded-value domains are exported as the raw code; an option adds a sibling
+Coded-value domains are exported as the raw code; an opt-in option (off by default) adds a sibling
 `<field>_label` column decoded from the domain.
 
 ### 5.7 Export
@@ -435,16 +438,18 @@ loaded only for staging, export, and map preview.
 9. **MapLibre GL in a WKWebView, MapTiler basemaps, key via untracked xcconfig** —
    accepted 2026-09-16, same mechanism as DuckLake Explorer.
 10. **macOS 26, Swift 6 strict concurrency, SPM + xcodegen** — accepted 2026-09-16.
+11. **No attachments download** — accepted 2026-09-16. `hasAttachments` is still
+    recorded and shown in the inspector; nothing is fetched.
+12. **No relationships / related records** — accepted 2026-09-16. Not exposed in
+    the UI at all; the raw JSON view is the only place they appear.
+13. **Coded-domain label columns are opt-in** — accepted 2026-09-16. Off by
+    default; a per-download toggle and a preference for the default.
+14. **Very large `returnIdsOnly` responses: cap and ask** — accepted 2026-09-16.
+    The OID-list strategy caps the ID fetch (default 5M OIDs); beyond that the
+    download pauses and asks the user to supply a partitioning `where` template
+    via the manual strategy. Never seen in practice; kept simple deliberately.
 
 ## 10. Open questions
-1. **Attachments**: download `hasAttachments` blobs alongside features? Deferred;
-   the schema records the flag so it can be added without a migration to `layer`.
-2. **Related records / relationships**: expose `relationships` from layer JSON as
-   navigation only, or also allow joined downloads? Navigation only for v1.
-3. **Coded-domain label columns**: on by default or opt-in? Proposed: opt-in.
-4. **Very large `returnIdsOnly` responses** (tens of millions of OIDs): chunk the
-   ID fetch itself by `where` on the OID once statistics are known, or cap and ask.
-   Decide when a real case appears.
-5. **Design direction**: DuckLake Explorer has a UI-SPEC and design tokens
+1. **Design direction**: DuckLake Explorer has a UI-SPEC and design tokens
    ("Stratum"). Reuse that system for family resemblance, or give this app its own?
-   A `UI-SPEC.md` follows once decided.
+   Being decided in a separate thread; a `UI-SPEC.md` follows.

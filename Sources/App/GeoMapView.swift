@@ -175,11 +175,15 @@ struct GeoMapView: NSViewRepresentable {
     });
     map.addControl(new maplibregl.NavigationControl({showCompass:false}), 'top-right');
     function empty() { return {type:'FeatureCollection', features:[]}; }
-    const hov = ['boolean', ['feature-state', 'hover'], false];
     const T = { duration: 260 };
-    // Normal and dimmed opacities: constants, so changing them animates (data-driven values do not).
-    const OP = { fill: 0.18, line: 1, pt: 1, stroke: 1 };
-    const DIM = { fill: 0.04, line: 0.22, pt: 0.22, stroke: 0.22 };
+    // Hover strength 0..1 lives in feature state and is tweened below, so outlines fade rather than snap.
+    const hov = ['number', ['feature-state', 'hover'], 0];
+    // Layer-wide opacities are constants, so changing them animates (data-driven values do not).
+    const OP = { fill: 0.18, line: 1, pt: 1 };
+    const DIM = { fill: 0.04, line: 0.22, pt: 0.22 };
+    const SEL = { fill: 0.45, line: 1, pt: 1 };
+    // Two highlight slots: a new pick fades in on one while the old fades out on the other.
+    const SLOTS = ['sel0', 'sel1'];
     function addLayers() {
       map.addSource('grat', { type:'geojson', data: empty() });
       map.addLayer({ id:'grat-line', type:'line', source:'grat', paint:{ 'line-color': GRAT, 'line-width': 1, 'line-opacity': 0.9 } });
@@ -187,18 +191,20 @@ struct GeoMapView: NSViewRepresentable {
       map.addLayer({ id:'f-fill', type:'fill', source:'features', filter:['==','$type','Polygon'],
         paint:{ 'fill-color': ACCENT, 'fill-opacity': OP.fill, 'fill-opacity-transition': T } });
       map.addLayer({ id:'f-line', type:'line', source:'features', filter:['any',['==','$type','Polygon'],['==','$type','LineString']],
-        paint:{ 'line-color': ACCENT, 'line-width': ['case', hov, 2.4, 1.2], 'line-opacity': OP.line, 'line-opacity-transition': T } });
+        paint:{ 'line-color': ACCENT, 'line-width': ['interpolate', ['linear'], hov, 0, 1.2, 1, 2.4], 'line-opacity': OP.line, 'line-opacity-transition': T } });
       map.addLayer({ id:'f-pt', type:'circle', source:'features', filter:['==','$type','Point'],
-        paint:{ 'circle-color': ACCENT, 'circle-radius': ['case', hov, 6, 4], 'circle-stroke-color': HALO, 'circle-stroke-width': 1,
-                'circle-opacity': OP.pt, 'circle-opacity-transition': T, 'circle-stroke-opacity': OP.stroke, 'circle-stroke-opacity-transition': T } });
-      map.addSource('selected', { type:'geojson', data: empty() });
-      map.addLayer({ id:'s-fill', type:'fill', source:'selected', filter:['==','$type','Polygon'],
-        paint:{ 'fill-color': ACCENT, 'fill-opacity': 0, 'fill-opacity-transition': T } });
-      map.addLayer({ id:'s-line', type:'line', source:'selected', filter:['any',['==','$type','Polygon'],['==','$type','LineString']],
-        paint:{ 'line-color': ACCENT, 'line-width': 2.6, 'line-opacity': 0, 'line-opacity-transition': T } });
-      map.addLayer({ id:'s-pt', type:'circle', source:'selected', filter:['==','$type','Point'],
-        paint:{ 'circle-color': ACCENT, 'circle-radius': 7, 'circle-stroke-color': HALO, 'circle-stroke-width': 2,
-                'circle-opacity': 0, 'circle-opacity-transition': T, 'circle-stroke-opacity': 0, 'circle-stroke-opacity-transition': T } });
+        paint:{ 'circle-color': ACCENT, 'circle-radius': ['interpolate', ['linear'], hov, 0, 4, 1, 6], 'circle-stroke-color': HALO, 'circle-stroke-width': 1,
+                'circle-opacity': OP.pt, 'circle-opacity-transition': T, 'circle-stroke-opacity': OP.pt, 'circle-stroke-opacity-transition': T } });
+      for (const s of SLOTS) {
+        map.addSource(s, { type:'geojson', data: empty() });
+        map.addLayer({ id: s + '-fill', type:'fill', source: s, filter:['==','$type','Polygon'],
+          paint:{ 'fill-color': ACCENT, 'fill-opacity': 0, 'fill-opacity-transition': T } });
+        map.addLayer({ id: s + '-line', type:'line', source: s, filter:['any',['==','$type','Polygon'],['==','$type','LineString']],
+          paint:{ 'line-color': ACCENT, 'line-width': 2.6, 'line-opacity': 0, 'line-opacity-transition': T } });
+        map.addLayer({ id: s + '-pt', type:'circle', source: s, filter:['==','$type','Point'],
+          paint:{ 'circle-color': ACCENT, 'circle-radius': 7, 'circle-stroke-color': HALO, 'circle-stroke-width': 2,
+                  'circle-opacity': 0, 'circle-opacity-transition': T, 'circle-stroke-opacity': 0, 'circle-stroke-opacity-transition': T } });
+      }
       map.addSource('extent', { type:'geojson', data: empty() });
       map.addLayer({ id:'extent-line', type:'line', source:'extent', paint:{ 'line-color': ACCENT, 'line-width': 1.5, 'line-dasharray': [3, 2] } });
     }
@@ -206,40 +212,73 @@ struct GeoMapView: NSViewRepresentable {
       map.setPaintProperty('f-fill', 'fill-opacity', op.fill);
       map.setPaintProperty('f-line', 'line-opacity', op.line);
       map.setPaintProperty('f-pt', 'circle-opacity', op.pt);
-      map.setPaintProperty('f-pt', 'circle-stroke-opacity', op.stroke);
+      map.setPaintProperty('f-pt', 'circle-stroke-opacity', op.pt);
     }
-    function showSelected(on) {
-      map.setPaintProperty('s-fill', 'fill-opacity', on ? 0.45 : 0);
-      map.setPaintProperty('s-line', 'line-opacity', on ? 1 : 0);
-      map.setPaintProperty('s-pt', 'circle-opacity', on ? 1 : 0);
-      map.setPaintProperty('s-pt', 'circle-stroke-opacity', on ? 1 : 0);
+    function showSlot(s, on) {
+      map.setPaintProperty(s + '-fill', 'fill-opacity', on ? SEL.fill : 0);
+      map.setPaintProperty(s + '-line', 'line-opacity', on ? SEL.line : 0);
+      map.setPaintProperty(s + '-pt', 'circle-opacity', on ? SEL.pt : 0);
+      map.setPaintProperty(s + '-pt', 'circle-stroke-opacity', on ? SEL.pt : 0);
     }
-    let hoveredId = null, selectedId = null, swapTimer = null;
-    function setHover(id) {
-      if (hoveredId !== null && hoveredId !== id) map.setFeatureState({ source: 'features', id: hoveredId }, { hover: false });
-      hoveredId = id;
-      if (id !== null) map.setFeatureState({ source: 'features', id: id }, { hover: true });
+    // setData parses in a worker; fading in before the new data is drawable would pop it in mid-fade.
+    function whenSourceLoaded(id, fn) {
+      if (map.isSourceLoaded(id)) { fn(); return; }
+      const h = e => { if (e.sourceId === id && map.isSourceLoaded(id)) { map.off('sourcedata', h); fn(); } };
+      map.on('sourcedata', h);
     }
-    function select(feature) {
-      const fc = { type: 'FeatureCollection', features: [ { type: 'Feature', properties: {}, geometry: feature.geometry } ] };
-      if (swapTimer) { clearTimeout(swapTimer); swapTimer = null; }
-      if (selectedId !== null && selectedId !== feature.id) {
-        // Another feature is already lit: fade it out, swap, fade the new one in.
-        showSelected(false);
-        swapTimer = setTimeout(() => { map.getSource('selected').setData(fc); showSelected(true); swapTimer = null; }, 180);
-      } else {
-        map.getSource('selected').setData(fc);
-        showSelected(true);
+    // ---- Hover: tween the strength with requestAnimationFrame; only the entering and leaving features tick.
+    const HOVER_MS = 140;
+    const hoverAnim = new Map();
+    let hoverRaf = null, hoverLast = 0, hoveredId = null;
+    function tickHover(now) {
+      const dt = Math.min(50, now - hoverLast); hoverLast = now;
+      let active = false;
+      for (const [id, a] of hoverAnim) {
+        const step = dt / HOVER_MS;
+        a.v = a.target > a.v ? Math.min(a.target, a.v + step) : Math.max(a.target, a.v - step);
+        map.setFeatureState({ source: 'features', id: id }, { hover: a.v });
+        if (a.v !== a.target) active = true; else if (a.v === 0) hoverAnim.delete(id);
       }
+      hoverRaf = active ? requestAnimationFrame(tickHover) : null;
+    }
+    function animateHover(id, target) {
+      const a = hoverAnim.get(id) || { v: 0, target: 0 };
+      a.target = target; hoverAnim.set(id, a);
+      if (hoverRaf === null) { hoverLast = performance.now(); hoverRaf = requestAnimationFrame(tickHover); }
+    }
+    function setHover(id) {
+      if (hoveredId === id) return;
+      if (hoveredId !== null) animateHover(hoveredId, 0);
+      hoveredId = id;
+      if (id !== null) animateHover(id, 1);
+    }
+    function resetHover() {
+      if (hoverRaf !== null) cancelAnimationFrame(hoverRaf);
+      hoverRaf = null; hoverAnim.clear(); hoveredId = null;
+    }
+    // ---- Selection
+    let selectedId = null, slot = 0, clearTimer = null;
+    function select(feature) {
+      if (clearTimer) { clearTimeout(clearTimer); clearTimer = null; }
+      if (selectedId === feature.id) return;
+      const fc = { type: 'FeatureCollection', features: [ { type: 'Feature', properties: {}, geometry: feature.geometry } ] };
+      if (selectedId !== null) { showSlot(SLOTS[slot], false); slot = 1 - slot; }
+      const next = SLOTS[slot];
+      map.getSource(next).setData(fc);
+      whenSourceLoaded(next, () => showSlot(next, true));
       selectedId = feature.id;
       setOpacity(DIM);
     }
     window.clearSelection = function() {
-      if (swapTimer) { clearTimeout(swapTimer); swapTimer = null; }
+      if (clearTimer) { clearTimeout(clearTimer); clearTimer = null; }
       selectedId = null;
-      showSelected(false);
+      for (const s of SLOTS) showSlot(s, false);
       setOpacity(OP);
-      setTimeout(() => { if (selectedId === null && map.getSource('selected')) map.getSource('selected').setData(empty()); }, 300);
+      clearTimer = setTimeout(() => {
+        clearTimer = null;
+        if (selectedId !== null) return;
+        for (const s of SLOTS) { const src = map.getSource(s); if (src) src.setData(empty()); }
+      }, 300);
     };
     function post() {
       const b = map.getBounds(); const c = map.getCanvas();
@@ -279,7 +318,7 @@ struct GeoMapView: NSViewRepresentable {
     let ready = false; const queued = [];
     function whenReady(fn) { const g = guarded(fn); if (ready) g(); else queued.push(g); }
     window.setGraticule = fc => whenReady(() => map.getSource('grat').setData(fc));
-    window.setFeatures = fc => whenReady(() => { window.clearSelection(); setHover(null); map.getSource('features').setData(fc); });
+    window.setFeatures = fc => whenReady(() => { window.clearSelection(); resetHover(); map.getSource('features').setData(fc); });
     window.setExtent = fc => whenReady(() => map.getSource('extent').setData(fc));
     window.fitTo = b => whenReady(() => { try { map.fitBounds(b, { padding: 40, maxZoom: 14, duration: 0 }); } catch (e) {} });
     </script></body></html>

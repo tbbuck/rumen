@@ -130,8 +130,15 @@ private struct TreeRow: View {
         }
         .contentShape(Rectangle())
         .hoverTracking($hovered)
-        .onTapGesture(count: 2) { if node.isExpandable { Task { await model.toggleExpanded(node) } } }
-        .onTapGesture { Task { await model.select(node.id) } }
+        // One tap handler: a separate double-tap gesture would hold every single click until the
+        // double-click window had passed. The second click of a double toggles expansion instead.
+        .onTapGesture {
+            if (NSApp.currentEvent?.clickCount ?? 1) >= 2 {
+                if node.isExpandable { Task { await model.toggleExpanded(node) } }
+            } else {
+                Task { await model.select(node.id) }
+            }
+        }
         .help(model.nodeErrors[node.id] ?? "")
     }
 

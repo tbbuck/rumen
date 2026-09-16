@@ -6,8 +6,8 @@
 //   node design/icon/build-icons.mjs <preview-dir>
 //
 // Geography comes from design/icon/geography.json (Overture Maps division areas,
-// pulled by `duckdb -f design/icon/geography.sql`): the Isle of Wight is the feature,
-// the mainland counties are the coast behind it. Writes design/icon/<Name>.svg for each
+// pulled by `duckdb -f design/icon/geography.sql`): Great Britain, Ireland and the
+// Isle of Man are the feature. Writes design/icon/<Name>.svg for each
 // concept and, in <preview-dir>, icon-preview.html (standalone) and
 // arcgis-explorer-icon.html (Artifact fragment).
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
@@ -43,12 +43,12 @@ const backSheets = ['#D6DBD3', '#E4E7E1'];
 
 // ---- Geography -------------------------------------------------------------
 
+// Every part in geography.json is the feature: Great Britain, Ireland, the Isle of
+// Man and the larger islands. The extent is the bounding box of all of them.
 const geo = JSON.parse(await readFile(join(here, 'geography.json'), 'utf8'));
-const byName = Object.fromEntries(geo.map(f => [f.name, f.geojson]));
-const island = byName['Isle of Wight'];
-const mainland = geo.filter(f => f.name !== 'Isle of Wight').map(f => f.geojson);
-if (!island || mainland.length === 0) {
-  console.error('geography.json is missing the island or the mainland; re-run claude-sql/icon-geography.sql');
+const feature = { type: 'MultiPolygon', coordinates: geo.flatMap(f => f.geojson.type === 'Polygon' ? [f.geojson.coordinates] : f.geojson.coordinates) };
+if (feature.coordinates.length === 0) {
+  console.error('geography.json is empty; re-run duckdb -f design/icon/geography.sql');
   process.exit(1);
 }
 
@@ -66,20 +66,18 @@ function bboxOf(geojson) {
   return { x0, y0, x1, y1 };
 }
 
-// A window onto the map: the island sits at `islandY` (fraction of the box height,
-// measured to the island's centre) and spans `islandW` of the box width. Equal scale
-// in x and y (equirectangular corrected by cos of the mid latitude), so shapes keep
-// their proportions.
-function windowFor(box, islandW, islandY) {
-  const ib = bboxOf(island);
-  const midLat = (ib.y0 + ib.y1) / 2;
+// A window onto the map: the feature's bounding box is centred in `box` and spans
+// `featH` of its height. Equal scale in x and y (equirectangular corrected by cos of
+// the mid latitude), so shapes keep their proportions.
+function windowFor(box, featH) {
+  const fb = bboxOf(feature);
+  const midLat = (fb.y0 + fb.y1) / 2;
   const k = Math.cos(midLat * Math.PI / 180);
-  const lonSpan = (ib.x1 - ib.x0) / islandW;
-  const scale = box.w / (lonSpan * k);          // px per degree of latitude
-  const latSpan = box.h / scale;
-  const lonCentre = (ib.x0 + ib.x1) / 2;
-  const latTop = midLat + latSpan * islandY;
-  return { lon0: lonCentre - lonSpan / 2, latTop, k, scale, box };
+  const latSpan = (fb.y1 - fb.y0) / featH;
+  const scale = box.h / latSpan;                // px per degree of latitude
+  const lonSpan = box.w / (scale * k);
+  const lonCentre = (fb.x0 + fb.x1) / 2;
+  return { lon0: lonCentre - lonSpan / 2, latTop: midLat + latSpan / 2, k, scale, box };
 }
 
 function project(win) {
@@ -97,24 +95,18 @@ function extentRect(geojson, proj) {
   return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
 
-// The map fragment inside `box`: water, mainland, graticule, the island, its extent.
-// `extentOf` is the island by default; pass a lon/lat GeoJSON polygon to box a
-// different area (used by the coast variant).
-function mapFragment(box, islandW, islandY, gratStep, strokeW, dash, extentOf = island) {
-  const win = windowFor(box, islandW, islandY);
+// The map fragment inside `box`: water, graticule, the British Isles in magenta,
+// and their dashed extent.
+function mapFragment(box, featH, gratStep, strokeW, dash) {
+  const win = windowFor(box, featH);
   const proj = project(win);
-  const ext = extentRect(extentOf, proj);
+  const ext = extentRect(feature, proj);
   const g = [];
   for (let x = box.x + gratStep / 2; x < box.x + box.w; x += gratStep) g.push(`M${x} ${box.y}V${box.y + box.h}`);
   for (let y = box.y + gratStep / 2; y < box.y + box.h; y += gratStep) g.push(`M${box.x} ${y}H${box.x + box.w}`);
-  // Linework only: land and water as two paper tones, the coast as a thin line.
-  // Magenta is kept for the extent, the one geometric element, so nothing organic
-  // ever reads as a solid blob.
-  const land = mainland.map(m => pathFor(m, proj)).join('') + pathFor(island, proj);
   return `<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" fill="${p.water}"/>
-      <path d="${land}" fill="${p.land}" fill-rule="evenodd"/>
       <path d="${g.join('')}" stroke="${p.grat}" stroke-width="4" fill="none"/>
-      <path d="${land}" fill="none" stroke="${p.coast}" stroke-width="5" stroke-linejoin="round"/>
+      <path d="${pathFor(feature, proj)}" fill="${p.accent}" fill-rule="evenodd"/>
       <rect x="${ext.x.toFixed(1)}" y="${ext.y.toFixed(1)}" width="${ext.w.toFixed(1)}" height="${ext.h.toFixed(1)}" fill="${p.accentSoft}" stroke="${p.accent}" stroke-width="${strokeW}" stroke-dasharray="${dash}"/>`;
 }
 
@@ -123,7 +115,7 @@ function mapFragment(box, islandW, islandY, gratStep, strokeW, dash, extentOf = 
 function svgDoc(name, comment, defs, body) {
   return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1024 1024" width="1024" height="1024">
   <!-- ArcGIS Explorer app icon concept "${name}". ${comment}
-       Geography: Isle of Wight and the Solent coast from Overture Maps (OSM, ODbL).
+       Geography: Great Britain, Ireland and the Isle of Man from Overture Maps (OSM, ODbL).
        Flat master: Apple's macOS squircle tile (824pt on a 1024pt canvas) is baked in.
        Generated by design/icon/build-icons.mjs; edit the script, not this file. -->
   <defs>
@@ -144,19 +136,9 @@ const SOFT = `<filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><fe
 function conceptA() {
   const tile = { x: 0, y: 0, w: 1024, h: 1024 };
   const body = `<g>
-      ${mapFragment(tile, 0.56, 0.58, 160, 18, '46 30')}
+      ${mapFragment(tile, 0.62, 160, 18, '46 30')}
     </g>`;
-  return svgDoc('A · Footprint', 'The tile is the survey sheet: the Solent coast, the graticule, the Isle of Wight as the layer and its dashed extent.', '', body);
-}
-
-// A2 · Coast: the same sheet, the extent over the Southampton Water shoreline instead.
-function conceptA2() {
-  const tile = { x: 0, y: 0, w: 1024, h: 1024 };
-  const solent = { type: 'Polygon', coordinates: [[[-1.52, 50.78], [-1.10, 50.78], [-1.10, 50.925], [-1.52, 50.925], [-1.52, 50.78]]] };
-  const body = `<g>
-      ${mapFragment(tile, 0.56, 0.86, 160, 18, '46 30', solent)}
-    </g>`;
-  return svgDoc('A2 · Coast', 'The tile is the survey sheet; the extent boxes a stretch of the mainland shore, with the island below.', '', body);
+  return svgDoc('A · Footprint', 'The tile is the survey sheet: graticule, the British Isles as the layer in magenta, and their dashed extent.', '', body);
 }
 
 // B · Sheet: a white map sheet with margins and ticks on the pale ground.
@@ -173,7 +155,7 @@ function conceptB() {
     <rect x="${sheet.x}" y="${sheet.y}" width="${sheet.w}" height="${sheet.h}" rx="26" fill="${p.paper}"/>
     <path d="${ticks.join('')}" stroke="${p.muted2}" stroke-width="5" fill="none"/>
     <g clip-path="url(#map)">
-      ${mapFragment(map, 0.6, 0.58, 96, 14, '40 26')}
+      ${mapFragment(map, 0.68, 96, 14, '40 26')}
     </g>
     <rect x="${map.x}" y="${map.y}" width="${map.w}" height="${map.h}" fill="none" stroke="${p.line2}" stroke-width="4"/>`;
   return svgDoc('B · Sheet', 'A white map sheet with margins and ticks on the pale ground; the Solent, the island and its extent drawn on it.', defs, body);
@@ -201,15 +183,14 @@ function conceptC() {
     ${back}
     <rect x="${front.x}" y="${front.y + 26}" width="${w}" height="${h}" rx="${rx}" fill="#000" opacity="0.28" filter="url(#soft)"/>
     <g clip-path="url(#front)">
-      ${mapFragment(front, 0.74, 0.55, 96, 14, '40 26')}
+      ${mapFragment(front, 0.7, 96, 14, '40 26')}
     </g>`;
   return svgDoc('C · Pulled layer', 'Three sheets from a server; the white front one is lifted away carrying the island. Extraction as a gesture.', defs, body);
 }
 
 const concepts = [
-  { key: 'A', file: 'A-footprint.svg', name: 'A · Footprint', svg: conceptA(), why: 'The tile is the sheet, drawn as linework: paper land, pale water, a thin coast. The only magenta is the dashed extent, the true bounding box of the Isle of Wight.', tradeoff: 'Pale and quiet on a light desktop.' },
-  { key: 'A2', file: 'A2-coast.svg', name: 'A2 · Coast', svg: conceptA2(), why: 'The same sheet with the extent over a stretch of the mainland shore, Southampton Water and the harbours, and the island running off the bottom.', tradeoff: 'The box no longer hugs one feature, so it reads as an area rather than a layer.' },
-  { key: 'B', file: 'B-sheet.svg', name: 'B · Sheet', svg: conceptB(), why: 'The same map on a white sheet with margins and ticks, lying on the pale ground. The marginalia are the signature.', tradeoff: 'The ticks vanish below 64px; at Finder sizes it is a white square with a magenta box.' },
+  { key: 'A', file: 'A-footprint.svg', name: 'A · Footprint', svg: conceptA(), why: 'The tile is the sheet: graticule, pale water, the British Isles as the layer in magenta, and the dashed extent that is their true bounding box.', tradeoff: 'Pale ground, so quiet on a light desktop.' },
+  { key: 'B', file: 'B-sheet.svg', name: 'B · Sheet', svg: conceptB(), why: 'The same map on a white sheet with margins and ticks, lying on the pale ground. The marginalia are the signature.', tradeoff: 'The ticks vanish below 64px; at Finder sizes it is a white square with a magenta shape.' },
   { key: 'C', file: 'C-pulled-layer.svg', name: 'C · Pulled layer', svg: conceptC(), why: 'Three sheets from a server, the white front one lifted away carrying the map. The only concept that shows what the app does: extraction.', tradeoff: 'Busiest silhouette; a stack can read as a generic layers glyph.' },
 ];
 
@@ -269,7 +250,7 @@ const css = `
 
 const content = `<div class="wrap">
   <h1>ArcGIS Explorer app icon</h1>
-  <p class="lede">Concepts in the Sheet language on Apple's squircle tile at Dock (128, 64), sidebar (32) and Finder list (16) sizes. The geography is real: the Isle of Wight and the Solent coast from Overture Maps. The two Dock strips show the icons beside neighbours on a light and a dark desktop.</p>
+  <p class="lede">Concepts in the Sheet language on Apple's squircle tile at Dock (128, 64), sidebar (32) and Finder list (16) sizes. The geography is real: Great Britain, Ireland and the Isle of Man from Overture Maps. The two Dock strips show the icons beside neighbours on a light and a dark desktop.</p>
   <div class="strip light">
     <div class="grid">${rows}</div>
     ${dock('light')}

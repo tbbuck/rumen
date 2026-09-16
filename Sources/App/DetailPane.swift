@@ -115,7 +115,7 @@ private struct ChildList: View {
     let nodes: [TreeNode]
 
     var body: some View {
-        VStack(spacing: 0) {
+        LazyVStack(spacing: 0) {
             ForEach(nodes) { node in
                 Button {
                     Task { await model.select(node.id) }

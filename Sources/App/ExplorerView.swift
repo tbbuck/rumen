@@ -24,6 +24,7 @@ struct ExplorerView: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.showTransfers)
         .background(Palette.bg)
         .ignoresSafeArea(.container, edges: .top)
+        .onAppear { FieldFocus.install() }
         .sheet(item: $model.pendingAdd) { pending in
             AddServerSheet(pending: pending)
         }
@@ -108,6 +109,25 @@ private struct FatalView: View {
             }
             .frame(maxWidth: 720)
             .padding(36)
+        }
+    }
+}
+
+/// A click anywhere outside the text field being edited ends the edit (AppKit leaves the
+/// field editor in place until something else takes first responder, which plain views never do).
+@MainActor
+enum FieldFocus {
+    private static var monitor: Any?
+
+    static func install() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { event in
+            guard let window = event.window,
+                  let editor = window.firstResponder as? NSTextView, editor.isFieldEditor,
+                  let field = editor.delegate as? NSView else { return event }
+            let inField = field.convert(field.bounds, to: nil).contains(event.locationInWindow)
+            if !inField { window.makeFirstResponder(nil) }
+            return event
         }
     }
 }

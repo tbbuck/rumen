@@ -87,8 +87,10 @@ commit per logical unit.
   calls parked on a second `load` were lost), page errors in the unified log; sample loads
   stream with "Waiting for the server…" then bytes, total, and percentage (unencoded so the
   length is honest). Tree: single-tap handler reading the click count (a double-tap gesture
-  had been holding every click), atomic page swaps, debounced and cached filter capped at 300
-  rows, the mono font cached. Raw tab in an `NSTextView` with off-main pretty-printing. New
+  had been holding every click), atomic page swaps, filter over a case-folded byte index built once per
+  tree and scanned with `memmem` (1–7 ms for 4,000 names in either build configuration;
+  the remaining 40–70 ms per keystroke is SwiftUI re-rendering the panel and its ~35
+  visible rows, measured with `--bench-filter`), the mono font cached. Raw tab in an `NSTextView` with off-main pretty-printing. New
   screens: a **start page** (known servers with counts, or a URL field) instead of landing
   in the last server, and an **opening page** that names the server and the crawler's
   current step while a new server is added; "Start page" in the recents popover.

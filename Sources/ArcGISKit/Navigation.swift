@@ -67,8 +67,9 @@ public struct TreeNode: Identifiable, Sendable, Equatable {
 public enum TreeBuilder {
     public static func build(server: ServerRecord, services: [ServiceRecord],
                              layersByService: [Int64: [LayerRecord]]) -> TreeNode {
+        let byFolder = Dictionary(grouping: services, by: \.folderPath)
         let children = folderChildren(serverID: server.id, path: "", depth: 0,
-                                      services: services, layersByService: layersByService)
+                                      byFolder: byFolder, layersByService: layersByService)
         return TreeNode(id: .server(server.id), name: server.friendlyName, kind: .server,
                         extent: BoundingBox.union(of: children.compactMap(\.extent)),
                         fetchedAt: server.lastVisitedAt, isExpandable: true, children: children)
@@ -77,25 +78,24 @@ public enum TreeBuilder {
     /// The nodes directly under a folder (`""` for the root): sub-folders first, then
     /// services, both alphabetically.
     private static func folderChildren(serverID: Int64, path: String, depth: Int,
-                                       services: [ServiceRecord],
+                                       byFolder: [String: [ServiceRecord]],
                                        layersByService: [Int64: [LayerRecord]]) -> [TreeNode] {
         let prefix = path.isEmpty ? "" : path + "/"
-        // Immediate sub-folder names: the next path segment of every deeper service.
-        var subfolders = [String]()
-        for service in services where service.folderPath != path && service.folderPath.hasPrefix(prefix) {
-            let rest = service.folderPath.dropFirst(prefix.count)
-            let next = String(rest.split(separator: "/", maxSplits: 1)[0])
-            if !subfolders.contains(next) { subfolders.append(next) }
+        // Immediate sub-folder names: the next path segment of every deeper folder path.
+        var subfolders = Set<String>()
+        for folderPath in byFolder.keys where folderPath != path && folderPath.hasPrefix(prefix) {
+            let rest = folderPath.dropFirst(prefix.count)
+            subfolders.insert(String(rest.split(separator: "/", maxSplits: 1)[0]))
         }
         let folderNodes = subfolders.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }.map { name -> TreeNode in
             let childPath = prefix + name
             let kids = folderChildren(serverID: serverID, path: childPath, depth: depth + 1,
-                                      services: services, layersByService: layersByService)
+                                      byFolder: byFolder, layersByService: layersByService)
             return TreeNode(id: .folder(serverID: serverID, path: childPath), name: name, kind: .folder,
                             folderDepth: depth, extent: BoundingBox.union(of: kids.compactMap(\.extent)),
                             isExpandable: true, children: kids)
         }
-        let serviceNodes = services.filter { $0.folderPath == path }
+        let serviceNodes = (byFolder[path] ?? [])
             .sorted {
                 let byName = $0.shortName.localizedCaseInsensitiveCompare($1.shortName)
                 return byName == .orderedSame ? $0.type.name < $1.type.name : byName == .orderedAscending

@@ -88,7 +88,9 @@ final class AppModel {
     /// Cached service counts per server, for the start page.
     private(set) var serverServiceCounts: [Int64: Int] = [:]
     private var treeVersion = 0
-    @ObservationIgnored private var filterCache: (needle: String, version: Int, rows: [TreeRowItem], overflow: Int)?
+    /// Every node flattened with a case- and diacritic-folded key, rebuilt when the tree is.
+    @ObservationIgnored private var searchIndex: (version: Int, entries: [(key: [UInt8], row: TreeRowItem)])?
+    @ObservationIgnored private var filterCache: (needle: String, version: Int, rows: [TreeRowItem])?
 
     // Transfers
     var showTransfers = false
@@ -165,6 +167,9 @@ final class AppModel {
         guard let database else { return }
         do {
             let server = try await database.server(id: id)
+            let count = serverServiceCounts[id].map { "\($0.grouped) services" } ?? "the services"
+            openingStatus = OpeningStatus(url: server.rootURL.absoluteString, step: "Loading \(count) from cache…")
+            defer { openingStatus = nil }
             currentServer = server
             try await reloadTree()
             if expanded.isEmpty { expanded = [.server(id)] }
@@ -177,12 +182,11 @@ final class AppModel {
     private func reloadTree() async throws {
         guard let database, let server = currentServer else { tree = nil; return }
         services = try await database.services(serverID: server.id)
-        var byService = [Int64: [LayerRecord]]()
-        for service in services where service.type.hasLayers && service.isCrawled {
-            byService[service.id] = try await database.layers(serviceID: service.id)
-        }
+        let byService = try await database.layersByService(serverID: server.id)
         layersByService = byService
-        tree = TreeBuilder.build(server: server, services: services, layersByService: byService)
+        openingStatus?.step = "Building the tree…"
+        let built = services
+        tree = await Task.detached(priority: .userInitiated) { TreeBuilder.build(server: server, services: built, layersByService: byService) }.value
         treeVersion += 1
     }
 
@@ -480,7 +484,7 @@ final class AppModel {
     private func open(_ text: String, friendlyName: String?) async {
         guard let crawler else { return }
         let root = (try? ArcGISURL.parse(text))?.rootURL.absoluteString ?? text
-        openingStatus = OpeningStatus(url: root, step: "Reading the service directory…")
+        openingStatus = OpeningStatus(url: root, step: "Opening…")
         defer { openingStatus = nil }
         do {
             let opened = try await crawler.open(text, friendlyName: friendlyName, progress: { event in
@@ -752,34 +756,39 @@ extension AppModel {
 
     /// Tree rows matching the filter box: every node whose name contains the text, with its
     /// usual indent, regardless of what is expanded.
-    var filteredRows: [TreeRowItem] { filtered().rows }
-    /// Matches beyond the cap, so the tree can say "keep typing".
-    var filteredOverflow: Int { filtered().overflow }
-    static let filterRowCap = 300
-
-    private func filtered() -> (rows: [TreeRowItem], overflow: Int) {
-        guard let tree else { return ([], 0) }
-        let needle = treeFilter.trimmingCharacters(in: .whitespaces)
-        if let cached = filterCache, cached.needle == needle, cached.version == treeVersion {
-            return (cached.rows, cached.overflow)
-        }
-        var rows = [TreeRowItem]()
-        var overflow = 0
-        func walk(_ nodes: [TreeNode]) {
-            for node in nodes {
-                if node.name.range(of: needle, options: [.caseInsensitive, .diacriticInsensitive]) != nil {
-                    if rows.count < Self.filterRowCap {
-                        rows.append(TreeRowItem(node: node, indent: Self.indentPublic(for: node)))
-                    } else {
-                        overflow += 1
-                    }
+    var filteredRows: [TreeRowItem] {
+        guard let tree else { return [] }
+        let needle = Self.searchKey(treeFilter.trimmingCharacters(in: .whitespaces))
+        if let cached = filterCache, cached.needle == needle, cached.version == treeVersion { return cached.rows }
+        let t0 = CFAbsoluteTimeGetCurrent()
+        if searchIndex?.version != treeVersion {
+            var entries = [(key: [UInt8], row: TreeRowItem)]()
+            func walk(_ nodes: [TreeNode]) {
+                for node in nodes {
+                    entries.append((Array(Self.searchKey(node.name).utf8), TreeRowItem(node: node, indent: Self.indentPublic(for: node))))
+                    walk(node.children)
                 }
-                walk(node.children)
             }
+            walk(tree.children)
+            searchIndex = (treeVersion, entries)
         }
-        walk(tree.children)
-        filterCache = (needle, treeVersion, rows, overflow)
-        return (rows, overflow)
+        let needleBytes = Array(needle.utf8)
+        // memmem: compiled C, so the scan costs the same in a Debug build as in Release.
+        let rows = (searchIndex?.entries ?? []).filter { entry in
+            needleBytes.isEmpty || entry.key.withUnsafeBufferPointer { key in
+                needleBytes.withUnsafeBufferPointer { needle in
+                    memmem(key.baseAddress, key.count, needle.baseAddress, needle.count) != nil
+                }
+            }
+        }.map(\.row)
+        Perf.note("filtered(\"\(needle)\") \(rows.count) rows in \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000)) ms")
+        filterCache = (needle, treeVersion, rows)
+        return rows
+    }
+
+    /// Case- and diacritic-folded, so the per-keystroke match is a plain byte scan.
+    private static func searchKey(_ text: String) -> String {
+        text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
     }
 
     static func indentPublic(for node: TreeNode) -> CGFloat {

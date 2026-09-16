@@ -305,6 +305,21 @@ extension AppDatabase {
             """, [.optional(extractable), .optional(reason), .optional(transport), .optional(siblingLayerID), .int(layerID)])
     }
 
+    /// Every layer under a server, grouped by service, in one query: the tree needs them all.
+    public func layersByService(serverID: Int64) throws -> [Int64: [LayerRecord]] {
+        let rows = try query("""
+            SELECT \(Self.layerColumns) FROM layer
+            WHERE service_id IN (SELECT id FROM service WHERE server_id = ?)
+            ORDER BY service_id, is_table, layer_id;
+            """, [.int(serverID)]).rows
+        var grouped = [Int64: [LayerRecord]]()
+        for row in rows {
+            let record = try Self.layerRecord(row)
+            grouped[record.serviceID, default: []].append(record)
+        }
+        return grouped
+    }
+
     public func layers(serviceID: Int64) throws -> [LayerRecord] {
         try query("SELECT \(Self.layerColumns) FROM layer WHERE service_id = ? ORDER BY is_table, layer_id;",
                   [.int(serviceID)]).rows.map(Self.layerRecord)

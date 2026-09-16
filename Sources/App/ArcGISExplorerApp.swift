@@ -14,6 +14,8 @@ struct ArcGISExplorerApp: App {
     static var tabArgument: String? { argument("--tab") }
     static var runArgument: String? { argument("--run") }
     static var searchArgument: String? { argument("--search") }
+    /// `--bench-filter`: after opening, set the tree filter in steps and log main-thread busy time.
+    static var benchFilter: Bool { CommandLine.arguments.contains("--bench-filter") }
 
     private static func argument(_ flag: String) -> String? {
         let args = CommandLine.arguments
@@ -37,6 +39,14 @@ struct ArcGISExplorerApp: App {
                     if let tab = Self.tabArgument, let chosen = LayerTab(rawValue: tab.capitalizedFirst) { model.layerTab = chosen }
                     if Self.runArgument == "preview" { await model.querySession?.preview() }
                     if let text = Self.searchArgument { model.columnSearch = text }
+                    if Self.benchFilter {
+                        Perf.installHangObserver()
+                        for needle in ["e", "en", "eng", "", "s", "st", "sta", ""] {
+                            try? await Task.sleep(for: .seconds(1))
+                            Perf.note("filter = \"\(needle)\"")
+                            model.treeFilter = needle
+                        }
+                    }
                     if Self.runArgument == "download", let layer = model.currentLayer {
                         var request = DownloadRequest(layerID: layer.id, outputDirectory: model.downloadDirectory)
                         request.overwrite = true
@@ -47,6 +57,8 @@ struct ArcGISExplorerApp: App {
         .windowStyle(.hiddenTitleBar)
         .commands {
             CommandMenu("Go") {
+                Button("Start Page") { model.showStartPage() }
+                    .keyboardShortcut("h", modifiers: [.command, .shift])
                 Button("Open URL…") { model.beginURLEdit() }
                     .keyboardShortcut("l", modifiers: .command)
                 Button("Find column…") { model.focusColumnSearch = true }

@@ -6,19 +6,15 @@ struct ServerTree: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
+        let rows = model.treeFilter.trimmingCharacters(in: .whitespaces).isEmpty ? model.visibleRows : model.filteredRows
         VStack(alignment: .leading, spacing: 0) {
             if let server = model.currentServer {
                 ServerHeader(server: server)
                 TreeFilterField()
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        let filtering = !model.treeFilter.trimmingCharacters(in: .whitespaces).isEmpty
-                        ForEach(filtering ? model.filteredRows : model.visibleRows) { row in
+                        ForEach(rows) { row in
                             TreeRow(row: row, frame: model.tree?.extent)
-                        }
-                        if filtering, model.filteredOverflow > 0 {
-                            Caption("\(AppModel.filterRowCap) shown, \(model.filteredOverflow) more match. Keep typing.", size: 11, color: Palette.muted2)
-                                .padding(.horizontal, 16).padding(.top, 8)
                         }
                     }
                     .padding(.bottom, 12)
@@ -68,6 +64,8 @@ private struct ServerHeader: View {
         .contentShape(Rectangle())
         .onTapGesture { Task { await model.select(.server(server.id)) } }
         .contextMenu {
+            Button("Start page") { model.showStartPage() }
+            Divider()
             Button("Rename…") { model.settingsServer = server }
             Button("Refresh") { Task { await model.refreshCurrent() } }
             Button("Deep crawl") { Task { await model.deepCrawlCurrentServer() } }
@@ -101,6 +99,22 @@ private struct TreeRow: View {
     @State private var hovered = false
 
     var body: some View {
+        content
+            .contentShape(Rectangle())
+            .hoverTracking($hovered)
+            // One tap handler: a separate double-tap gesture would hold every single click until the
+            // double-click window had passed. The second click of a double toggles expansion instead.
+            .onTapGesture {
+                if (NSApp.currentEvent?.clickCount ?? 1) >= 2 {
+                    if node.isExpandable { Task { await model.toggleExpanded(node) } }
+                } else {
+                    Task { await model.select(node.id) }
+                }
+            }
+            .help(model.nodeErrors[node.id] ?? "")
+    }
+
+    private var content: some View {
         HStack(spacing: 7) {
             if isLoading {
                 ProgressView().controlSize(.mini).frame(width: 10, height: 10)
@@ -141,18 +155,6 @@ private struct TreeRow: View {
         .overlay(alignment: .leading) {
             if isSelected { Rectangle().fill(Palette.accent).frame(width: 2) }
         }
-        .contentShape(Rectangle())
-        .hoverTracking($hovered)
-        // One tap handler: a separate double-tap gesture would hold every single click until the
-        // double-click window had passed. The second click of a double toggles expansion instead.
-        .onTapGesture {
-            if (NSApp.currentEvent?.clickCount ?? 1) >= 2 {
-                if node.isExpandable { Task { await model.toggleExpanded(node) } }
-            } else {
-                Task { await model.select(node.id) }
-            }
-        }
-        .help(model.nodeErrors[node.id] ?? "")
     }
 
     private var locatorHelp: String {
@@ -176,26 +178,18 @@ private struct TreeRow: View {
 private struct TreeFilterField: View {
     @Environment(AppModel.self) private var model
     @FocusState private var focused: Bool
-    /// Typed text; the model's filter follows it after a short pause so typing stays fluid.
-    @State private var draft = ""
-
     var body: some View {
+        @Bindable var model = model
         HStack(spacing: 6) {
             Image(systemName: "line.3.horizontal.decrease").font(.system(size: 10)).foregroundStyle(Palette.muted2)
-            TextField("Filter", text: $draft)
+            TextField("Filter", text: $model.treeFilter)
                 .textFieldStyle(.plain)
                 .font(.sheetUI(12))
                 .foregroundStyle(Palette.ink)
                 .focused($focused)
-                .onExitCommand { draft = ""; model.treeFilter = ""; focused = false }
-                .task(id: draft) {
-                    if draft.isEmpty { model.treeFilter = ""; return }
-                    try? await Task.sleep(for: .milliseconds(120))
-                    if !Task.isCancelled { model.treeFilter = draft }
-                }
-                .onChange(of: model.treeFilter) { if model.treeFilter.isEmpty { draft = "" } }
-            if !draft.isEmpty {
-                Button { draft = ""; model.treeFilter = "" } label: {
+                .onExitCommand { model.treeFilter = ""; focused = false }
+            if !model.treeFilter.isEmpty {
+                Button { model.treeFilter = "" } label: {
                     Image(systemName: "xmark.circle.fill").font(.system(size: 10)).foregroundStyle(Palette.muted2)
                 }
                 .buttonStyle(.plain)

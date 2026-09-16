@@ -1,0 +1,180 @@
+import XCTest
+import Foundation
+import ArcGISKit
+import DuckDBKit
+
+/// A stub "sampleserver6" routed by URL path: recorded fixtures where we have them, minimal
+/// synthetic JSON elsewhere, and a few deliberate failures to exercise fallbacks.
+private func stubServer() -> StubTransport {
+    StubTransport { request, _ in
+        let path = request.url!.path
+        let s6 = "/arcgis/rest/services"
+        func fixture(_ name: String) throws -> StubTransport.Reply { try .fixture(name) }
+        switch path {
+        case s6: return try fixture("s6-root.json")
+        case "\(s6)/Utilities": return try fixture("s6-folder-utilities.json")
+        case "\(s6)/Census/MapServer": return try fixture("s6-census-mapserver.json")
+        case "\(s6)/Census/MapServer/layers": return try fixture("s6-census-layers.json")
+        case "\(s6)/Wildfire/FeatureServer": return try fixture("s6-wildfire-featureserver.json")
+        case "\(s6)/Wildfire/FeatureServer/layers": return .json("missing", status: 404)   // forces per-layer fallback
+        case "\(s6)/Wildfire/FeatureServer/0": return try fixture("s6-wildfire-layer0.json")
+        case "\(s6)/Hurricanes/MapServer":
+            return .json(#"{"error":{"code":500,"message":"Service unavailable","details":[]}}"#)
+        default:
+            if path.hasPrefix("\(s6)/Wildfire/FeatureServer/"), let id = Int(path.split(separator: "/").last!) {
+                return .json(#"{"id":\#(id),"name":"Synthetic \#(id)","type":"Feature Layer","geometryType":"esriGeometryPoint","fields":[{"name":"OBJECTID","type":"esriFieldTypeOID"}]}"#)
+            }
+            if path.hasSuffix("/MapServer") || path.hasSuffix("/FeatureServer") {
+                return .json(#"{"currentVersion":10.91,"capabilities":"Map,Query","layers":[],"tables":[]}"#)   // any other service: empty
+            }
+            if path.hasPrefix(s6 + "/"), !path.contains("Server") {
+                return .json(#"{"currentVersion":10.91,"folders":[],"services":[]}"#)   // any other folder: empty
+            }
+            return .json(#"{"error":{"code":404,"message":"not stubbed: \#(path)"}}"#)
+        }
+    }
+}
+
+final class CrawlerTests: XCTestCase {
+
+    private var scratch: URL!
+    private var db: AppDatabase!
+    private var transport: StubTransport!
+    private var crawler: Crawler!
+    private let root = "https://sampleserver6.arcgisonline.com/arcgis/rest/services"
+
+    override func setUp() async throws {
+        scratch = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        db = try AppDatabase(path: scratch.appendingPathComponent("explorer.duckdb").path)
+        try await db.migrate()
+        transport = stubServer()
+        let client = ArcGISClient(transport: transport, retry: RetryPolicy(maxAttempts: 2, baseDelay: 0))
+        crawler = Crawler(client: client, database: db)
+    }
+
+    override func tearDownWithError() throws {
+        crawler = nil; db = nil
+        try? FileManager.default.removeItem(at: scratch)
+    }
+
+    private func requestPaths() -> [String] { transport.requests.compactMap { $0.url?.path } }
+
+    func testOpenRootShallowCrawlsFoldersAndRecordsVersion() async throws {
+        let opened = try await crawler.open(root + "/?f=json", friendlyName: "Sample 6")
+        XCTAssertTrue(opened.isNewServer)
+        XCTAssertNil(opened.service)
+        XCTAssertNil(opened.layer)
+        XCTAssertEqual(opened.server.friendlyName, "Sample 6")
+        XCTAssertEqual(opened.server.arcgisVersion, 10.91)
+
+        let services = try await db.services(serverID: opened.server.id)
+        XCTAssertTrue(services.contains { $0.name == "Census" && $0.type == .mapServer })
+        XCTAssertTrue(services.contains { $0.name == "Utilities/Geometry" && $0.folderPath == "Utilities" })
+        XCTAssertTrue(services.allSatisfy { !$0.isCrawled }, "shallow crawl fetches no service definitions")
+        // Root + 13 folders, nothing else.
+        XCTAssertEqual(requestPaths().count, 14)
+        XCTAssertTrue(requestPaths().allSatisfy { !$0.contains("Server") })
+    }
+
+    func testOpenAgainIsFromCache() async throws {
+        _ = try await crawler.open(root)
+        let before = transport.count
+        let again = try await crawler.open(root + "/Utilities")
+        XCTAssertFalse(again.isNewServer)
+        XCTAssertEqual(again.location.folderPath, "Utilities")
+        XCTAssertEqual(transport.count, before, "a known server is not re-listed on open")
+    }
+
+    func testOpenLayerURLCrawlsItsServiceViaBulkEndpoint() async throws {
+        let opened = try await crawler.open(root + "/Census/MapServer/3/query?where=1%3D1")
+        let service = try XCTUnwrap(opened.service)
+        XCTAssertEqual(service.name, "Census")
+        XCTAssertTrue(service.isCrawled)
+        XCTAssertEqual(service.maxRecordCount, 1000)
+        let layer = try XCTUnwrap(opened.layer)
+        XCTAssertEqual(layer.layerID, 3)
+        XCTAssertEqual(layer.name, "states")
+        XCTAssertTrue(layer.isCrawled)
+        XCTAssertEqual(layer.objectIdField, "OBJECTID")
+        let fields = try await db.fields(layerID: layer.id)
+        XCTAssertGreaterThan(fields.count, 10)
+        let raw = try await db.layerRawJSON(id: layer.id)
+        XCTAssertTrue(raw?.contains("\"name\":\"states\"") == true, "raw is the single layer element")
+        XCTAssertFalse(raw?.contains("\"layers\":[") == true)
+
+        let paths = requestPaths()
+        XCTAssertTrue(paths.contains("/arcgis/rest/services/Census/MapServer"))
+        XCTAssertTrue(paths.contains("/arcgis/rest/services/Census/MapServer/layers"))
+        XCTAssertFalse(paths.contains("/arcgis/rest/services/Census/MapServer/3"), "bulk covered it")
+        let allLayers = try await db.layers(serviceID: service.id)
+        XCTAssertTrue(allLayers.allSatisfy(\.isCrawled))
+    }
+
+    func testBulkFailureFallsBackToPerLayerRequests() async throws {
+        let opened = try await crawler.open(root + "/Wildfire/FeatureServer/0")
+        let layer = try XCTUnwrap(opened.layer)
+        XCTAssertEqual(layer.objectIdField, "objectid")
+        XCTAssertEqual(layer.hasAttachments, true)
+        let service = try XCTUnwrap(opened.service)
+        let all = try await db.layers(serviceID: service.id)
+        XCTAssertGreaterThan(all.count, 1)
+        XCTAssertTrue(all.allSatisfy(\.isCrawled))
+        XCTAssertTrue(all.contains { $0.name.hasPrefix("Synthetic") })
+        let paths = requestPaths()
+        XCTAssertTrue(paths.contains("/arcgis/rest/services/Wildfire/FeatureServer/layers"))
+        XCTAssertTrue(paths.contains("/arcgis/rest/services/Wildfire/FeatureServer/0"))
+    }
+
+    func testEveryRequestCarriesTheHeaders() async throws {
+        _ = try await crawler.open(root + "/Census/MapServer")
+        for request in transport.requests {
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Origin"), "https://sampleserver6.arcgisonline.com")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Referer"), "https://sampleserver6.arcgisonline.com/")
+        }
+    }
+
+    func testNonArcGISURLIsRejectedBeforeAnyRequest() async throws {
+        await XCTAssertThrowsErrorAsync(try await self.crawler.open("https://example.com/nothing")) { error in
+            XCTAssertEqual(error as? ArcGISURLError, .notArcGIS("https://example.com/nothing"))
+        }
+        XCTAssertEqual(transport.count, 0)
+    }
+
+    func testDeepCrawlContinuesPastBrokenServicesAndReportsThem() async throws {
+        let opened = try await crawler.open(root)
+        let log = EventLog()
+        let failures = try await crawler.deepCrawl(serverID: opened.server.id) { event in
+            log.append(event)
+        }
+        XCTAssertEqual(failures.count, 1)
+        guard case .failed(let what, let message) = failures[0] else { return XCTFail("expected .failed") }
+        XCTAssertEqual(what, "Hurricanes")
+        XCTAssertTrue(message.contains("Service unavailable"), message)
+
+        let server = try await db.server(id: opened.server.id)
+        XCTAssertNotNil(server.lastDeepCrawlAt)
+        let services = try await db.services(serverID: server.id)
+        let census = try XCTUnwrap(services.first { $0.name == "Census" })
+        XCTAssertTrue(census.isCrawled)
+        let events = log.events
+        XCTAssertTrue(events.contains(.service(name: "Census", layers: 4)))
+        XCTAssertTrue(events.contains(.layer(name: "states")))
+        XCTAssertTrue(events.contains(.directory(folderPath: "Utilities", services: 4)))
+    }
+
+    func testRawElementSlicing() throws {
+        let bulk = try Fixtures.data("s6-census-layers.json")
+        let element = try XCTUnwrap(try Crawler.rawElement(for: 3, in: bulk))
+        let decoded = try ArcGISJSON.decode(LayerInfo.self, from: element)
+        XCTAssertEqual(decoded.name, "states")
+        XCTAssertNil(try Crawler.rawElement(for: 99, in: bulk))
+    }
+}
+
+/// Collects crawl events from the progress callback, which may run off the test's task.
+private final class EventLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = [CrawlEvent]()
+    func append(_ e: CrawlEvent) { lock.withLock { storage.append(e) } }
+    var events: [CrawlEvent] { lock.withLock { storage } }
+}

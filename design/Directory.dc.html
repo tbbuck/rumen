@@ -1,0 +1,184 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap">
+  <style>
+    body { margin: 0; }
+    a { color: #2447C7; text-decoration: none; } a:hover { color: #1A36A0; text-decoration: underline; }
+    .root { font-family: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif; color: var(--ink); background: var(--backdrop); box-sizing: border-box; padding: 20px; -webkit-font-smoothing: antialiased; }
+    .root.day { --backdrop:#E4E4DF; --bg:#F7F7F4; --panel:#FFFFFF; --line:#DEDED8; --line2:#C9C9C1; --ink:#161A1F; --muted:#5A6068; --muted2:#8A9097; --accent:#2447C7; --accent-soft:rgba(36,71,199,.10); --on-accent:#FFFFFF; --yes:#1E7A4A; --yes-soft:rgba(30,122,74,.13); --no:#B42B2B; --no-soft:rgba(180,43,43,.11); --shadow:0 30px 70px -30px rgba(22,26,31,.40); }
+    .root.night { --backdrop:#12151A; --bg:#1C2027; --panel:#232830; --line:#333A44; --line2:#414A56; --ink:#E6E8EB; --muted:#A3ABB5; --muted2:#7B8591; --accent:#8AA6FF; --accent-soft:rgba(138,166,255,.14); --on-accent:#0E1530; --yes:#5CC08A; --yes-soft:rgba(92,192,138,.16); --no:#E0706A; --no-soft:rgba(224,112,106,.14); --shadow:0 40px 90px -30px rgba(0,0,0,.7); }
+    .root.night a { color: #8AA6FF; }
+    .mono { font-family: "IBM Plex Mono", "SF Mono", Menlo, monospace; font-variant-numeric: tabular-nums; }
+    .win { width: 100%; height: 100%; background: var(--bg); border: 1px solid var(--line2); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; display: flex; flex-direction: column; }
+    .titlebar { height: 48px; flex: 0 0 48px; display: flex; align-items: center; gap: 14px; padding: 0 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
+    .lights { display: flex; gap: 8px; margin-right: 4px; }
+    .light { width: 12px; height: 12px; border-radius: 6px; }
+    .pathbar { flex: 1 1 auto; height: 30px; display: flex; align-items: center; gap: 2px; padding: 0 10px; border: 1px solid var(--line2); border-radius: 7px; background: var(--bg); font-size: 13px; box-sizing: border-box; overflow: hidden; white-space: nowrap; }
+    .pathbar .seg { padding: 3px 6px; border-radius: 5px; color: var(--muted); }
+    .pathbar .seg.host { color: var(--ink); display: flex; align-items: center; gap: 6px; }
+    .pathbar .seg.here { color: var(--ink); font-weight: 600; background: var(--accent-soft); }
+    .pathbar .sep { width: 12px; height: 12px; color: var(--muted2); flex: 0 0 12px; }
+    .pathbar .tail { margin-left: auto; font-size: 11px; color: var(--muted2); }
+    .search { display: flex; align-items: center; gap: 6px; width: 190px; height: 30px; padding: 0 9px; border: 1px solid var(--line2); border-radius: 7px; background: var(--bg); color: var(--muted2); font-size: 12.5px; box-sizing: border-box; }
+    .body { flex: 1 1 auto; display: flex; min-height: 0; }
+    .tree { width: 292px; flex: 0 0 292px; background: var(--panel); border-right: 1px solid var(--line); padding: 14px 0 0; display: flex; flex-direction: column; overflow: hidden; }
+    .server { padding: 0 16px 12px; display: flex; flex-direction: column; gap: 2px; }
+    .server .n { font-size: 13.5px; font-weight: 600; }
+    .server .v { font-size: 11px; color: var(--muted2); }
+    .row { display: flex; align-items: center; gap: 7px; height: 26px; padding-right: 14px; font-size: 13px; white-space: nowrap; }
+    .row.sel { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+    .row.dim { color: var(--muted2); }
+    .row .id { font-size: 11px; color: var(--muted2); width: 14px; text-align: right; flex: 0 0 14px; }
+    .row .kind { margin-left: auto; padding-left: 10px; font-size: 10px; color: var(--muted2); }
+    .chev { width: 10px; height: 10px; flex: 0 0 10px; color: var(--muted2); }
+    .glyph { width: 14px; height: 14px; flex: 0 0 14px; color: var(--muted); }
+    .row.sel .glyph { color: var(--accent); }
+    .vg { width: 9px; height: 9px; flex: 0 0 9px; margin-left: auto; }
+    .vg.yes { color: var(--yes); } .vg.no { color: var(--no); } .vg.unk { color: var(--muted2); }
+    .detail { flex: 1 1 auto; min-width: 0; padding: 24px 36px 0; display: flex; flex-direction: column; gap: 18px; overflow: hidden; }
+    .h1 .name { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
+    .h1 .sub { font-size: 13px; color: var(--muted); margin-top: 3px; }
+    .tabs { display: flex; gap: 24px; border-bottom: 1px solid var(--line); font-size: 13px; font-weight: 500; color: var(--muted); }
+    .tabs span { padding: 0 0 8px; }
+    .tabs span.on { color: var(--ink); box-shadow: inset 0 -2px 0 var(--accent); }
+    .extract { max-width: 720px; display: flex; flex-direction: column; gap: 12px; }
+    .extract .say { font-size: 15px; line-height: 1.5; }
+    .extract .say strong { color: var(--yes); font-weight: 600; }
+    .actions { display: flex; align-items: center; gap: 18px; }
+    .btn { height: 30px; padding: 0 12px; display: flex; align-items: center; border-radius: 6px; background: var(--accent); color: var(--on-accent); font-size: 13px; font-weight: 500; }
+    .actions a { font-size: 13px; }
+    .dl { display: grid; grid-template-columns: 150px 1fr 150px 1fr; gap: 6px 20px; font-size: 12.5px; max-width: 880px; }
+    .dl .k { color: var(--muted); }
+    .dl .v { }
+    .sect { font-size: 13px; font-weight: 600; margin-top: 2px; }
+    .table { font-size: 12.5px; }
+    .tr { display: grid; grid-template-columns: 170px 170px 150px 100px 1fr; gap: 14px; height: 27px; align-items: center; border-bottom: 1px solid var(--line); }
+    .tr.th { color: var(--muted); font-size: 11.5px; font-weight: 500; height: 26px; }
+    .tr .a { color: var(--muted); }
+    .tr .dom { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .strip { flex: 0 0 40px; height: 40px; border-top: 1px solid var(--line); background: var(--panel); display: flex; align-items: center; gap: 14px; padding: 0 18px; font-size: 12.5px; }
+    .strip .lab { color: var(--muted); font-weight: 500; }
+    .strip .dot { width: 8px; height: 8px; border-radius: 4px; background: var(--accent); }
+    .bar { width: 220px; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+    .bar div { height: 100%; width: 66.6%; background: var(--accent); }
+    .strip .m { color: var(--muted); font-size: 11.5px; }
+    .strip a { margin-left: auto; font-size: 12.5px; }
+  </style>
+</helmet>
+<div class="root {{theme}}" style="width: 1180px; height: 760px;">
+  <svg width="0" height="0" style="position: absolute;" aria-hidden="true">
+    <defs>
+      <symbol id="i-folder" viewBox="0 0 16 16"><path d="M1.5 4.5a1 1 0 0 1 1-1h3l1.5 1.5h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-10.5a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.2"></path></symbol>
+      <symbol id="i-service" viewBox="0 0 16 16"><ellipse cx="8" cy="4.5" rx="5.5" ry="2" fill="none" stroke="currentColor" stroke-width="1.2"></ellipse><path d="M2.5 4.5v7c0 1.1 2.5 2 5.5 2s5.5-.9 5.5-2v-7M2.5 8c0 1.1 2.5 2 5.5 2s5.5-.9 5.5-2" fill="none" stroke="currentColor" stroke-width="1.2"></path></symbol>
+      <symbol id="i-host" viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"></rect><rect x="2" y="9" width="12" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"></rect><circle cx="4.5" cy="5" r=".9" fill="currentColor"></circle><circle cx="4.5" cy="11" r=".9" fill="currentColor"></circle></symbol>
+      <symbol id="i-point" viewBox="0 0 16 16"><circle cx="8" cy="8" r="3" fill="currentColor"></circle></symbol>
+      <symbol id="i-line" viewBox="0 0 16 16"><path d="M2 12.5c3-1 4-7 6-7s3 5 6-1" fill="none" stroke="currentColor" stroke-width="1.4"></path></symbol>
+      <symbol id="i-poly" viewBox="0 0 16 16"><path d="M3 5.5 8 2.5l5.5 3.5-1.5 7H4z" fill="none" stroke="currentColor" stroke-width="1.3"></path></symbol>
+      <symbol id="i-raster" viewBox="0 0 16 16"><path d="M2.5 2.5h11v11h-11zM2.5 6.2h11M2.5 9.8h11M6.2 2.5v11M9.8 2.5v11" fill="none" stroke="currentColor" stroke-width="1.1"></path></symbol>
+      <symbol id="i-table" viewBox="0 0 16 16"><path d="M2.5 3.5h11v9h-11zM2.5 6.5h11M2.5 9.5h11M7 3.5v9" fill="none" stroke="currentColor" stroke-width="1.1"></path></symbol>
+      <symbol id="i-anno" viewBox="0 0 16 16"><path d="M3.5 13 8 3l4.5 10M5.3 9.5h5.4" fill="none" stroke="currentColor" stroke-width="1.3"></path></symbol>
+      <symbol id="i-chev-down" viewBox="0 0 10 10"><path d="M2 3.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.3"></path></symbol>
+      <symbol id="i-chev-right" viewBox="0 0 10 10"><path d="M3.5 2l3 3-3 3" fill="none" stroke="currentColor" stroke-width="1.3"></path></symbol>
+      <symbol id="i-sep" viewBox="0 0 12 12"><path d="M4.5 2.5 8 6l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.3"></path></symbol>
+      <symbol id="i-search" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.2" fill="none" stroke="currentColor" stroke-width="1.3"></circle><path d="M10.2 10.2 14 14" stroke="currentColor" stroke-width="1.3"></path></symbol>
+      <symbol id="v-yes" viewBox="0 0 9 9"><rect x=".5" y=".5" width="8" height="8" rx="1.5" fill="currentColor"></rect></symbol>
+      <symbol id="v-no" viewBox="0 0 9 9"><rect x=".5" y=".5" width="8" height="8" rx="1.5" fill="none" stroke="currentColor"></rect><path d="M2.5 2.5l4 4M6.5 2.5l-4 4" stroke="currentColor" stroke-width="1.1"></path></symbol>
+      <symbol id="v-unk" viewBox="0 0 9 9"><rect x=".5" y=".5" width="8" height="8" rx="1.5" fill="none" stroke="currentColor" stroke-dasharray="1.5 1.5"></rect></symbol>
+    </defs>
+  </svg>
+  <div class="win">
+    <div class="titlebar">
+      <div class="lights"><div class="light" style="background: #E8615A;"></div><div class="light" style="background: #E3B04A;"></div><div class="light" style="background: #5FBE67;"></div></div>
+      <div class="pathbar">
+        <span class="seg host"><svg width="13" height="13"><use href="#i-host"></use></svg>gis.ashcombe.gov.uk</span>
+        <svg class="sep"><use href="#i-sep"></use></svg><span class="seg">Property</span>
+        <svg class="sep"><use href="#i-sep"></use></svg><span class="seg">LLPG</span>
+        <svg class="sep"><use href="#i-sep"></use></svg><span class="seg">MapServer</span>
+        <svg class="sep"><use href="#i-sep"></use></svg><span class="seg here">3 BLPU Addresses</span>
+        <span class="tail mono">arcgis/rest/services</span>
+      </div>
+      <div class="search"><svg width="13" height="13"><use href="#i-search"></use></svg><span>Find a column</span></div>
+    </div>
+    <div class="body">
+      <div class="tree">
+        <div class="server"><span class="n">Ashcombe Borough Council</span><span class="v">ArcGIS Server 11.3, cached 14 minutes ago</span></div>
+        <div class="row" style="padding-left: 14px;"><svg class="chev"><use href="#i-chev-down"></use></svg><svg class="glyph"><use href="#i-folder"></use></svg><span>Planning</span></div>
+        <div class="row" style="padding-left: 32px;"><svg class="chev"><use href="#i-chev-right"></use></svg><svg class="glyph"><use href="#i-service"></use></svg><span>PlanningApplications</span><span class="kind">FeatureServer</span></div>
+        <div class="row" style="padding-left: 14px;"><svg class="chev"><use href="#i-chev-down"></use></svg><svg class="glyph"><use href="#i-folder"></use></svg><span>Property</span></div>
+        <div class="row" style="padding-left: 32px;"><svg class="chev"><use href="#i-chev-down"></use></svg><svg class="glyph"><use href="#i-service"></use></svg><span>LLPG</span><span class="kind">MapServer</span></div>
+        <div class="row" style="padding-left: 54px;"><span class="id mono">0</span><svg class="glyph"><use href="#i-line"></use></svg><span>Streets</span><svg class="vg yes"><use href="#v-yes"></use></svg></div>
+        <div class="row" style="padding-left: 54px;"><span class="id mono">1</span><svg class="glyph"><use href="#i-poly"></use></svg><span>Wards</span><svg class="vg yes"><use href="#v-yes"></use></svg></div>
+        <div class="row" style="padding-left: 54px;"><span class="id mono">2</span><svg class="glyph"><use href="#i-poly"></use></svg><span>Parishes</span><svg class="vg yes"><use href="#v-yes"></use></svg></div>
+        <div class="row sel" style="padding-left: 54px;"><span class="id mono">3</span><svg class="glyph"><use href="#i-point"></use></svg><span>BLPU Addresses</span><svg class="vg yes"><use href="#v-yes"></use></svg></div>
+        <div class="row dim" style="padding-left: 54px;"><span class="id mono">4</span><svg class="glyph"><use href="#i-anno"></use></svg><span>Cadastral annotation</span><svg class="vg no"><use href="#v-no"></use></svg></div>
+        <div class="row dim" style="padding-left: 54px;"><span class="id mono">5</span><svg class="glyph"><use href="#i-raster"></use></svg><span>Aerial 2024</span><svg class="vg no"><use href="#v-no"></use></svg></div>
+        <div class="row" style="padding-left: 54px;"><span class="id mono">6</span><svg class="glyph"><use href="#i-table"></use></svg><span>Cross references</span><svg class="vg unk"><use href="#v-unk"></use></svg></div>
+        <div class="row" style="padding-left: 14px;"><svg class="chev"><use href="#i-chev-right"></use></svg><svg class="glyph"><use href="#i-folder"></use></svg><span>Environment</span></div>
+        <div class="row" style="padding-left: 14px;"><svg class="chev"><use href="#i-chev-right"></use></svg><svg class="glyph"><use href="#i-folder"></use></svg><span>Highways</span></div>
+      </div>
+      <div class="detail">
+        <div class="h1"><div class="name">BLPU Addresses</div><div class="sub">Layer 3 in LLPG (MapServer). Cached 14 minutes ago, <a href="#">refresh</a>.</div></div>
+        <div class="tabs"><span class="on">Overview</span><span>Fields</span><span>Query</span><span>Download</span><span>Map</span><span>Raw</span></div>
+        <div class="extract">
+          <div class="say"><strong>Extractable.</strong> PBF through the FeatureServer twin, offset paging at 2,000 records per request. 184,212 features in 93 requests.</div>
+          <div class="actions"><span class="btn">Download as GeoParquet</span><a href="#">Change format or spatial reference</a><a href="#">Preview a sample on the map</a></div>
+        </div>
+        <div class="dl">
+          <span class="k">Geometry</span><span class="v">Point, British National Grid (27700)</span>
+          <span class="k">Object ID field</span><span class="v mono">OBJECTID</span>
+          <span class="k">Extent, native</span><span class="v mono">320412 88231 to 345880 109774</span>
+          <span class="k">Global ID field</span><span class="v mono">GlobalID</span>
+          <span class="k">Extent, WGS 84</span><span class="v mono">-3.128 50.681 to -2.769 50.876</span>
+          <span class="k">Z and M values</span><span class="v">Neither</span>
+          <span class="k">Feature count</span><span class="v">184,212, counted 2 minutes ago</span>
+          <span class="k">Attachments</span><span class="v">None</span>
+          <span class="k">Max record count</span><span class="v">2,000</span>
+          <span class="k">Query formats</span><span class="v">JSON, geoJSON, PBF</span>
+          <span class="k">Capabilities</span><span class="v">Map, Query, Data</span>
+          <span class="k">Paging</span><span class="v">Offset paging, order by, statistics</span>
+          <span class="k">FeatureServer twin</span><span class="v"><a href="#" class="mono">…/Property/LLPG/FeatureServer/3</a></span>
+          <span class="k">Layer type</span><span class="v">Feature Layer</span>
+        </div>
+        <div class="sect">Fields</div>
+        <div class="table">
+          <div class="tr th"><span>Name</span><span>Alias</span><span>Esri type</span><span>DuckDB type</span><span>Domain</span></div>
+          <div class="tr"><span class="mono">OBJECTID</span><span class="a">Object ID</span><span class="mono">OID</span><span class="mono">BIGINT</span><span class="dom"></span></div>
+          <div class="tr"><span class="mono">UPRN</span><span class="a">UPRN</span><span class="mono">String 12</span><span class="mono">VARCHAR</span><span class="dom"></span></div>
+          <div class="tr"><span class="mono">USRN</span><span class="a">USRN</span><span class="mono">Integer</span><span class="mono">INTEGER</span><span class="dom"></span></div>
+          <div class="tr"><span class="mono">FULL_ADDRESS</span><span class="a">Full address</span><span class="mono">String 250</span><span class="mono">VARCHAR</span><span class="dom"></span></div>
+          <div class="tr"><span class="mono">POSTCODE</span><span class="a">Postcode</span><span class="mono">String 8</span><span class="mono">VARCHAR</span><span class="dom"></span></div>
+          <div class="tr"><span class="mono">BLPU_STATE</span><span class="a">BLPU state</span><span class="mono">SmallInteger</span><span class="mono">SMALLINT</span><span class="dom">1 Under construction, 2 In use, 3 Unoccupied, 4 Demolished</span></div>
+          <div class="tr"><span class="mono">LOGICAL_STATUS</span><span class="a">Logical status</span><span class="mono">SmallInteger</span><span class="mono">SMALLINT</span><span class="dom">1 Approved, 6 Provisional, 8 Historical</span></div>
+          <div class="tr"><span class="mono">LAST_UPDATE_DATE</span><span class="a">Last update</span><span class="mono">Date</span><span class="mono">TIMESTAMP</span><span class="dom"></span></div>
+          <div class="tr"><span class="mono">GlobalID</span><span class="a">Global ID</span><span class="mono">GlobalID</span><span class="mono">UUID</span><span class="dom"></span></div>
+          <div class="tr"><span class="mono">SHAPE</span><span class="a">Shape</span><span class="mono">Geometry</span><span class="mono">GEOMETRY</span><span class="dom">Written as WKB, 4326 on export</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="strip">
+      <span class="lab">Transfers</span>
+      <span class="dot"></span><span>Applications, Planning</span>
+      <div class="bar"><div></div></div>
+      <span class="m mono">138 of 207 requests, 4.2k features/s, 1:40 left</span>
+      <a href="#">Show all 3</a>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script data-dc-script data-props='{"dark":{"editor":"boolean","default":false,"section":"Appearance"},"$preview":{"width":1180,"height":760}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const dark = this.props.dark ?? false;
+    return { theme: dark ? 'night' : 'day' };
+  }
+}
+</script>
+</body>
+</html>

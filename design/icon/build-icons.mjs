@@ -112,7 +112,7 @@ function mapFragment(box, featH, gratStep, strokeW, dash, feature = smooth) {
   // a magenta outline, not a solid slab.
   return `<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" fill="${p.water}"/>
       <path d="${g.join('')}" stroke="${p.grat}" stroke-width="4" fill="none"/>
-      <path d="${pathFor(feature, proj)}" fill="${p.accent}" fill-opacity="0.32" stroke="${p.accent}" stroke-width="${strokeW}" stroke-linejoin="round" fill-rule="evenodd"/>
+      <path d="${pathFor(feature, proj)}" fill="${p.accent}" fill-opacity="0.32" stroke="${p.accent}" stroke-width="${Math.round(strokeW * 0.4)}" stroke-linejoin="round" fill-rule="evenodd"/>
       <rect x="${ext.x.toFixed(1)}" y="${ext.y.toFixed(1)}" width="${ext.w.toFixed(1)}" height="${ext.h.toFixed(1)}" fill="${p.accentSoft}" stroke="${p.accent}" stroke-width="${strokeW}" stroke-dasharray="${dash}"/>`;
 }
 

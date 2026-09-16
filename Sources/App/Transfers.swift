@@ -77,11 +77,11 @@ struct TransferRun: Identifiable, Equatable {
         return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
     }
 
-    /// "Census / states, where 1=1, WGS 84, GeoParquet" — or the output path once done.
+    /// "ONS: Census / states, where 1=1, WGS 84, GeoParquet" — or the output path once done.
     var targetLine: String {
         if status == .complete, let path = record.outputPath { return path }
         let sr = record.outWkid == 4326 ? "WGS 84" : "EPSG:\(record.outWkid)"
-        return "\(serviceName) / \(layerName), where \(record.whereClause), \(sr), \(record.format.label)"
+        return "\(serverName): \(serviceName) / \(layerName), where \(record.whereClause), \(sr), \(record.format.label)"
     }
 }
 
@@ -95,7 +95,10 @@ struct TransfersStrip: View {
             Text("Transfers").font(.sheetUI(12.5, .semibold)).foregroundStyle(Palette.muted)
             if let run = model.headlineRun {
                 StatusDot(color: run.dotColor)
-                Text("\(run.layerName), \(run.serviceName)").font(.sheetUI(12.5)).foregroundStyle(Palette.ink).lineLimit(1)
+                HStack(spacing: 6) {
+                    Text("\(run.layerName), \(run.serviceName)").font(.sheetUI(12.5)).foregroundStyle(Palette.ink).lineLimit(1)
+                    Text("on \(run.serverName)").font(.sheetUI(12.5)).foregroundStyle(Palette.muted2).lineLimit(1)
+                }
                 ProgressBar(fraction: run.fraction, color: run.status == .complete ? Palette.yes : (run.status == .paused ? Palette.warn : Palette.accent), height: 4)
                     .frame(width: 220)
                 Text(run.stats).font(.sheetMono(11)).foregroundStyle(Palette.muted).lineLimit(1)
@@ -182,6 +185,7 @@ private struct RunRow: View {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 8) {
                     Text(run.layerName).font(.sheetUI(13.5, .bold)).foregroundStyle(Palette.ink).lineLimit(1)
+                    Text("on \(run.serverName)").font(.sheetUI(12.5)).foregroundStyle(Palette.muted).lineLimit(1)
                     Chip(text: run.record.transport.rawValue.uppercased())
                     Chip(text: run.record.strategy.label.capitalizedFirst)
                     if let (text, style) = run.statusChip { Chip(text: text, style: style) }

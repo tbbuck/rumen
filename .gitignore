@@ -1,2 +1,17 @@
 .claude
 CLAUDE.md
+claude-scripts/
+claude-sql/
+
+# Local MapTiler key override — never commit (see Config/maptiler.xcconfig)
+Config/maptiler.local.xcconfig
+
+# Xcode / SwiftPM
+*.xcodeproj/
+.build/
+.swiftpm/
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+.DS_Store

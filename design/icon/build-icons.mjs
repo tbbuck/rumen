@@ -38,7 +38,9 @@ function squirclePath() {
 const SQUIRCLE = squirclePath();
 
 // Sheet palette (DESIGN-TOKENS.md, Day), plus the icon's own grounds.
-const p = { ground: '#EDEFE9', paper: '#FFFFFF', land: '#D4DECB', landLine: '#A2B297', line2: '#BEC5BA', grat: '#CBD7E4', water: '#DCE7F0', muted2: '#8A948E', accent: '#B8236B', accentSoft: 'rgba(184,35,107,0.10)', ghost: '#9FB0BF', ghostGrat: 'rgba(34,42,38,0.09)' };
+// Land is a warm sand so that cool accents (greens, teals, inks) stand off it; the
+// water stays pale blue.
+const p = { ground: '#EDEFE9', paper: '#FFFFFF', land: '#E6E0CC', landLine: '#C3B89C', line2: '#BEC5BA', grat: '#CBD7E4', water: '#DCE7F0', muted2: '#8A948E', accent: '#B8236B', accentSoft: 'rgba(184,35,107,0.10)', ghost: '#9FB0BF', ghostGrat: 'rgba(34,42,38,0.09)' };
 
 // The extent is a query box over part of the layer, not the layer's own bounding
 // box: England and Wales, with the top edge cutting across Britain and Scotland and
@@ -211,7 +213,7 @@ function conceptC(feature = bold) {
 }
 
 const concepts = [
-  { key: 'A', file: 'A-footprint.svg', name: 'A · Footprint', svg: conceptA(), why: 'The tile is the sheet: graticule, pale water, Great Britain and Ireland as sage land, and a dashed magenta extent boxing England and Wales. The box cuts across the land, so magenta means the extent, not the map.', tradeoff: 'Pale ground, so quiet on a light desktop.' },
+  { key: 'A', file: 'A-footprint.svg', name: 'A · Footprint', svg: conceptA(), why: 'The tile is the sheet: graticule, pale water, Great Britain and Ireland as sand land, and a dashed extent boxing England and Wales. The box cuts across the land, so the accent means the extent, not the map.', tradeoff: 'Pale ground, so quiet on a light desktop.' },
   { key: 'A2', file: 'A-smooth.svg', name: 'A · smoother coast', svg: conceptA(smooth, 'A · smoother coast'), why: 'The same frame with the less generalised coastline, for comparison.', tradeoff: 'The Highland lochs bring back texture that reads as noise at 32px.' },
   { key: 'B', file: 'B-sheet.svg', name: 'B · Sheet', svg: conceptB(), why: 'The same map on a white sheet with margins and ticks, lying on the pale ground. The marginalia are the signature.', tradeoff: 'The ticks vanish below 64px; at Finder sizes it is a white square with a magenta shape.' },
   { key: 'C', file: 'C-pulled-layer.svg', name: 'C · Pulled layer', svg: conceptC(), why: 'Three sheets from one server: blank paper at the back, gridded paper in the middle, and the white front sheet lifted away with the layer highlighted. The only concept that shows what the app does: extraction.', tradeoff: 'Busiest silhouette; a stack can read as a generic layers glyph.' },
@@ -223,10 +225,11 @@ const concepts = [
 // reading as a warning at 16px. Each candidate is the day value; the night value
 // is the same hue lifted for the dark palette.
 const accents = [
-  { key: 'cobalt', name: 'Cobalt', day: '#2F55D4', night: '#7C9BFF', why: 'The selection marquee colour. A blue box over a map means "this area", never danger; it stays distinct from the pale water because the water is barely blue.' },
-  { key: 'violet', name: 'Violet', day: '#6A3FD6', night: '#A78BFF', why: 'Highlight rather than alarm. Nothing on a sheet is violet, so it can only be the app’s own mark.' },
-  { key: 'plum', name: 'Plum', day: '#8A2C74', night: '#D078C0', why: 'The Landranger magenta pushed toward purple: keeps the kinship with the UI tokens, loses most of the red.' },
-  { key: 'explorer', name: 'Explorer orange', day: '#DE6F16', night: '#F4A15A', why: 'The Ordnance Survey Explorer cover colour. Warm, cartographic, high contrast on sage and blue.' },
+  { key: 'emerald', name: 'Emerald', day: '#1E8A55', night: '#5CC98F', why: 'A clear green: the colour of "go" and of the app’s own Extractable verdict. Strong on sand, distinct from the water.' },
+  { key: 'pine', name: 'Pine', day: '#2C6B4A', night: '#7DB894', why: 'A darker, cartographic green, the tone OS uses for woodland. Calmer than emerald, still unmistakably green at 16px.' },
+  { key: 'teal', name: 'Teal ink', day: '#1E7A72', night: '#3FA091', why: 'DuckLake Explorer’s ink teal. Family resemblance between the two apps, and it reads as ink rather than signal.' },
+  { key: 'petrol', name: 'Petrol', day: '#116C7E', night: '#5AB3C4', why: 'Blue-green, deeper than the water. Reads as a survey line drawn in coloured ink.' },
+  { key: 'slate', name: 'Ink slate', day: '#34475A', night: '#C7D3DE', why: 'The box as plain ink: no colour signal at all, only the drawn line. The quietest option; the map carries the colour.' },
 ];
 
 function hexToRgba(hex, alpha) {
@@ -324,7 +327,7 @@ const content = `<div class="wrap">
     <div class="label">Dark desktop, 64px</div>
   </div>
   <h1>Extent colour</h1>
-  <p class="lede">The magenta reads as red at Dock size, and red means danger. Four candidates on frame A, each chosen to contrast with the sage land and pale water without alarming. The pick would also become the app's accent token.</p>
+  <p class="lede">The magenta reads as red at Dock size, and red means danger. Five cool candidates on frame A, over warm sand land and pale water, none of which can be read as a warning. The pick would also become the app's accent token.</p>
   <div class="strip light">
     <div class="grid">${accentRows}</div>
     ${dock('light', accentFrames)}

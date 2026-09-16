@@ -110,33 +110,108 @@ private struct DirectoryPage: View {
     }
 }
 
+/// Children of a folder or service as navigation rows: id or glyph, name, a line of detail,
+/// the locator, and a chevron that answers the hover. Every row is a link.
 private struct ChildList: View {
-    @Environment(AppModel.self) private var model
     let nodes: [TreeNode]
 
     var body: some View {
         LazyVStack(spacing: 0) {
             ForEach(nodes) { node in
-                Button {
-                    Task { await model.select(node.id) }
-                } label: {
-                    HStack(spacing: 8) {
-                        Text(node.name).font(.sheetUI(13)).foregroundStyle(Palette.ink)
-                        if case .service(let type) = node.kind { KindLabel(type: type) }
-                        if case .service = node.kind, node.fetchedAt == nil, node.isExpandable {
-                            Caption("not crawled", size: 11, color: Palette.muted2)
-                        }
-                        Spacer()
-                        ExtentLocator(extent: node.extent, frame: model.tree?.extent)
-                    }
-                    .frame(height: 27)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+                ChildRow(node: node)
                 Rectangle().fill(Palette.line).frame(height: 1)
             }
         }
         .frame(maxWidth: 880)
+    }
+}
+
+private struct ChildRow: View {
+    @Environment(AppModel.self) private var model
+    let node: TreeNode
+    @State private var hovered = false
+
+    var body: some View {
+        Button {
+            Task { await model.select(node.id) }
+        } label: {
+            HStack(spacing: 10) {
+                leading
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 8) {
+                        Text(node.name).font(.sheetUI(13, .medium)).foregroundStyle(Palette.ink).lineLimit(1)
+                        if case .service(let type) = node.kind { KindLabel(type: type) }
+                    }
+                    if let detail {
+                        Caption(detail, size: 11, color: Palette.muted2).lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 12)
+                ExtentLocator(extent: node.extent, frame: model.tree?.extent, style: locatorStyle)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(hovered ? Palette.accent : Palette.muted2)
+                    .offset(x: hovered ? 2 : 0)
+                    .frame(width: 14)
+            }
+            .padding(.horizontal, 10)
+            .frame(minHeight: 38)
+            .background(hovered ? Palette.line.opacity(0.55) : .clear, in: RoundedRectangle(cornerRadius: 6))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .hoverTracking($hovered, hand: true)
+    }
+
+    /// The layer id in mono, as in the tree; a glyph for folders and services.
+    @ViewBuilder private var leading: some View {
+        switch node.kind {
+        case .layer, .table:
+            Text(node.layerID.map(String.init) ?? "")
+                .font(.sheetMono(11)).foregroundStyle(Palette.muted2)
+                .frame(width: 22, alignment: .trailing)
+        case .folder:
+            Image(systemName: "folder").font(.system(size: 12)).foregroundStyle(Palette.muted).frame(width: 22)
+        case .service, .server:
+            Image(systemName: "square.stack.3d.up").font(.system(size: 12)).foregroundStyle(Palette.muted).frame(width: 22)
+        }
+    }
+
+    private var detail: String? {
+        switch node.kind {
+        case .layer:
+            switch node.extractable {
+            case true?: return "Layer · extractable"
+            case false?: return "Layer · not extractable"
+            default: return "Layer"
+            }
+        case .table:
+            return "Table · no geometry"
+        case .service:
+            if node.fetchedAt == nil { return node.isExpandable ? "Not crawled yet; opens from the server" : nil }
+            let layers = node.children.filter { $0.kind == .layer }.count
+            let tables = node.children.filter { $0.kind == .table }.count
+            var parts = [String]()
+            if layers > 0 { parts.append(layers == 1 ? "1 layer" : "\(layers) layers") }
+            if tables > 0 { parts.append(tables == 1 ? "1 table" : "\(tables) tables") }
+            return parts.isEmpty ? nil : parts.joined(separator: ", ")
+        case .folder:
+            let folders = node.children.filter { $0.kind == .folder }.count
+            let services = node.children.count - folders
+            var parts = [String]()
+            if folders > 0 { parts.append(folders == 1 ? "1 folder" : "\(folders) folders") }
+            if services > 0 { parts.append(services == 1 ? "1 service" : "\(services) services") }
+            return parts.isEmpty ? nil : parts.joined(separator: ", ")
+        case .server:
+            return nil
+        }
+    }
+
+    private var locatorStyle: ExtentLocator.Style {
+        switch node.kind {
+        case .table: return .table
+        default: return node.extractable == false ? .notExtractable : .normal
+        }
     }
 }
 

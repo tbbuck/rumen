@@ -50,7 +50,11 @@ private struct ServerHeader: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(server.friendlyName).font(.sheetUI(14, .bold)).foregroundStyle(Palette.ink).lineLimit(1)
+            HStack(alignment: .top, spacing: 8) {
+                Text(server.friendlyName).font(.sheetUI(14, .bold)).foregroundStyle(Palette.ink).lineLimit(1)
+                Spacer(minLength: 8)
+                CloseServerButton()
+            }
             Caption(caption, size: 11, color: Palette.muted2).lineLimit(1)
             if let status = model.deepCrawlStatus {
                 HStack(spacing: 4) {
@@ -224,5 +228,27 @@ private struct ChevronButton: View {
         .buttonStyle(.plain)
         .hoverTracking($hovered)
         .help(expanded ? "Collapse" : "Expand")
+    }
+}
+
+/// Closes the server view and returns to the start page (all servers). Also ⌘⇧H.
+private struct CloseServerButton: View {
+    @Environment(AppModel.self) private var model
+    @State private var hovered = false
+
+    var body: some View {
+        Button {
+            model.showStartPage()
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(hovered ? Palette.ink : Palette.muted2)
+                .frame(width: 20, height: 20)
+                .background(hovered ? Palette.line : .clear, in: RoundedRectangle(cornerRadius: 5))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .hoverTracking($hovered, hand: true)
+        .help("Close this server and go back to all servers (⌘⇧H)")
     }
 }

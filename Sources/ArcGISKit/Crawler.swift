@@ -1,5 +1,15 @@
 import Foundation
 
+/// A folder that could not be listed during a shallow crawl; the rest of the server still opens.
+public struct CrawlProblem: Sendable, Equatable {
+    public let folderPath: String
+    public let message: String
+    public init(folderPath: String, message: String) {
+        self.folderPath = folderPath
+        self.message = message
+    }
+}
+
 /// Progress events from a crawl, for a UI progress indicator.
 public enum CrawlEvent: Sendable, Equatable {
     case directory(folderPath: String, services: Int)
@@ -42,6 +52,8 @@ public actor Crawler {
         public let service: ServiceRecord?
         public let layer: LayerRecord?
         public let isNewServer: Bool
+        /// Folders that could not be listed; empty when the whole directory was read.
+        public var problems: [CrawlProblem] = []
     }
 
     /// Parses `text`, registers its server root (or touches an existing one), runs a
@@ -54,8 +66,9 @@ public actor Crawler {
         let server = try await db.addServer(rootURL: location.rootURL,
                                             friendlyName: friendlyName ?? location.rootURL.host ?? "server")
         let isNew = existing == nil
+        var problems = [CrawlProblem]()
         if isNew {
-            try await shallowCrawl(serverID: server.id, progress: progress)
+            problems = try await shallowCrawl(serverID: server.id, progress: progress)
         }
         var service: ServiceRecord?
         var layer: LayerRecord?
@@ -74,21 +87,26 @@ public actor Crawler {
                 }
             }
         }
-        return Opened(server: try await db.server(id: server.id), location: location,
-                      service: service, layer: layer, isNewServer: isNew)
+        var opened = Opened(server: try await db.server(id: server.id), location: location,
+                            service: service, layer: layer, isNewServer: isNew)
+        opened.problems = problems
+        return opened
     }
 
     // MARK: - Shallow crawl
 
-    /// Root listing, then every folder recursively. Records the server's version.
-    public func shallowCrawl(serverID: Int64, progress: (@Sendable (CrawlEvent) -> Void)? = nil) async throws {
+    /// Root listing, then every folder recursively. Records the server's version. The root
+    /// must list; a folder that fails is returned as a problem and the rest carries on.
+    @discardableResult
+    public func shallowCrawl(serverID: Int64, progress: (@Sendable (CrawlEvent) -> Void)? = nil) async throws -> [CrawlProblem] {
         try await crawlDirectory(serverID: serverID, folderPath: "", recursive: true, progress: progress)
     }
 
     /// Lists one directory (root when `folderPath` is empty), upserting and pruning its
     /// services. With `recursive`, descends into the folders it lists.
+    @discardableResult
     public func crawlDirectory(serverID: Int64, folderPath: String, recursive: Bool = false,
-                               progress: (@Sendable (CrawlEvent) -> Void)? = nil) async throws {
+                               progress: (@Sendable (CrawlEvent) -> Void)? = nil) async throws -> [CrawlProblem] {
         let server = try await db.server(id: serverID)
         let conn = await connection(server)
         let listing = try await client.serviceDirectory(conn, folder: folderPath.isEmpty ? nil : folderPath).value
@@ -99,13 +117,23 @@ public actor Crawler {
                                                   folderPath: folderPath, entries: listing.services)
         try await db.pruneServices(serverID: serverID, folderPath: folderPath, keeping: records.map(\.url))
         progress?(.directory(folderPath: folderPath, services: records.count))
-        guard recursive else { return }
+        guard recursive else { return [] }
+        var problems = [CrawlProblem]()
         for folder in listing.folders {
             try Task.checkCancellation()
             // Folder names in a listing are bare at the root but may be "Parent/Child" deeper.
             let path = folder.contains("/") ? folder : (folderPath.isEmpty ? folder : folderPath + "/" + folder)
-            try await crawlDirectory(serverID: serverID, folderPath: path, recursive: true, progress: progress)
+            do {
+                problems += try await crawlDirectory(serverID: serverID, folderPath: path, recursive: true, progress: progress)
+            } catch {
+                if error is CancellationError { throw error }
+                if let client = error as? ArcGISClientError, case .cancelled = client { throw error }
+                let message = String(describing: error)
+                progress?(.failed(what: "folder \(path)", error: message))
+                problems.append(CrawlProblem(folderPath: path, message: message))
+            }
         }
+        return problems
     }
 
     // MARK: - Service crawl

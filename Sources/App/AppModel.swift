@@ -475,6 +475,7 @@ final class AppModel {
 
     /// Registers a new server from the Add-server sheet.
     func addServer(_ pending: PendingAdd, friendlyName: String) async {
+        guard pendingAdd != nil else { return }   // Return and the button can both fire; add once
         pendingAdd = nil
         await open(pending.text, friendlyName: friendlyName)
     }
@@ -521,8 +522,19 @@ final class AppModel {
             } else {
                 await select(.server(opened.server.id))
             }
+            if !opened.problems.isEmpty {
+                let listed = opened.problems.prefix(3).map { "\($0.folderPath): \($0.message)" }.joined(separator: "; ")
+                let more = opened.problems.count > 3 ? " and \(opened.problems.count - 3) more" : ""
+                errorText = "\(opened.problems.count == 1 ? "One folder" : "\(opened.problems.count) folders") could not be listed and will be missing from the tree: \(listed)\(more). Refresh to try again."
+            }
         } catch {
             errorText = String(describing: error)
+            // The server may have been registered before the failure: go there rather than
+            // leaving the user on whatever was open before.
+            if let database, let root = (try? ArcGISURL.parse(text))?.rootURL,
+               let server = try? await database.server(rootURL: root), currentServer?.id != server.id {
+                await selectServer(server.id)
+            }
         }
     }
 

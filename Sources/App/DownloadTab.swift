@@ -10,7 +10,7 @@ struct DownloadTab: View {
     let layer: LayerRecord
     let service: ServiceRecord
     @State private var whereClause = "1=1"
-    @State private var wgs84 = true
+    @State private var wgs84 = false
     @State private var domainLabels = false
     @State private var manualStrategy: Assessment.Strategy = .offset
     @State private var manualPageSize = 1000

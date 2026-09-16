@@ -20,7 +20,6 @@ struct PathBar: View {
                     .onExitCommand { model.cancelURLEdit() }
                     .onAppear { editing = true }
             } else if let content = model.pathContent, let server = model.currentServer {
-                HomeButton()
                 HostSegment(server: server)
                 ForEach(Array(content.segments.dropFirst().enumerated()), id: \.offset) { index, segment in
                     Image(systemName: "chevron.right")
@@ -178,27 +177,5 @@ private struct AppearanceButton: View {
         .buttonStyle(.plain)
         .hoverTracking($hovered, hand: !isOn)
         .help(help)
-    }
-}
-
-/// Back to the start page (all servers). Also ⌘⇧H.
-private struct HomeButton: View {
-    @Environment(AppModel.self) private var model
-    @State private var hovered = false
-
-    var body: some View {
-        Button {
-            model.showStartPage()
-        } label: {
-            Image(systemName: "square.grid.2x2")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(hovered ? Palette.ink : Palette.muted)
-                .frame(width: 22, height: 22)
-                .background(hovered ? Palette.line.opacity(0.7) : .clear, in: RoundedRectangle(cornerRadius: 5))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .hoverTracking($hovered, hand: true)
-        .help("Start page: all servers (⌘⇧H)")
     }
 }

@@ -178,8 +178,9 @@ For a selected layer or table:
   as a per-layer preference so the fallback sticks).
 - Always `POST` to `/query` with a form body; URLs with long `objectIds` or `where`
   lists would otherwise exceed server limits.
-- `outSR` defaults to **4326**; the native SR is available as an option and is
-  recorded in the GeoParquet metadata either way.
+- `outSR` defaults to the layer's **native** spatial reference (first use showed that is
+  what a GIS user reaches for); WGS 84 is the other option. Either way the CRS is recorded
+  in the GeoParquet metadata.
 - `returnZ` and `returnM` are set from the layer's `hasZ`/`hasM`.
 
 **Strategy selection (automatic, in order)**

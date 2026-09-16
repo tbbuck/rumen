@@ -5,8 +5,12 @@
 //
 //   node design/icon/build-icons.mjs <preview-dir>
 //
-// Writes design/icon/<Name>.svg for each concept and <preview-dir>/icon-preview.html.
-import { writeFile, mkdir } from 'node:fs/promises';
+// Geography comes from design/icon/geography.json (Overture Maps division areas,
+// pulled by `duckdb -f design/icon/geography.sql`): the Isle of Wight is the feature,
+// the mainland counties are the coast behind it. Writes design/icon/<Name>.svg for each
+// concept and, in <preview-dir>, icon-preview.html (standalone) and
+// arcgis-explorer-icon.html (Artifact fragment).
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -33,47 +37,87 @@ function squirclePath() {
 }
 const SQUIRCLE = squirclePath();
 
-// Sheet palette (DESIGN-TOKENS.md).
-const day = { bg: '#F2F4F0', panel: '#FAFBF8', line: '#D6DBD2', line2: '#BEC5BA', grat: '#C5D3E2', water: '#DCE7F0', ink: '#222A26', muted2: '#8A948E', accent: '#B8236B', accentSoft: 'rgba(184,35,107,0.09)' };
-const night = { bg: '#1A2128', bg2: '#11161B', panel: '#212930', line2: '#445362', grat: '#34506A', water: '#22303D', ink: '#E7EAE6', muted2: '#7B867F', accent: '#EA6AA6', accentSoft: 'rgba(234,106,166,0.14)' };
+// Sheet palette (DESIGN-TOKENS.md, Day), plus the icon's own grounds.
+const p = { ground: '#EDEFE9', paper: '#FFFFFF', land: '#F4F5F1', line2: '#BEC5BA', grat: '#C5D3E2', water: '#DCE7F0', muted2: '#8A948E', accent: '#B8236B', accentSoft: 'rgba(184,35,107,0.06)' };
+const backSheets = ['#D6DBD3', '#E4E7E1'];
 
-// Deterministic sample points, clustered like real addresses.
-function samplePoints(box, seedStart) {
-  let seed = seedStart;
-  const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
-  const towns = [[0.26, 0.3], [0.7, 0.4], [0.52, 0.76], [0.8, 0.8]];
-  const pts = [];
-  for (let i = 0; i < 44; i++) {
-    const t = towns[i % towns.length];
-    const spread = i % 6 === 0 ? 0.42 : 0.16;
-    const x = t[0] + (rnd() - 0.5) * spread;
-    const y = t[1] + (rnd() - 0.5) * spread * 1.1;
-    if (x > 0.06 && x < 0.94 && y > 0.06 && y < 0.94) {
-      pts.push([box.x + x * box.w, box.y + y * box.h]);
-    }
+// ---- Geography -------------------------------------------------------------
+
+const geo = JSON.parse(await readFile(join(here, 'geography.json'), 'utf8'));
+const byName = Object.fromEntries(geo.map(f => [f.name, f.geojson]));
+const island = byName['Isle of Wight'];
+const mainland = geo.filter(f => f.name !== 'Isle of Wight').map(f => f.geojson);
+if (!island || mainland.length === 0) {
+  console.error('geography.json is missing the island or the mainland; re-run claude-sql/icon-geography.sql');
+  process.exit(1);
+}
+
+function rings(geojson) {
+  if (geojson.type === 'Polygon') return geojson.coordinates;
+  if (geojson.type === 'MultiPolygon') return geojson.coordinates.flat();
+  return [];
+}
+
+function bboxOf(geojson) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const ring of rings(geojson)) for (const [x, y] of ring) {
+    if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
   }
-  return pts;
+  return { x0, y0, x1, y1 };
 }
 
-function circles(pts, r, fill) {
-  return pts.map(([x, y]) => `<circle cx="${x.toFixed(0)}" cy="${y.toFixed(0)}" r="${r}" fill="${fill}"/>`).join('\n      ');
+// A window onto the map: the island sits at `islandY` (fraction of the box height,
+// measured to the island's centre) and spans `islandW` of the box width. Equal scale
+// in x and y (equirectangular corrected by cos of the mid latitude), so shapes keep
+// their proportions.
+function windowFor(box, islandW, islandY) {
+  const ib = bboxOf(island);
+  const midLat = (ib.y0 + ib.y1) / 2;
+  const k = Math.cos(midLat * Math.PI / 180);
+  const lonSpan = (ib.x1 - ib.x0) / islandW;
+  const scale = box.w / (lonSpan * k);          // px per degree of latitude
+  const latSpan = box.h / scale;
+  const lonCentre = (ib.x0 + ib.x1) / 2;
+  const latTop = midLat + latSpan * islandY;
+  return { lon0: lonCentre - lonSpan / 2, latTop, k, scale, box };
 }
 
-// Grid lines across a box, every `step`, starting at `offset` from the box origin.
-function graticule(box, step, offset, stroke, width) {
-  const d = [];
-  for (let x = box.x + offset; x < box.x + box.w; x += step) d.push(`M${x} ${box.y}V${box.y + box.h}`);
-  for (let y = box.y + offset; y < box.y + box.h; y += step) d.push(`M${box.x} ${y}H${box.x + box.w}`);
-  return `<path d="${d.join('')}" stroke="${stroke}" stroke-width="${width}" fill="none"/>`;
+function project(win) {
+  return ([lon, lat]) => [win.box.x + (lon - win.lon0) * win.k * win.scale, win.box.y + (win.latTop - lat) * win.scale];
 }
 
-function footprint(box, p, strokeW, dash) {
-  return `<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" fill="${p.accentSoft}" stroke="${p.accent}" stroke-width="${strokeW}" stroke-dasharray="${dash}" stroke-linecap="butt"/>`;
+function pathFor(geojson, proj) {
+  return rings(geojson).map(r => 'M' + r.map(pt => { const [x, y] = proj(pt); return `${x.toFixed(1)} ${y.toFixed(1)}`; }).join('L') + 'Z').join('');
 }
+
+function extentRect(geojson, proj) {
+  const b = bboxOf(geojson);
+  const [x0, y0] = proj([b.x0, b.y1]);
+  const [x1, y1] = proj([b.x1, b.y0]);
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+// The map fragment inside `box`: water, mainland, graticule, the island, its extent.
+function mapFragment(box, islandW, islandY, gratStep, strokeW, dash) {
+  const win = windowFor(box, islandW, islandY);
+  const proj = project(win);
+  const ext = extentRect(island, proj);
+  const g = [];
+  for (let x = box.x + gratStep / 2; x < box.x + box.w; x += gratStep) g.push(`M${x} ${box.y}V${box.y + box.h}`);
+  for (let y = box.y + gratStep / 2; y < box.y + box.h; y += gratStep) g.push(`M${box.x} ${y}H${box.x + box.w}`);
+  return `<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" fill="${p.water}"/>
+      <path d="${mainland.map(m => pathFor(m, proj)).join('')}" fill="${p.land}" fill-rule="evenodd"/>
+      <path d="${g.join('')}" stroke="${p.grat}" stroke-width="4" fill="none"/>
+      <path d="${pathFor(island, proj)}" fill="${p.accent}" fill-rule="evenodd"/>
+      <rect x="${ext.x.toFixed(1)}" y="${ext.y.toFixed(1)}" width="${ext.w.toFixed(1)}" height="${ext.h.toFixed(1)}" fill="${p.accentSoft}" stroke="${p.accent}" stroke-width="${strokeW}" stroke-dasharray="${dash}"/>`;
+}
+
+// ---- Concepts --------------------------------------------------------------
 
 function svgDoc(name, comment, defs, body) {
   return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1024 1024" width="1024" height="1024">
   <!-- ArcGIS Explorer app icon concept "${name}". ${comment}
+       Geography: Isle of Wight and the Solent coast from Overture Maps (OSM, ODbL).
        Flat master: Apple's macOS squircle tile (824pt on a 1024pt canvas) is baked in.
        Generated by design/icon/build-icons.mjs; edit the script, not this file. -->
   <defs>
@@ -88,103 +132,71 @@ function svgDoc(name, comment, defs, body) {
 `;
 }
 
-// A · Footprint (day): the tile is the sheet.
+const SOFT = `<filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="16"/></filter>`;
+
+// A · Footprint: the tile is the sheet.
 function conceptA() {
-  const p = day;
   const tile = { x: 0, y: 0, w: 1024, h: 1024 };
-  const fp = { x: 318, y: 286, w: 458, h: 436 };
-  const pts = samplePoints(fp, 41);
-  const body = `<rect width="1024" height="1024" fill="#EDEFE9"/>
-    ${graticule(tile, 160, 72, p.grat, 4)}
-    <path d="M0 790 C 130 760 230 800 340 828 S 560 900 700 878 S 900 826 1024 846 V1024 H0 Z" fill="${p.water}"/>
-    ${footprint(fp, p, 16, '46 30')}
-    <g>
-      ${circles(pts, 13, p.accent)}
+  const body = `<g>
+      ${mapFragment(tile, 0.56, 0.58, 160, 16, '46 30')}
     </g>`;
-  return svgDoc('A · Footprint', 'The tile is the survey sheet: graticule, a corner of water, and the layer footprint with its sample.', '', body);
+  return svgDoc('A · Footprint', 'The tile is the survey sheet: the Solent coast, the graticule, the Isle of Wight as the layer and its dashed extent.', '', body);
 }
 
-// B · Sheet on the desk (night): a paper sheet with margins and ticks on a slate tile.
+// B · Sheet: a white map sheet with margins and ticks on the pale ground.
 function conceptB() {
-  const p = night;
   const sheet = { x: 156, y: 156, w: 712, h: 712 };
   const map = { x: 202, y: 202, w: 620, h: 620 };
-  const fp = { x: 350, y: 316, w: 380, h: 360 };
-  const pts = samplePoints(fp, 77);
   const ticks = [];
   for (let x = map.x + 96; x < map.x + map.w; x += 96) ticks.push(`M${x} ${sheet.y + 14}V${map.y - 6}`);
   for (let y = map.y + 96; y < map.y + map.h; y += 96) ticks.push(`M${sheet.x + 14} ${y}H${map.x - 6}`);
-  const defs = `<linearGradient id="ground" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${p.bg}"/><stop offset="1" stop-color="${p.bg2}"/></linearGradient>
-    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="18"/></filter>
+  const defs = `${SOFT}
     <clipPath id="map"><rect x="${map.x}" y="${map.y}" width="${map.w}" height="${map.h}"/></clipPath>`;
-  const body = `<rect width="1024" height="1024" fill="url(#ground)"/>
-    <rect x="${sheet.x}" y="${sheet.y + 26}" width="${sheet.w}" height="${sheet.h}" rx="26" fill="#000" opacity="0.45" filter="url(#soft)"/>
-    <rect x="${sheet.x}" y="${sheet.y}" width="${sheet.w}" height="${sheet.h}" rx="26" fill="${day.bg}"/>
-    <path d="${ticks.join('')}" stroke="${day.muted2}" stroke-width="5" fill="none"/>
+  const body = `<rect width="1024" height="1024" fill="${p.ground}"/>
+    <rect x="${sheet.x}" y="${sheet.y + 24}" width="${sheet.w}" height="${sheet.h}" rx="26" fill="#000" opacity="0.22" filter="url(#soft)"/>
+    <rect x="${sheet.x}" y="${sheet.y}" width="${sheet.w}" height="${sheet.h}" rx="26" fill="${p.paper}"/>
+    <path d="${ticks.join('')}" stroke="${p.muted2}" stroke-width="5" fill="none"/>
     <g clip-path="url(#map)">
-      <rect x="${map.x}" y="${map.y}" width="${map.w}" height="${map.h}" fill="${day.panel}"/>
-      ${graticule(map, 96, 0, day.grat, 4)}
-      <path d="M${map.x} 700 C 300 670 380 700 470 730 S 640 790 740 770 S 820 740 ${map.x + map.w} 760 V${map.y + map.h} H${map.x} Z" fill="${day.water}"/>
+      ${mapFragment(map, 0.6, 0.58, 96, 14, '40 26')}
     </g>
-    <rect x="${map.x}" y="${map.y}" width="${map.w}" height="${map.h}" fill="none" stroke="${day.line2}" stroke-width="4"/>
-    ${footprint(fp, day, 14, '40 26')}
-    <g>
-      ${circles(pts, 12, day.accent)}
-    </g>`;
-  return svgDoc('B · Sheet', 'A paper map sheet with margins and ticks lying on the night slate; the footprint and sample drawn on it.', defs, body);
+    <rect x="${map.x}" y="${map.y}" width="${map.w}" height="${map.h}" fill="none" stroke="${p.line2}" stroke-width="4"/>`;
+  return svgDoc('B · Sheet', 'A white map sheet with margins and ticks on the pale ground; the Solent, the island and its extent drawn on it.', defs, body);
 }
 
-// C · Pulled layer (night): the front sheet of a stack lifted away.
+// C · Pulled layer: the front sheet of a stack lifted away.
 function conceptC() {
-  const p = night;
   const w = 500, h = 580, rx = 30;
   const sheets = [
-    { x: 196, y: 332, fill: '#C9D0C8' },
-    { x: 246, y: 282, fill: '#DEE2DC' },
+    { x: 196, y: 332, fill: backSheets[0] },
+    { x: 246, y: 282, fill: backSheets[1] },
   ];
-  const front = { x: 330, y: 132 };
-  const map = { x: front.x, y: front.y, w, h };
-  const fp = { x: front.x + 92, y: front.y + 120, w: 316, h: 320 };
-  const pts = samplePoints(fp, 19);
-  const defs = `<linearGradient id="ground" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${p.bg}"/><stop offset="1" stop-color="${p.bg2}"/></linearGradient>
-    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="16"/></filter>
+  const front = { x: 330, y: 132, w, h };
+  const defs = `${SOFT}
     <clipPath id="front"><rect x="${front.x}" y="${front.y}" width="${w}" height="${h}" rx="${rx}"/></clipPath>`;
-  const back = sheets.map(s => `<rect x="${s.x}" y="${s.y + 22}" width="${w}" height="${h}" rx="${rx}" fill="#000" opacity="0.4" filter="url(#soft)"/>
+  const back = sheets.map(s => {
+    const g = [];
+    for (let x = s.x + 48; x < s.x + w; x += 96) g.push(`M${x} ${s.y}V${s.y + h}`);
+    for (let y = s.y + 48; y < s.y + h; y += 96) g.push(`M${s.x} ${y}H${s.x + w}`);
+    return `<rect x="${s.x}" y="${s.y + 20}" width="${w}" height="${h}" rx="${rx}" fill="#000" opacity="0.18" filter="url(#soft)"/>
     <rect x="${s.x}" y="${s.y}" width="${w}" height="${h}" rx="${rx}" fill="${s.fill}"/>
-    ${graticule({ x: s.x, y: s.y, w, h }, 96, 48, 'rgba(34,42,38,0.10)', 4)}`).join('\n    ');
-  const body = `<rect width="1024" height="1024" fill="url(#ground)"/>
+    <path d="${g.join('')}" stroke="rgba(34,42,38,0.08)" stroke-width="4" fill="none"/>`;
+  }).join('\n    ');
+  const body = `<rect width="1024" height="1024" fill="${p.ground}"/>
     ${back}
-    <rect x="${front.x}" y="${front.y + 28}" width="${w}" height="${h}" rx="${rx}" fill="#000" opacity="0.5" filter="url(#soft)"/>
+    <rect x="${front.x}" y="${front.y + 26}" width="${w}" height="${h}" rx="${rx}" fill="#000" opacity="0.28" filter="url(#soft)"/>
     <g clip-path="url(#front)">
-      <rect x="${front.x}" y="${front.y}" width="${w}" height="${h}" fill="${day.bg}"/>
-      ${graticule(map, 96, 48, day.grat, 4)}
-      <path d="M${front.x} 560 C 420 540 480 570 560 600 S 720 650 ${front.x + w} 620 V${front.y + h} H${front.x} Z" fill="${day.water}"/>
-    </g>
-    ${footprint(fp, day, 14, '40 26')}
-    <g>
-      ${circles(pts, 11, day.accent)}
+      ${mapFragment(front, 0.74, 0.55, 96, 14, '40 26')}
     </g>`;
-  return svgDoc('C · Pulled layer', 'Three sheets from a server; the front one is lifted away carrying its footprint. Extraction as a gesture.', defs, body);
-}
-
-// D · Locator (night): the tree's locator glyph, large and pure.
-function conceptD() {
-  const p = night;
-  const frame = { x: 192, y: 258, w: 640, h: 508 };
-  const ext = { x: 348, y: 390, w: 320, h: 250 };
-  const defs = `<linearGradient id="ground" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${p.bg}"/><stop offset="1" stop-color="${p.bg2}"/></linearGradient>`;
-  const body = `<rect width="1024" height="1024" fill="url(#ground)"/>
-    <rect x="${frame.x}" y="${frame.y}" width="${frame.w}" height="${frame.h}" rx="44" fill="none" stroke="${p.ink}" stroke-width="44"/>
-    <rect x="${ext.x}" y="${ext.y}" width="${ext.w}" height="${ext.h}" rx="12" fill="${p.accent}"/>`;
-  return svgDoc('D · Locator', 'The extent locator from the tree, large and pure: the server frame, the layer inside it.', defs, body);
+  return svgDoc('C · Pulled layer', 'Three sheets from a server; the white front one is lifted away carrying the island. Extraction as a gesture.', defs, body);
 }
 
 const concepts = [
-  { key: 'A', file: 'A-footprint.svg', name: 'A · Footprint', svg: conceptA(), why: 'The tile is the sheet. It is the Map tab in miniature: graticule, a corner of water, the dashed footprint and its sample.', tradeoff: 'A pale tile in a Dock of saturated icons; it reads quiet rather than loud.' },
-  { key: 'B', file: 'B-sheet.svg', name: 'B · Sheet', svg: conceptB(), why: 'A paper map sheet with margins and ticks, lying on the night slate. The marginalia are the signature.', tradeoff: 'The ticks vanish below 64px; at Finder sizes it is a pale square with a magenta box.' },
-  { key: 'C', file: 'C-pulled-layer.svg', name: 'C · Pulled layer', svg: conceptC(), why: 'Three sheets from a server, the front one lifted away with its footprint. The only concept that shows what the app does: extraction.', tradeoff: 'Busiest silhouette; the stack can read as a generic layers glyph.' },
-  { key: 'D', file: 'D-locator.svg', name: 'D · Locator', svg: conceptD(), why: 'The tree locator glyph, large and pure: the server frame, the layer inside it. Reads at 16px.', tradeoff: 'Abstract; nothing says map until you know the app.' },
+  { key: 'A', file: 'A-footprint.svg', name: 'A · Footprint', svg: conceptA(), why: 'The tile is the sheet. Real geography: the Solent coast along the top, the Isle of Wight as the layer in magenta, and the dashed extent that is its true bounding box.', tradeoff: 'Pale and quiet on a light desktop.' },
+  { key: 'B', file: 'B-sheet.svg', name: 'B · Sheet', svg: conceptB(), why: 'The same map on a white sheet with margins and ticks, lying on the pale ground. The marginalia are the signature.', tradeoff: 'The ticks vanish below 64px; at Finder sizes it is a white square with a magenta island.' },
+  { key: 'C', file: 'C-pulled-layer.svg', name: 'C · Pulled layer', svg: conceptC(), why: 'Three sheets from a server, the white front one lifted away carrying the island. The only concept that shows what the app does: extraction.', tradeoff: 'Busiest silhouette; a stack can read as a generic layers glyph.' },
 ];
+
+// ---- Preview page ----------------------------------------------------------
 
 // Inline an SVG into the page with ids namespaced per concept and the fixed size removed.
 function inlineSvg(key, svg) {
@@ -215,63 +227,7 @@ function dock(theme) {
   return `<div class="dock ${theme}"><div class="dock-item ghost"></div>${items}<div class="dock-item ghost"></div></div>`;
 }
 
-const page = `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ArcGIS Explorer Icon</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cabin:wght@400;500;600;700&display=swap">
-<style>
-  :root { --bg: #E9EAE6; --ink: #222A26; --muted: #5E6863; --dock: rgba(255,255,255,.55); --dock-line: rgba(0,0,0,.08); }
-  body { margin: 0; background: var(--bg); color: var(--ink); font-family: "Cabin", "Gill Sans", "Helvetica Neue", sans-serif; }
-  .wrap { max-width: 1240px; margin: 0 auto; padding: 32px 24px 60px; }
-  h1 { font-size: 22px; font-weight: 700; margin: 0 0 4px; }
-  .lede { color: var(--muted); font-size: 14px; margin: 0 0 28px; max-width: 720px; line-height: 1.5; }
-  .strip { border-radius: 16px; padding: 24px; margin-bottom: 28px; }
-  .strip.light { background: #F1F2EE; }
-  .strip.dark { background: #26292E; color: #E7EAE6; --muted: #A2ACA6; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 28px; }
-  .concept { display: flex; flex-direction: column; gap: 14px; }
-  .big { width: 256px; height: 256px; }
-  .big svg, .sz svg, .dock-item svg { width: 100%; height: 100%; display: block; filter: drop-shadow(0 1.5px 3px rgba(0,0,0,.22)); }
-  .sizes { display: flex; align-items: flex-end; gap: 14px; height: 128px; }
-  h2 { font-size: 15px; font-weight: 700; margin: 0 0 4px; }
-  .text p { margin: 0; font-size: 13px; line-height: 1.45; color: var(--muted); max-width: 300px; }
-  .text .trade { margin-top: 4px; }
-  .dock { display: flex; gap: 10px; padding: 10px; border-radius: 22px; background: var(--dock); border: 1px solid var(--dock-line); width: max-content; margin: 18px auto 0; }
-  .dock.dark { --dock: rgba(40,42,48,.85); --dock-line: rgba(255,255,255,.08); }
-  .dock-item { width: 64px; height: 64px; }
-  .dock-item.ghost { border-radius: 14px; background: rgba(120,125,120,.35); width: 52px; height: 52px; margin: 6px; }
-  .label { font-size: 12px; color: var(--muted); text-align: center; margin-top: 8px; }
-</style>
-</head>
-<body>
-<div class="wrap">
-  <h1>ArcGIS Explorer app icon</h1>
-  <p class="lede">Four concepts in the Sheet language, each on Apple's squircle tile at Dock (128, 64), sidebar (32) and Finder list (16) sizes. The two Dock strips show them beside neighbours on a light and a dark desktop.</p>
-  <div class="strip light">
-    <div class="grid">${rows}</div>
-    ${dock('light')}
-    <div class="label">Light desktop, 64px</div>
-  </div>
-  <div class="strip dark">
-    ${dock('dark')}
-    <div class="label">Dark desktop, 64px</div>
-  </div>
-</div>
-</body>
-</html>
-`;
-
-// The same page as a fragment for publishing as an Artifact (the host supplies the
-// document skeleton and paints its own ground, so the page tokens follow its theme).
-const artifactPage = `<title>ArcGIS Explorer Icon</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cabin:wght@400;500;600;700&display=swap">
-<style>
-  :root { --bg: #E9EAE6; --ink: #222A26; --muted: #5E6863; --dock: rgba(255,255,255,.55); --dock-line: rgba(0,0,0,.08); }
-  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #14181D; --ink: #E7EAE6; --muted: #A2ACA6; } }
-  :root[data-theme="dark"] { --bg: #14181D; --ink: #E7EAE6; --muted: #A2ACA6; }
+const css = `
   body { margin: 0; background: var(--bg); color: var(--ink); font-family: "Cabin", "Gill Sans", "Helvetica Neue", sans-serif; }
   .wrap { max-width: 1240px; margin: 0 auto; padding-block: 32px 60px; padding-inline: 24px; }
   h1 { font-size: 22px; font-weight: 700; margin: 0 0 4px; }
@@ -279,23 +235,24 @@ const artifactPage = `<title>ArcGIS Explorer Icon</title>
   .strip { border-radius: 16px; padding: 24px; margin-bottom: 28px; }
   .strip.light { background: #F1F2EE; color: #222A26; --muted: #5E6863; }
   .strip.dark { background: #26292E; color: #E7EAE6; --muted: #A2ACA6; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 28px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 28px; }
   .concept { display: flex; flex-direction: column; gap: 14px; }
-  .big { width: 256px; max-width: 100%; aspect-ratio: 1; }
+  .big { width: 300px; max-width: 100%; aspect-ratio: 1; }
   .big svg, .sz svg, .dock-item svg { width: 100%; height: 100%; display: block; filter: drop-shadow(0 1.5px 3px rgba(0,0,0,.22)); }
   .sizes { display: flex; align-items: flex-end; gap: 14px; height: 128px; }
   h2 { font-size: 15px; font-weight: 700; margin: 0 0 4px; }
-  .text p { margin: 0; font-size: 13px; line-height: 1.45; color: var(--muted); max-width: 300px; }
+  .text p { margin: 0; font-size: 13px; line-height: 1.45; color: var(--muted); max-width: 320px; }
   .text .trade { margin-top: 4px; }
   .dock { display: flex; gap: 10px; padding: 10px; border-radius: 22px; background: var(--dock); border: 1px solid var(--dock-line); width: max-content; max-width: 100%; margin: 18px auto 0; overflow-x: auto; }
   .dock.dark { --dock: rgba(40,42,48,.85); --dock-line: rgba(255,255,255,.08); }
   .dock-item { width: 64px; height: 64px; flex: 0 0 64px; }
   .dock-item.ghost { border-radius: 14px; background: rgba(120,125,120,.35); width: 52px; height: 52px; flex-basis: 52px; margin: 6px; }
   .label { font-size: 12px; color: var(--muted); text-align: center; margin-top: 8px; }
-</style>
-<div class="wrap">
+`;
+
+const content = `<div class="wrap">
   <h1>ArcGIS Explorer app icon</h1>
-  <p class="lede">Four concepts in the Sheet language, each on Apple's squircle tile at Dock (128, 64), sidebar (32) and Finder list (16) sizes. The two Dock strips show them beside neighbours on a light and a dark desktop.</p>
+  <p class="lede">Concepts in the Sheet language on Apple's squircle tile at Dock (128, 64), sidebar (32) and Finder list (16) sizes. The geography is real: the Isle of Wight and the Solent coast from Overture Maps. The two Dock strips show the icons beside neighbours on a light and a dark desktop.</p>
   <div class="strip light">
     <div class="grid">${rows}</div>
     ${dock('light')}
@@ -307,6 +264,38 @@ const artifactPage = `<title>ArcGIS Explorer Icon</title>
   </div>
 </div>
 `;
+
+const fontLink = `<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cabin:wght@400;500;600;700&display=swap">`;
+
+const page = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ArcGIS Explorer Icon</title>
+${fontLink}
+<style>
+  :root { --bg: #E9EAE6; --ink: #222A26; --muted: #5E6863; --dock: rgba(255,255,255,.55); --dock-line: rgba(0,0,0,.08); }
+${css}
+</style>
+</head>
+<body>
+${content}
+</body>
+</html>
+`;
+
+// The same page as a fragment for publishing as an Artifact (the host supplies the
+// document skeleton and paints its own ground, so the page tokens follow its theme).
+const artifactPage = `<title>ArcGIS Explorer Icon</title>
+${fontLink}
+<style>
+  :root { --bg: #E9EAE6; --ink: #222A26; --muted: #5E6863; --dock: rgba(255,255,255,.55); --dock-line: rgba(0,0,0,.08); }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #14181D; --ink: #E7EAE6; --muted: #A2ACA6; } }
+  :root[data-theme="dark"] { --bg: #14181D; --ink: #E7EAE6; --muted: #A2ACA6; }
+${css}
+</style>
+${content}`;
 
 await mkdir(previewDir, { recursive: true });
 for (const c of concepts) await writeFile(join(here, c.file), c.svg);

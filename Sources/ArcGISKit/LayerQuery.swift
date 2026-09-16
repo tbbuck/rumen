@@ -45,6 +45,8 @@ public struct QueryOptions: Sendable, Equatable {
     public var count: Int? = nil
     public var distinct: Bool = false
     public var statistics: [StatisticDefinition] = []
+    /// `objectIds=`: fetch exactly these features (the OID-list strategy).
+    public var objectIDs: [Int64]? = nil
 
     public init(whereClause: String = "1=1", outFields: [String]? = nil, returnGeometry: Bool = true,
                 outWkid: Int? = nil, orderBy: (field: String, ascending: Bool)? = nil, offset: Int? = nil,
@@ -76,6 +78,7 @@ public struct QueryOptions: Sendable, Equatable {
         if let offset { p["resultOffset"] = String(offset) }
         if let count { p["resultRecordCount"] = String(count) }
         if distinct { p["returnDistinctValues"] = "true" }
+        if let objectIDs, !objectIDs.isEmpty { p["objectIds"] = objectIDs.map(String.init).joined(separator: ",") }
         if !statistics.isEmpty {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys]   // deterministic for tests and caching
@@ -100,5 +103,27 @@ extension ArcGISClient {
         if let outWkid { params["outSR"] = String(outWkid) }
         return try await json(ExtentResponse.self, .post, url: layerURL.appendingPathComponent("query"),
                               params: params, server: server).value.extent
+    }
+}
+
+/// `query?returnIdsOnly=true`.
+public struct ObjectIDsResponse: Decodable, Sendable, Equatable {
+    public let objectIdFieldName: String?
+    public let objectIds: [Int64]?
+}
+
+extension ArcGISClient {
+    /// The raw `f=pbf` body of a feature query, for `PBFDecoder`.
+    public func featuresPBF(_ server: ServerConnection, layerURL: URL, options: QueryOptions) async throws -> Data {
+        var params = options.params
+        params["f"] = "pbf"
+        return try await request(.post, url: layerURL.appendingPathComponent("query"), params: params, server: server)
+    }
+
+    /// Every object id matching `where`, as the server lists them.
+    public func objectIDs(_ server: ServerConnection, layerURL: URL, where whereClause: String = "1=1") async throws -> [Int64] {
+        let params = ["where": whereClause, "returnIdsOnly": "true"]
+        return try await json(ObjectIDsResponse.self, .post, url: layerURL.appendingPathComponent("query"),
+                              params: params, server: server).value.objectIds ?? []
     }
 }

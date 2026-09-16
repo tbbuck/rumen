@@ -125,6 +125,16 @@ public enum DuckValue: Sendable, Equatable {
         }
     }
 
+    /// The numeric payload as a Double (integers promoted), if numeric.
+    public var doubleValue: Double? {
+        switch self {
+        case .double(let d): return d
+        case .int(let i): return Double(i)
+        case .uint(let u): return Double(u)
+        default: return nil
+        }
+    }
+
     /// The string payload, if this is a `.string` value (not a rendered form of another type).
     public var stringValue: String? {
         if case .string(let s) = self { return s }

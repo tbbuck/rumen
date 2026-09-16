@@ -423,3 +423,10 @@ extension AppDatabase {
         }
     }
 }
+
+extension AppDatabase {
+    /// Records the transport a download actually worked with (the PBF → JSON fallback sticks).
+    public func setLayerTransport(layerID: Int64, transport: String) throws {
+        try query("UPDATE layer SET transport = ? WHERE id = ?;", [.string(transport), .int(layerID)])
+    }
+}

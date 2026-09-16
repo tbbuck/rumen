@@ -115,14 +115,3 @@ extension AppDatabase {
         return BoundingBox(minX: a, minY: b, maxX: c, maxY: d).clampedToWorld
     }
 }
-
-extension DuckValue {
-    var doubleValue: Double? {
-        switch self {
-        case .double(let d): return d
-        case .int(let i): return Double(i)
-        case .uint(let u): return Double(u)
-        default: return nil
-        }
-    }
-}

@@ -72,21 +72,39 @@ struct ExtentLocator: View {
     let extent: BoundingBox?
     let frame: BoundingBox?
     var style: Style = .normal
+    /// True for folders and servers, whose extent is our own union of real data and is drawn
+    /// however wide it is; a server-reported extent that wide is treated as a default.
+    var trusted = false
 
     var body: some View {
         Canvas { context, size in
             let outer = CGRect(x: 0.5, y: 0.5, width: size.width - 1, height: size.height - 1)
             let frameStroke = style == .table ? StrokeStyle(lineWidth: 1, dash: [2, 2]) : StrokeStyle(lineWidth: 1)
             context.stroke(Path(outer), with: .color(Palette.line2), style: frameStroke)
-            guard style != .table, let extent, !extent.isDegenerate, let frame, !frame.isDegenerate else { return }
-            let sx = (size.width - 2) / frame.width
-            let sy = (size.height - 2) / frame.height
-            var rect = CGRect(x: 1 + (extent.minX - frame.minX) * sx,
-                              y: 1 + (frame.maxY - extent.maxY) * sy,
-                              width: max(1.5, extent.width * sx),
-                              height: max(1.5, extent.height * sy))
-            rect = rect.intersection(CGRect(x: 1, y: 1, width: size.width - 2, height: size.height - 2))
-            guard !rect.isNull else { return }
+            // A default-looking extent (most of the world, or a speck at Null Island) says
+            // nothing about where the data is: frame only, and the tooltip explains.
+            guard style != .table, let extent, !extent.isDegenerate, trusted || !extent.isDefaultLike,
+                  let frame, !frame.isDegenerate else { return }
+            // The box lives inside a 2px margin, so even one that fills the frame reads as a
+            // box within it rather than a second border.
+            let inset: CGFloat = 2.5
+            let inner = CGRect(x: inset, y: inset, width: size.width - 2 * inset, height: size.height - 2 * inset)
+            let sx = inner.width / frame.width
+            let sy = inner.height / frame.height
+            let raw = CGRect(x: inner.minX + (extent.minX - frame.minX) * sx,
+                             y: inner.minY + (frame.maxY - extent.maxY) * sy,
+                             width: max(1.5, extent.width * sx),
+                             height: max(1.5, extent.height * sy))
+            let rect = raw.intersection(inner)
+            let accent = style == .notExtractable ? Palette.muted2 : Palette.accent
+            // Outside the frame (an outlier the frame was trimmed to exclude): a dot on the
+            // nearest edge, pointing the way.
+            if rect.isNull || rect.width < 1 || rect.height < 1 {
+                let x = min(max(raw.midX, inner.minX), inner.maxX)
+                let y = min(max(raw.midY, inner.minY), inner.maxY)
+                context.fill(Path(ellipseIn: CGRect(x: x - 1.5, y: y - 1.5, width: 3, height: 3)), with: .color(accent))
+                return
+            }
             let path = Path(rect)
             if style == .notExtractable {
                 context.stroke(path, with: .color(Palette.muted2), style: StrokeStyle(lineWidth: 1, dash: [1.5, 1.5]))

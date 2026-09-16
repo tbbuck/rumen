@@ -46,12 +46,23 @@ public struct BoundingBox: Sendable, Equatable, Codable {
                     maxX: max(maxX, other.maxX), maxY: max(maxY, other.maxY))
     }
 
-    /// The union of `boxes`, ignoring default-looking ones (see `isDefaultLike`) unless nothing
-    /// else is there, and degenerate ones always.
+    /// Where the bulk of `boxes` sits: the union ignoring default-looking ones (see
+    /// `isDefaultLike`) unless nothing else is there, degenerate ones always, and, given five
+    /// or more, the outliers whose centres fall in the outer tenth on either axis. A single
+    /// service on another continent no longer squashes every other locator into a corner.
     public static func union(of boxes: [BoundingBox]) -> BoundingBox? {
         let usable = boxes.filter { !$0.isDegenerate }
         let real = usable.filter { !$0.isDefaultLike }
-        let boxes = real.isEmpty ? usable : real
+        var boxes = real.isEmpty ? usable : real
+        if boxes.count >= 5 {
+            let trim = max(1, boxes.count / 10)
+            let xs = boxes.map(\.centre.x).sorted()
+            let ys = boxes.map(\.centre.y).sorted()
+            let xLow = xs[trim], xHigh = xs[xs.count - 1 - trim]
+            let yLow = ys[trim], yHigh = ys[ys.count - 1 - trim]
+            let kept = boxes.filter { $0.centre.x >= xLow && $0.centre.x <= xHigh && $0.centre.y >= yLow && $0.centre.y <= yHigh }
+            if !kept.isEmpty { boxes = kept }
+        }
         guard var result = boxes.first else { return nil }
         for box in boxes.dropFirst() { result = result.union(box) }
         return result

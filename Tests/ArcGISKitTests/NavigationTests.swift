@@ -87,7 +87,7 @@ final class NavigationTests: XCTestCase {
         XCTAssertEqual(atLayer.url.absoluteString, root.absoluteString + "/Property/LLPG/MapServer/3")
     }
 
-    func testBoundingBoxHelpers() {
+    func testBoundingBoxHelpers() throws {
         let a = BoundingBox(minX: 0, minY: 0, maxX: 1, maxY: 1)
         let b = BoundingBox(minX: -2, minY: 0.5, maxX: 0.5, maxY: 3)
         XCTAssertEqual(a.union(b), BoundingBox(minX: -2, minY: 0, maxX: 1, maxY: 3))
@@ -112,6 +112,13 @@ final class NavigationTests: XCTestCase {
         let speck = BoundingBox(minX: 1.4e-06, minY: 0.00047, maxX: 1.56e-05, maxY: 0.000476)   // degrees read as metres
         XCTAssertTrue(speck.isDefaultLike)
         XCTAssertEqual(BoundingBox.union(of: [uk, speck]), uk)
+        // Five or more: a lone service on another continent is trimmed from the frame.
+        let usa = (0..<6).map { i in BoundingBox(minX: -120 + Double(i), minY: 30, maxX: -100 + Double(i), maxY: 45) }
+        let singapore = BoundingBox(minX: 81, minY: 1, maxX: 104, maxY: 27)
+        let frame = try XCTUnwrap(BoundingBox.union(of: usa + [singapore]))
+        XCTAssertEqual(frame.maxX, -95, accuracy: 0.001, "the outlier no longer stretches the frame east")
+        XCTAssertEqual(frame.minX, -119, accuracy: 0.001, "one box is trimmed from each end of each axis")
+        XCTAssertEqual(BoundingBox.union(of: [uk, singapore]), uk.union(singapore), "under five, nothing is trimmed")
         XCTAssertEqual(BoundingBox(json: a.json), a)
         XCTAssertNil(BoundingBox(json: "nope"))
         XCTAssertEqual(BoundingBox(minX: -200, minY: -95, maxX: 200, maxY: 95).clampedToWorld, .world)

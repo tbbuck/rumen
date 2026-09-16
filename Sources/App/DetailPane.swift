@@ -147,7 +147,7 @@ private struct ChildRow: View {
                     }
                 }
                 Spacer(minLength: 12)
-                ExtentLocator(extent: node.extent, frame: model.tree?.extent, style: locatorStyle)
+                ExtentLocator(extent: node.extent, frame: model.tree?.extent, style: locatorStyle, trusted: node.kind == .folder)
                 Image(systemName: "chevron.right")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(hovered ? Palette.accent : Palette.muted2)

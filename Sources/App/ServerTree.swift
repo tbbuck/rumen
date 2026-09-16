@@ -147,7 +147,7 @@ private struct TreeRow: View {
                 Image(systemName: "exclamationmark.circle").font(.system(size: 11)).foregroundStyle(Palette.no)
                     .frame(width: 22, height: 15)
             } else {
-                ExtentLocator(extent: node.extent, frame: frame, style: locatorStyle)
+                ExtentLocator(extent: node.extent, frame: frame, style: locatorStyle, trusted: node.kind == .folder)
                     .help(locatorHelp)
             }
         }
@@ -165,7 +165,11 @@ private struct TreeRow: View {
         switch node.kind {
         case .table: return "A table: no geometry, so no extent."
         default:
-            let what = isDimmed ? "Not extractable; its extent is outlined." : "Extent locator: the frame is this server's whole coverage, the box is where this \(node.kind == .folder ? "folder" : "node") sits within it."
+            if node.extent == nil { return "No extent known yet; it arrives when the node is crawled." }
+            if node.kind != .folder, node.extent?.isDefaultLike == true {
+                return "The server reports an extent covering most of the world (or a speck at 0,0), which looks like a default rather than data, so nothing is drawn."
+            }
+            let what = isDimmed ? "Not extractable; its extent is outlined." : "Extent locator: the frame is where the bulk of this server's data sits; the box is where this \(node.kind == .folder ? "folder" : "node") lies within it. A dot on the edge means it lies outside the frame."
             return what
         }
     }

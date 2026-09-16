@@ -59,6 +59,7 @@ final class AppModel {
     private(set) var assessment: Assessment?
     private(set) var currentLayerInfo: LayerInfo?
     private(set) var querySession: QuerySession?
+    private(set) var mapSession: MapSession?
     private(set) var probing = false
     private(set) var probeError: String?
     private var deepCrawlTask: Task<Void, Never>?
@@ -71,6 +72,13 @@ final class AppModel {
     var settingsServer: ServerRecord?
     var showRecents = false
     var columnSearch = ""
+    var search = FieldSearchOptions(text: "")
+    var searchAllServers = false
+    private(set) var searchHits: [FieldSearchHit] = []
+    private(set) var searchUncrawled = 0
+    private(set) var searchError: String?
+    var focusColumnSearch = false
+    var treeFilter = ""
     var appearanceOverride: ColorScheme?
     private(set) var errorText: String?
     private(set) var deepCrawlStatus: String?
@@ -195,6 +203,7 @@ final class AppModel {
         probeError = nil
         currentLayerInfo = nil
         querySession = nil
+        mapSession = nil
         guard let id, let database, let server = currentServer else { pathContent = nil; return }
         do {
             switch id {
@@ -222,6 +231,10 @@ final class AppModel {
                 }
                 querySession = QuerySession(layer: layer, service: service, fields: currentFields, info: currentLayerInfo,
                                             client: client, database: database, connection: server.connection())
+                mapSession = MapSession(layer: layer, service: service, client: client, database: database,
+                                        connection: server.connection(),
+                                        storedRuns: runs.filter { $0.record.layerID == layer.id && $0.status == .complete }.map(\.record),
+                                        querySet: nil, queryWkid: nil)
                 await assessCurrentLayer()
             }
         } catch {
@@ -622,6 +635,97 @@ extension AppModel {
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
         } else {
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path).deletingLastPathComponent()])
+        }
+    }
+}
+
+// MARK: - Column search
+
+extension AppModel {
+    var isSearching: Bool { !columnSearch.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    func runColumnSearch() async {
+        guard let database else { return }
+        let text = columnSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { searchHits = []; searchError = nil; return }
+        var options = search
+        options.text = text
+        options.serverID = searchAllServers ? nil : currentServer?.id
+        do {
+            searchHits = try await database.searchFields(options)
+            searchUncrawled = try await database.uncrawledServiceCount(serverID: options.serverID)
+            searchError = nil
+        } catch {
+            searchHits = []
+            searchError = String(describing: error)
+        }
+    }
+
+    /// Opens the hit's layer, switching server if needed, and clears the search.
+    func navigate(toHit hit: FieldSearchHit) async {
+        columnSearch = ""
+        if currentServer?.id != hit.serverID {
+            await selectServer(hit.serverID)
+        }
+        if let service = try? await database?.service(id: hit.serviceID) {
+            var path = ""
+            for part in service.folderPath.split(separator: "/") {
+                path = path.isEmpty ? String(part) : path + "/" + part
+                expanded.insert(.folder(serverID: hit.serverID, path: path))
+            }
+        }
+        expanded.insert(.service(hit.serviceID))
+        await select(.layer(hit.layerID))
+    }
+
+    /// Tree rows matching the filter box: every node whose name contains the text, with its
+    /// usual indent, regardless of what is expanded.
+    var filteredRows: [TreeRowItem] {
+        guard let tree else { return [] }
+        let needle = treeFilter.trimmingCharacters(in: .whitespaces)
+        var rows = [TreeRowItem]()
+        func walk(_ nodes: [TreeNode]) {
+            for node in nodes {
+                if node.name.localizedCaseInsensitiveContains(needle) {
+                    rows.append(TreeRowItem(node: node, indent: Self.indentPublic(for: node)))
+                }
+                walk(node.children)
+            }
+        }
+        walk(tree.children)
+        return rows
+    }
+
+    static func indentPublic(for node: TreeNode) -> CGFloat {
+        switch node.kind {
+        case .server: return 0
+        case .folder, .service: return 14 + 18 * CGFloat(node.folderDepth)
+        case .layer, .table: return 14 + 18 * CGFloat(node.folderDepth) + 20
+        }
+    }
+}
+
+// MARK: - Map
+
+extension AppModel {
+    /// Opens the layer a finished download came from, on the Map tab, showing the stored file.
+    func showStoredMap(_ record: DownloadRecord) async {
+        guard let database, let layer = try? await database.layer(id: record.layerID) else { return }
+        let service = try? await database.service(id: layer.serviceID)
+        if let service, currentServer?.id != service.serverID { await selectServer(service.serverID) }
+        expanded.insert(.service(layer.serviceID))
+        await select(.layer(layer.id))
+        layerTab = .map
+        mapSession?.source = .stored(record.id)
+    }
+
+    /// Hands the Query tab's latest preview to the map.
+    func syncMapSources() {
+        guard let mapSession else { return }
+        mapSession.querySet = querySession?.lastFeatureSet
+        mapSession.queryWkid = querySession?.lastFeatureSetWkid
+        if let layer = currentLayer {
+            mapSession.updateStoredRuns(runs.filter { $0.record.layerID == layer.id && $0.status == .complete }.map(\.record))
         }
     }
 }

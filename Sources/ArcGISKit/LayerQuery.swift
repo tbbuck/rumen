@@ -47,6 +47,8 @@ public struct QueryOptions: Sendable, Equatable {
     public var statistics: [StatisticDefinition] = []
     /// `objectIds=`: fetch exactly these features (the OID-list strategy).
     public var objectIDs: [Int64]? = nil
+    /// Decimal places for returned geometry (`geometryPrecision`); nil = server default.
+    public var geometryPrecision: Int? = nil
 
     public init(whereClause: String = "1=1", outFields: [String]? = nil, returnGeometry: Bool = true,
                 outWkid: Int? = nil, orderBy: (field: String, ascending: Bool)? = nil, offset: Int? = nil,
@@ -79,6 +81,7 @@ public struct QueryOptions: Sendable, Equatable {
         if let count { p["resultRecordCount"] = String(count) }
         if distinct { p["returnDistinctValues"] = "true" }
         if let objectIDs, !objectIDs.isEmpty { p["objectIds"] = objectIDs.map(String.init).joined(separator: ",") }
+        if let geometryPrecision { p["geometryPrecision"] = String(geometryPrecision) }
         if !statistics.isEmpty {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys]   // deterministic for tests and caching

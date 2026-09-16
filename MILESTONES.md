@@ -66,6 +66,21 @@ commit per logical unit.
   migration 0002). Runs left running by a quit are parked as paused at launch. 156 tests; a
   real 4-page, 3,219-county download verified with the DuckDB CLI (geometry typed
   `epsg:4326` from our PROJJSON, 0 null and 6 source-invalid geometries reported).
+- **M5 complete.** Column search over cached fields joined to layers, services, and servers:
+  case-insensitive partial by default, exact, case-sensitive, regex (filtered in Swift), alias
+  matching, scoped to the current server or all; a results view that replaces the page while
+  the field has text, with options, a banner counting uncrawled services that offers the deep
+  crawl, and double-click navigation across servers; ⌘F focuses the field; the tree gets its
+  filter box.
+- **M6 complete.** MapLibre GL in a `WKWebView` with MapTiler basemaps by appearance (key
+  from the untracked xcconfig), drawn as a survey sheet: 1px frame, tick labels in the
+  margins, a graticule injected by Swift in the layer's spatial reference — degrees for
+  geographic layers, eastings and northings in km for projected ones via DuckDB transforms
+  through the CRS registry, wrapped past the antimeridian. Sources: a bounded server sample
+  in WGS 84 (extent dashed, sample fitted when the extent is a world-sized default), a stored
+  GeoParquet read back through the spatial engine with a DuckDB where box and display
+  simplification, and the Query tab's last preview. The transfers Map action opens a finished
+  run on the map. 174 tests.
 
 ---
 
@@ -162,7 +177,7 @@ commit per logical unit.
   DuckDB with its CRS and geometry intact.
 - **Demo:** download a 100k-feature layer, open the Parquet in the DuckDB CLI.
 
-## M5 — Column search
+## M5 — Column search — ✅ done 2026-09-16
 **Goal:** find a column across everything the app has seen.
 - **Deliverables**
   - Search view over `field`: case-insensitive, partial, regex, alias, scope
@@ -173,7 +188,7 @@ commit per logical unit.
   are correct and instant from cache.
 - **Demo:** find every layer with a `UPRN` column across all known servers.
 
-## M6 — Map
+## M6 — Map — ✅ done 2026-09-16
 **Goal:** see a layer or a download on a basemap.
 - **Deliverables**
   - `GeoMapView` (MapLibre GL in `WKWebView`) ported from DuckLake Explorer; MapTiler

@@ -37,6 +37,9 @@ final class QuerySession {
     private(set) var error: String?
     private(set) var history: [QueryHistoryRecord] = []
     private var pageOffset = 0
+    /// The last preview page and the spatial reference it was fetched in (for the Map tab).
+    private(set) var lastFeatureSet: FeatureSet?
+    private(set) var lastFeatureSetWkid: Int?
     private(set) var canPageForward = false
     private var lastPageWasPreview = false
 
@@ -121,6 +124,8 @@ final class QuerySession {
                                        outWkid: outWkid, orderBy: orderBy, offset: canPaginate == nil ? pageOffset : nil,
                                        count: pageSize)
             let set = try await client.features(connection, layerURL: layerURL, options: options).value
+            lastFeatureSet = set
+            lastFeatureSetWkid = outWkid ?? layer.effectiveWkid
             let grid = QueryGrid.features(set)
             let first = pageOffset + 1
             let last = pageOffset + set.features.count

@@ -255,7 +255,7 @@ private struct RunActions: View {
             case .complete:
                 Button("Show in Finder") { model.reveal(run.record.outputPath) }.buttonStyle(LinkButtonStyle())
                 Button("Re-export") {}.buttonStyle(LinkButtonStyle()).disabled(true).help("Arrives with milestone M7")
-                Button("Map") {}.buttonStyle(LinkButtonStyle()).disabled(true).help("Arrives with milestone M6")
+                Button("Map") { Task { await model.showStoredMap(run.record) } }.buttonStyle(LinkButtonStyle())
             case .paused:
                 if run.record.error?.contains("token") == true {
                     Button("Sign in and resume") {}.buttonStyle(PrimaryButtonStyle(small: true)).disabled(true).help("Arrives with milestone M8")

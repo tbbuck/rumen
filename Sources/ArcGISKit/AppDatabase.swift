@@ -11,7 +11,8 @@ import DuckDBKit
 public actor AppDatabase {
     private nonisolated let db: SQLite
     public let path: String
-    private var spatial: DuckDB?
+    /// The spatial engine (an in-memory DuckDB with `spatial`), once `loadSpatial()` ran.
+    var spatial: DuckDB?
 
     /// `~/Library/Application Support/ArcGIS Explorer/explorer.sqlite`.
     public static func defaultURL() -> URL {

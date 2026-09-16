@@ -97,6 +97,7 @@ private struct PathSegmentView: View {
 /// the chrome is complete, and it says so when used.
 struct ColumnSearchField: View {
     @Environment(AppModel.self) private var model
+    @FocusState private var focused: Bool
 
     var body: some View {
         @Bindable var model = model
@@ -106,10 +107,19 @@ struct ColumnSearchField: View {
                 .textFieldStyle(.plain)
                 .font(.sheetUI(12.5))
                 .foregroundStyle(Palette.ink)
+                .focused($focused)
+                .onExitCommand { model.columnSearch = ""; focused = false }
+                .onChange(of: model.focusColumnSearch) { if model.focusColumnSearch { focused = true; model.focusColumnSearch = false } }
+            if !model.columnSearch.isEmpty {
+                Button { model.columnSearch = "" } label: {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 11)).foregroundStyle(Palette.muted2)
+                }
+                .buttonStyle(.plain)
+            }
         }
         .padding(.horizontal, 9)
         .frame(width: 190, height: 30)
         .background(Palette.bg, in: RoundedRectangle(cornerRadius: 7))
-        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Palette.line2, lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 7).stroke(focused ? Palette.accent : Palette.line2, lineWidth: 1))
     }
 }

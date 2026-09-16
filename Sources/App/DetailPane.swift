@@ -7,6 +7,9 @@ struct DetailPane: View {
 
     var body: some View {
         Group {
+            if model.isSearching {
+                ColumnSearchResults()
+            } else {
             switch model.selection {
             case .none:
                 EmptyState()
@@ -24,6 +27,7 @@ struct DetailPane: View {
                 if let layer = model.currentLayer, let service = model.currentService {
                     LayerPage(layer: layer, service: service, fields: model.currentFields)
                 }
+            }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

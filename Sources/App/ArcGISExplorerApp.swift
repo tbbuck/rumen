@@ -13,6 +13,7 @@ struct ArcGISExplorerApp: App {
     /// `--tab <name>` and `--run preview`: for scripted window captures.
     static var tabArgument: String? { argument("--tab") }
     static var runArgument: String? { argument("--run") }
+    static var searchArgument: String? { argument("--search") }
 
     private static func argument(_ flag: String) -> String? {
         let args = CommandLine.arguments
@@ -35,6 +36,7 @@ struct ArcGISExplorerApp: App {
                     if let url = Self.openArgument { await model.openFromLaunch(url) }
                     if let tab = Self.tabArgument, let chosen = LayerTab(rawValue: tab.capitalizedFirst) { model.layerTab = chosen }
                     if Self.runArgument == "preview" { await model.querySession?.preview() }
+                    if let text = Self.searchArgument { model.columnSearch = text }
                     if Self.runArgument == "download", let layer = model.currentLayer {
                         var request = DownloadRequest(layerID: layer.id, outputDirectory: model.downloadDirectory)
                         request.overwrite = true
@@ -47,6 +49,10 @@ struct ArcGISExplorerApp: App {
             CommandMenu("Go") {
                 Button("Open URL…") { model.beginURLEdit() }
                     .keyboardShortcut("l", modifiers: .command)
+                Button("Find column…") { model.focusColumnSearch = true }
+                    .keyboardShortcut("f", modifiers: .command)
+                Button("Transfers") { model.showTransfers.toggle() }
+                    .keyboardShortcut("t", modifiers: [.command, .shift])
                 Button("Refresh") { Task { await model.refreshCurrent() } }
                     .keyboardShortcut("r", modifiers: .command)
                     .disabled(model.currentServer == nil)

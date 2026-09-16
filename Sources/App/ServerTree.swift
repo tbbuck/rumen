@@ -9,9 +9,10 @@ struct ServerTree: View {
         VStack(alignment: .leading, spacing: 0) {
             if let server = model.currentServer {
                 ServerHeader(server: server)
+                TreeFilterField()
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(model.visibleRows) { row in
+                        ForEach(model.treeFilter.trimmingCharacters(in: .whitespaces).isEmpty ? model.visibleRows : model.filteredRows) { row in
                             TreeRow(row: row, frame: model.tree?.extent)
                         }
                     }
@@ -145,5 +146,35 @@ private struct TreeRow: View {
         case .table: return .table
         default: return isDimmed ? .notExtractable : .normal
         }
+    }
+}
+
+/// Filters the tree by name; matching nodes are listed flat with their usual indent.
+private struct TreeFilterField: View {
+    @Environment(AppModel.self) private var model
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        @Bindable var model = model
+        HStack(spacing: 6) {
+            Image(systemName: "line.3.horizontal.decrease").font(.system(size: 10)).foregroundStyle(Palette.muted2)
+            TextField("Filter", text: $model.treeFilter)
+                .textFieldStyle(.plain)
+                .font(.sheetUI(12))
+                .foregroundStyle(Palette.ink)
+                .focused($focused)
+                .onExitCommand { model.treeFilter = ""; focused = false }
+            if !model.treeFilter.isEmpty {
+                Button { model.treeFilter = "" } label: {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 10)).foregroundStyle(Palette.muted2)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 26)
+        .background(Palette.bg, in: RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(focused ? Palette.accent : Palette.line2, lineWidth: 1))
+        .padding(.horizontal, 16).padding(.bottom, 8)
     }
 }

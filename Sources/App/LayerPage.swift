@@ -17,6 +17,10 @@ struct LayerPage: View {
             if model.layerTab == .query, let session = model.querySession {
                 QueryTab(session: session)
                     .padding(.bottom, 18)
+            } else if model.layerTab == .map, let session = model.mapSession {
+                MapTab(session: session)
+                    .padding(.bottom, 18)
+                    .onAppear { model.syncMapSources() }
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
@@ -26,7 +30,7 @@ struct LayerPage: View {
                         case .raw: RawJSONView()
                         case .query: Caption("Loading…")
                         case .download: DownloadTab(layer: layer, service: service)
-                        case .map: Pending(text: "The map arrives with milestone M6.")
+                        case .map: Caption("Loading…")
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)

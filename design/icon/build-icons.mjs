@@ -43,14 +43,19 @@ const backSheets = ['#D6DBD3', '#E4E7E1'];
 
 // ---- Geography -------------------------------------------------------------
 
-// Every part in geography.json is the feature: Great Britain, Ireland, the Isle of
-// Man and the larger islands. The extent is the bounding box of all of them.
-const geo = JSON.parse(await readFile(join(here, 'geography.json'), 'utf8'));
-const feature = { type: 'MultiPolygon', coordinates: geo.flatMap(f => f.geojson.type === 'Polygon' ? [f.geojson.coordinates] : f.geojson.coordinates) };
-if (feature.coordinates.length === 0) {
-  console.error('geography.json is empty; re-run duckdb -f design/icon/geography.sql');
-  process.exit(1);
+// Every part in a geography file is the feature: Great Britain and Ireland, generalised
+// to logo grade. The extent is the bounding box of both. Two strengths are available.
+async function loadFeature(file) {
+  const geo = JSON.parse(await readFile(join(here, file), 'utf8'));
+  const feature = { type: 'MultiPolygon', coordinates: geo.flatMap(f => f.geojson.type === 'Polygon' ? [f.geojson.coordinates] : f.geojson.coordinates) };
+  if (feature.coordinates.length === 0) {
+    console.error(`${file} is empty; re-run duckdb -f design/icon/geography.sql`);
+    process.exit(1);
+  }
+  return feature;
 }
+const smooth = await loadFeature('geography.json');
+const bold = await loadFeature('geography-bold.json');
 
 function rings(geojson) {
   if (geojson.type === 'Polygon') return geojson.coordinates;
@@ -69,7 +74,7 @@ function bboxOf(geojson) {
 // A window onto the map: the feature's bounding box is centred in `box` and spans
 // `featH` of its height. Equal scale in x and y (equirectangular corrected by cos of
 // the mid latitude), so shapes keep their proportions.
-function windowFor(box, featH) {
+function windowFor(box, featH, feature) {
   const fb = bboxOf(feature);
   const midLat = (fb.y0 + fb.y1) / 2;
   const k = Math.cos(midLat * Math.PI / 180);
@@ -97,8 +102,8 @@ function extentRect(geojson, proj) {
 
 // The map fragment inside `box`: water, graticule, the British Isles in magenta,
 // and their dashed extent.
-function mapFragment(box, featH, gratStep, strokeW, dash) {
-  const win = windowFor(box, featH);
+function mapFragment(box, featH, gratStep, strokeW, dash, feature = smooth) {
+  const win = windowFor(box, featH, feature);
   const proj = project(win);
   const ext = extentRect(feature, proj);
   const g = [];
@@ -133,12 +138,12 @@ function svgDoc(name, comment, defs, body) {
 const SOFT = `<filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="16"/></filter>`;
 
 // A · Footprint: the tile is the sheet.
-function conceptA() {
+function conceptA(feature = smooth, name = 'A · Footprint') {
   const tile = { x: 0, y: 0, w: 1024, h: 1024 };
   const body = `<g>
-      ${mapFragment(tile, 0.62, 160, 18, '46 30')}
+      ${mapFragment(tile, 0.62, 160, 18, '46 30', feature)}
     </g>`;
-  return svgDoc('A · Footprint', 'The tile is the survey sheet: graticule, the British Isles as the layer in magenta, and their dashed extent.', '', body);
+  return svgDoc(name, 'The tile is the survey sheet: graticule, Great Britain and Ireland as the layer in magenta, and their dashed extent.', '', body);
 }
 
 // B · Sheet: a white map sheet with margins and ticks on the pale ground.
@@ -189,7 +194,8 @@ function conceptC() {
 }
 
 const concepts = [
-  { key: 'A', file: 'A-footprint.svg', name: 'A · Footprint', svg: conceptA(), why: 'The tile is the sheet: graticule, pale water, the British Isles as the layer in magenta, and the dashed extent that is their true bounding box.', tradeoff: 'Pale ground, so quiet on a light desktop.' },
+  { key: 'A', file: 'A-footprint.svg', name: 'A · Footprint', svg: conceptA(), why: 'The tile is the sheet: graticule, pale water, Great Britain and Ireland as the layer in magenta, and the dashed extent that is their true bounding box. Smooth generalisation.', tradeoff: 'Pale ground, so quiet on a light desktop.' },
+  { key: 'A2', file: 'A-bold.svg', name: 'A · bolder', svg: conceptA(bold, 'A · bolder'), why: 'The same frame with the coastline generalised harder: wider closing and opening radii, coarser simplification.', tradeoff: 'Loses the Highlands and the Cornish toe to a rounder outline.' },
   { key: 'B', file: 'B-sheet.svg', name: 'B · Sheet', svg: conceptB(), why: 'The same map on a white sheet with margins and ticks, lying on the pale ground. The marginalia are the signature.', tradeoff: 'The ticks vanish below 64px; at Finder sizes it is a white square with a magenta shape.' },
   { key: 'C', file: 'C-pulled-layer.svg', name: 'C · Pulled layer', svg: conceptC(), why: 'Three sheets from a server, the white front one lifted away carrying the map. The only concept that shows what the app does: extraction.', tradeoff: 'Busiest silhouette; a stack can read as a generic layers glyph.' },
 ];

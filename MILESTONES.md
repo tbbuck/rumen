@@ -9,6 +9,23 @@ lists **Goal · Deliverables · Acceptance · Demo**. Every non-trivial unit get
 commit per logical unit.
 
 ---
+## Status — 2026-09-16
+
+- **M0 complete.** `ArcGISCore` package (CDuckDB + DuckDBKit with Appender, prepared
+  statements, and the migration runner; ArcGISKit with the initial schema and the
+  `AppDatabase` actor), vendored Esri proto with generated Swift, xcodegen app that opens and
+  migrates the database on launch, CI workflow.
+- **M1 headless half complete** (no UI spec needed): URL normaliser, `ArcGISClient`
+  (Origin/Referer on every request, token param, per-host cap, jittered retries, typed
+  errors), lenient REST models, the metadata store (servers, services, layers, fields, raw
+  JSON, pruning, cascade forget), and the `Crawler` (open-by-URL, shallow/service/deep crawls,
+  bulk `layers` with per-layer fallback). 91 tests, plus an opt-in live test that passes
+  against sampleserver6.
+- **M1 remaining — waits on UI-SPEC.md:** add-server sheet with friendly name, server
+  settings (header overrides), recents with rename/forget/re-crawl, the sidebar tree with
+  filter, staleness display and Refresh at each level, navigate-to-target on paste.
+
+---
 
 ## M0 — Scaffold & engine  *(de-risk the toolchain)* — ✅ done 2026-09-16
 **Goal:** a building, testing, signed-ad-hoc app with a migrated DuckDB app database.

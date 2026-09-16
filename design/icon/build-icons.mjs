@@ -40,7 +40,11 @@ const SQUIRCLE = squirclePath();
 // Sheet palette (DESIGN-TOKENS.md, Day), plus the icon's own grounds.
 // Land is a warm sand so that cool accents (greens, teals, inks) stand off it; the
 // water stays pale blue.
-const p = { ground: '#EDEFE9', paper: '#FFFFFF', land: '#E6E0CC', landLine: '#C3B89C', line2: '#BEC5BA', grat: '#CBD7E4', water: '#DCE7F0', muted2: '#8A948E', accent: '#B8236B', accentSoft: 'rgba(184,35,107,0.10)', ghost: '#9FB0BF', ghostGrat: 'rgba(34,42,38,0.09)' };
+const p = { ground: '#EDEFE9', paper: '#FFFFFF', land: '#E6E0CC', landLine: '#C3B89C', line2: '#BEC5BA', grat: '#CBD7E4', water: '#DCE7F0', muted2: '#8A948E', accent: '#116C7E', accentSoft: 'rgba(17,108,126,0.10)', ghost: '#9FB0BF', ghostGrat: 'rgba(34,42,38,0.09)' };
+
+// The two shortlisted extent colours.
+const PETROL = '#116C7E';
+const SLATE = '#34475A';
 
 // The extent is a query box over part of the layer, not the layer's own bounding
 // box: England and Wales, with the top edge cutting across Britain and Scotland and
@@ -188,49 +192,50 @@ function conceptB(feature = bold) {
 }
 
 // C · Pulled layer: three distinct sheets from one server, the front one lifted away.
-// Back sheet: blank paper. Middle: paper with the graticule. Front, white and pulled
-// up-right: the layer highlighted, with its extent.
-function conceptC(feature = bold) {
-  const w = 480, h = 560, rx = 28;
-  const back = { x: 168, y: 356, w, h, fill: '#D9DED6' };
-  const mid = { x: 246, y: 262, w, h, fill: '#EDEFEA' };
+// The tile ground is itself a sheet, with a faint graticule and a wash of water in
+// the corner. Back sheet: blank paper. Middle: paper with the graticule. Front,
+// white and pulled up-right: a map with margins and tick marks, the layer, and its
+// extent.
+function conceptC(feature = bold, name = 'C · Pulled layer') {
+  const w = 480, h = 560, rx = 28, m = 34;
+  const back = { x: 168, y: 356, w, h, fill: '#DCE0D8' };
+  const mid = { x: 246, y: 262, w, h, fill: '#F4F5F1' };
   const front = { x: 344, y: 120, w, h };
+  const map = { x: front.x + m, y: front.y + m, w: w - 2 * m, h: h - 2 * m };
   const defs = `${SOFT}
     <clipPath id="back"><rect x="${back.x}" y="${back.y}" width="${w}" height="${h}" rx="${rx}"/></clipPath>
     <clipPath id="mid"><rect x="${mid.x}" y="${mid.y}" width="${w}" height="${h}" rx="${rx}"/></clipPath>
-    <clipPath id="front"><rect x="${front.x}" y="${front.y}" width="${w}" height="${h}" rx="${rx}"/></clipPath>`;
+    <clipPath id="front"><rect x="${front.x}" y="${front.y}" width="${w}" height="${h}" rx="${rx}"/></clipPath>
+    <clipPath id="map"><rect x="${map.x}" y="${map.y}" width="${map.w}" height="${map.h}"/></clipPath>`;
   const sheet = (s, clip, content) => `<rect x="${s.x}" y="${s.y + 22}" width="${w}" height="${h}" rx="${rx}" fill="#000" opacity="0.26" filter="url(#soft)"/>
     <g clip-path="url(#${clip})">
       <rect x="${s.x}" y="${s.y}" width="${w}" height="${h}" fill="${s.fill ?? p.paper}"/>
       ${content}
     </g>
     <rect x="${s.x}" y="${s.y}" width="${w}" height="${h}" rx="${rx}" fill="none" stroke="${p.line2}" stroke-width="3"/>`;
-  const body = `<rect width="1024" height="1024" fill="${p.ground}"/>
+  // Ground: the desk is a sheet too.
+  const tile = { x: 0, y: 0, w: 1024, h: 1024 };
+  const groundGrid = [];
+  for (let x = 72; x < 1024; x += 160) groundGrid.push(`M${x} 0V1024`);
+  for (let y = 72; y < 1024; y += 160) groundGrid.push(`M0 ${y}H1024`);
+  const ground = `<rect width="1024" height="1024" fill="${p.ground}"/>
+    <path d="M0 790 C 130 760 230 800 340 828 S 560 900 700 878 S 900 826 1024 846 V1024 H0 Z" fill="${p.water}" opacity="0.7"/>
+    <path d="${groundGrid.join('')}" stroke="rgba(34,42,38,0.07)" stroke-width="4" fill="none"/>`;
+  // Front sheet: margins with tick marks, then the map inset.
+  const ticks = [];
+  for (let x = map.x + 96; x < map.x + map.w; x += 96) ticks.push(`M${x} ${front.y + 10}V${map.y - 6}`);
+  for (let y = map.y + 96; y < map.y + map.h; y += 96) ticks.push(`M${front.x + 10} ${y}H${map.x - 6}`);
+  const frontContent = `<path d="${ticks.join('')}" stroke="${p.muted2}" stroke-width="4" fill="none"/>
+      <g clip-path="url(#map)">
+        ${mapFragment(map, 0.72, 96, 12, '34 22', feature)}
+      </g>
+      <rect x="${map.x}" y="${map.y}" width="${map.w}" height="${map.h}" fill="none" stroke="${p.line2}" stroke-width="3"/>`;
+  const body = `${ground}
     ${sheet(back, 'back', '')}
     ${sheet(mid, 'mid', ghostFragment(mid, 0.7, 96, feature, false))}
-    ${sheet(front, 'front', mapFragment(front, 0.7, 96, 14, '40 26', feature))}`;
-  return svgDoc('C · Pulled layer', 'Three sheets from one server: blank paper, gridded paper, and the white front sheet lifted away with the layer highlighted. Extraction as a gesture.', defs, body);
+    ${sheet(front, 'front', frontContent)}`;
+  return svgDoc(name, 'Three sheets from one server on a gridded desk: blank paper, gridded paper, and the white front sheet lifted away carrying a margined map with the layer and its extent. Extraction as a gesture.', defs, body);
 }
-
-const concepts = [
-  { key: 'A', file: 'A-footprint.svg', name: 'A · Footprint', svg: conceptA(), why: 'The tile is the sheet: graticule, pale water, Great Britain and Ireland as sand land, and a dashed extent boxing England and Wales. The box cuts across the land, so the accent means the extent, not the map.', tradeoff: 'Pale ground, so quiet on a light desktop.' },
-  { key: 'A2', file: 'A-smooth.svg', name: 'A · smoother coast', svg: conceptA(smooth, 'A · smoother coast'), why: 'The same frame with the less generalised coastline, for comparison.', tradeoff: 'The Highland lochs bring back texture that reads as noise at 32px.' },
-  { key: 'B', file: 'B-sheet.svg', name: 'B · Sheet', svg: conceptB(), why: 'The same map on a white sheet with margins and ticks, lying on the pale ground. The marginalia are the signature.', tradeoff: 'The ticks vanish below 64px; at Finder sizes it is a white square with a magenta shape.' },
-  { key: 'C', file: 'C-pulled-layer.svg', name: 'C · Pulled layer', svg: conceptC(), why: 'Three sheets from one server: blank paper at the back, gridded paper in the middle, and the white front sheet lifted away with the layer highlighted. The only concept that shows what the app does: extraction.', tradeoff: 'Busiest silhouette; a stack can read as a generic layers glyph.' },
-];
-
-// ---- Accent candidates -------------------------------------------------------
-
-// The extent's colour has to contrast with sage land and pale water without
-// reading as a warning at 16px. Each candidate is the day value; the night value
-// is the same hue lifted for the dark palette.
-const accents = [
-  { key: 'emerald', name: 'Emerald', day: '#1E8A55', night: '#5CC98F', why: 'A clear green: the colour of "go" and of the app’s own Extractable verdict. Strong on sand, distinct from the water.' },
-  { key: 'pine', name: 'Pine', day: '#2C6B4A', night: '#7DB894', why: 'A darker, cartographic green, the tone OS uses for woodland. Calmer than emerald, still unmistakably green at 16px.' },
-  { key: 'teal', name: 'Teal ink', day: '#1E7A72', night: '#3FA091', why: 'DuckLake Explorer’s ink teal. Family resemblance between the two apps, and it reads as ink rather than signal.' },
-  { key: 'petrol', name: 'Petrol', day: '#116C7E', night: '#5AB3C4', why: 'Blue-green, deeper than the water. Reads as a survey line drawn in coloured ink.' },
-  { key: 'slate', name: 'Ink slate', day: '#34475A', night: '#C7D3DE', why: 'The box as plain ink: no colour signal at all, only the drawn line. The quietest option; the map carries the colour.' },
-];
 
 function hexToRgba(hex, alpha) {
   const n = parseInt(hex.slice(1), 16);
@@ -244,7 +249,12 @@ function withAccent(hex, fn) {
   try { return fn(); } finally { Object.assign(p, saved); }
 }
 
-const accentFrames = accents.map(a => ({ ...a, svg: withAccent(a.day, () => conceptA(bold, `A · ${a.name}`)) }));
+const concepts = [
+  { key: 'C', file: 'C-pulled-layer.svg', name: 'C · Pulled layer, petrol', svg: withAccent(PETROL, () => conceptC(bold, 'C · Pulled layer, petrol')), why: 'Three sheets from one server on a gridded desk with a wash of water in the corner: blank paper, gridded paper, and the white front sheet lifted away carrying a margined map with tick marks, the layer, and its extent in petrol. The only concept that shows what the app does: extraction.', tradeoff: 'Busiest silhouette; a stack can read as a generic layers glyph.' },
+  { key: 'C2', file: 'C-pulled-layer-slate.svg', name: 'C · Pulled layer, ink slate', svg: withAccent(SLATE, () => conceptC(bold, 'C · Pulled layer, ink slate')), why: 'The same frame with the extent in ink slate: no colour signal, only the drawn line, so the sand and water carry the colour.', tradeoff: 'The extent is quieter at 16px than petrol.' },
+  { key: 'A', file: 'A-footprint.svg', name: 'A · Footprint, petrol', svg: conceptA(bold, 'A · Footprint, petrol'), why: 'For context: the tile as the sheet, with the same map and extent.', tradeoff: 'Pale ground, so quiet on a light desktop.' },
+  { key: 'B', file: 'B-sheet.svg', name: 'B · Sheet, petrol', svg: conceptB(), why: 'For context: the map on a white sheet with margins and ticks on the pale ground.', tradeoff: 'The ticks vanish below 64px.' },
+];
 
 // ---- Preview page ----------------------------------------------------------
 
@@ -277,17 +287,6 @@ function dock(theme, items = concepts) {
   return `<div class="dock ${theme}"><div class="dock-item ghost"></div>${cells}<div class="dock-item ghost"></div></div>`;
 }
 
-const accentRows = accentFrames.map(a => {
-  const art = inlineSvg('acc-' + a.key, a.svg);
-  return `<section class="concept">
-    <div class="big small">${art}</div>
-    <div class="text">
-      <h2>${a.name} <span class="hex">${a.day} day, ${a.night} night</span></h2>
-      <p>${a.why}</p>
-    </div>
-    <div class="sizes">${sizes.map(s => `<div class="sz" style="width:${s}px;height:${s}px">${art}</div>`).join('')}</div>
-  </section>`;
-}).join('\n');
 
 const css = `
   body { margin: 0; background: var(--bg); color: var(--ink); font-family: "Cabin", "Gill Sans", "Helvetica Neue", sans-serif; }
@@ -316,7 +315,7 @@ const css = `
 
 const content = `<div class="wrap">
   <h1>ArcGIS Explorer app icon</h1>
-  <p class="lede">Concepts in the Sheet language on Apple's squircle tile at Dock (128, 64), sidebar (32) and Finder list (16) sizes. The geography is real: Great Britain, Ireland and the Isle of Man from Overture Maps. The two Dock strips show the icons beside neighbours on a light and a dark desktop.</p>
+  <p class="lede">C, the pulled layer, in the two shortlisted extent colours, petrol (#116C7E) and ink slate (#34475A), with A and B alongside for context. Apple's squircle tile at Dock (128, 64), sidebar (32) and Finder list (16) sizes. The geography is Great Britain and Ireland from Overture Maps. The two Dock strips show the icons beside neighbours on a light and a dark desktop.</p>
   <div class="strip light">
     <div class="grid">${rows}</div>
     ${dock('light')}
@@ -324,17 +323,6 @@ const content = `<div class="wrap">
   </div>
   <div class="strip dark">
     ${dock('dark')}
-    <div class="label">Dark desktop, 64px</div>
-  </div>
-  <h1>Extent colour</h1>
-  <p class="lede">The magenta reads as red at Dock size, and red means danger. Five cool candidates on frame A, over warm sand land and pale water, none of which can be read as a warning. The pick would also become the app's accent token.</p>
-  <div class="strip light">
-    <div class="grid">${accentRows}</div>
-    ${dock('light', accentFrames)}
-    <div class="label">Light desktop, 64px</div>
-  </div>
-  <div class="strip dark">
-    ${dock('dark', accentFrames)}
     <div class="label">Dark desktop, 64px</div>
   </div>
 </div>
@@ -372,9 +360,8 @@ ${css}
 </style>
 ${content}`;
 
-await mkdir(join(previewDir, 'accents'), { recursive: true });
+await mkdir(previewDir, { recursive: true });
 for (const c of concepts) await writeFile(join(here, c.file), c.svg);
-for (const a of accentFrames) await writeFile(join(previewDir, 'accents', `A-${a.key}.svg`), a.svg);
 await writeFile(join(previewDir, 'icon-preview.html'), page);
 await writeFile(join(previewDir, 'arcgis-explorer-icon.html'), artifactPage);
 console.log(`wrote ${concepts.length} concept SVGs to ${here}, icon-preview.html and arcgis-explorer-icon.html to ${previewDir}`);

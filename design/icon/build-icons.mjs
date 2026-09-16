@@ -162,79 +162,78 @@ function svgDoc(name, comment, defs, body) {
 
 const SOFT = `<filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="16"/></filter>`;
 
-// A · Footprint: the tile is the sheet.
-function conceptA(feature = bold, name = 'A · Footprint') {
-  const tile = { x: 0, y: 0, w: 1024, h: 1024 };
-  const body = `<g>
-      ${mapFragment(tile, 0.62, 160, 18, '46 30', feature)}
-    </g>`;
-  return svgDoc(name, 'The tile is the survey sheet: graticule, Great Britain and Ireland as land, and a dashed query extent over England and Wales.', '', body);
+// The front sheet as it was in the first rounds: white paper, the blue graticule, a
+// wash of water in the lower corner, and on it the layer (sand islands) with the
+// dashed extent. No sea fill: the water is a corner of the sheet, not the map.
+function paperMap(box, featH, gratStep, strokeW, dash, feature) {
+  const win = windowFor(box, featH, feature);
+  const proj = project(win);
+  const ext = extentRect(queryExtent, proj);
+  const g = [];
+  for (let x = box.x + gratStep / 2; x < box.x + box.w; x += gratStep) g.push(`M${x} ${box.y}V${box.y + box.h}`);
+  for (let y = box.y + gratStep / 2; y < box.y + box.h; y += gratStep) g.push(`M${box.x} ${y}H${box.x + box.w}`);
+  const X = f => (box.x + f * box.w).toFixed(0), Y = f => (box.y + f * box.h).toFixed(0);
+  const wave = `M${X(0)} ${Y(0.76)} C ${X(0.18)} ${Y(0.72)} ${X(0.30)} ${Y(0.78)} ${X(0.46)} ${Y(0.83)} S ${X(0.78)} ${Y(0.92)} ${X(1)} ${Y(0.86)} V${Y(1)} H${X(0)} Z`;
+  return `<rect x="${box.x}" y="${box.y}" width="${box.w}" height="${box.h}" fill="${p.paper}"/>
+      <path d="${wave}" fill="${p.water}"/>
+      <path d="${g.join('')}" stroke="${p.grat}" stroke-width="4" fill="none"/>
+      <path d="${pathFor(feature, proj)}" fill="${p.land}" stroke="${p.landLine}" stroke-width="${Math.round(strokeW * 0.35)}" stroke-linejoin="round" fill-rule="evenodd"/>
+      <rect x="${ext.x.toFixed(1)}" y="${ext.y.toFixed(1)}" width="${ext.w.toFixed(1)}" height="${ext.h.toFixed(1)}" fill="${p.accentSoft}" stroke="${p.accent}" stroke-width="${strokeW}" stroke-dasharray="${dash}"/>`;
 }
 
-// B · Sheet: a white map sheet with margins and ticks on the pale ground.
-function conceptB(feature = bold) {
-  const sheet = { x: 156, y: 156, w: 712, h: 712 };
-  const map = { x: 202, y: 202, w: 620, h: 620 };
-  const ticks = [];
-  for (let x = map.x + 96; x < map.x + map.w; x += 96) ticks.push(`M${x} ${sheet.y + 14}V${map.y - 6}`);
-  for (let y = map.y + 96; y < map.y + map.h; y += 96) ticks.push(`M${sheet.x + 14} ${y}H${map.x - 6}`);
-  const defs = `${SOFT}
-    <clipPath id="map"><rect x="${map.x}" y="${map.y}" width="${map.w}" height="${map.h}"/></clipPath>`;
-  const body = `<rect width="1024" height="1024" fill="${p.ground}"/>
-    <rect x="${sheet.x}" y="${sheet.y + 24}" width="${sheet.w}" height="${sheet.h}" rx="26" fill="#000" opacity="0.22" filter="url(#soft)"/>
-    <rect x="${sheet.x}" y="${sheet.y}" width="${sheet.w}" height="${sheet.h}" rx="26" fill="${p.paper}"/>
-    <path d="${ticks.join('')}" stroke="${p.muted2}" stroke-width="5" fill="none"/>
-    <g clip-path="url(#map)">
-      ${mapFragment(map, 0.68, 96, 14, '40 26', feature)}
-    </g>
-    <rect x="${map.x}" y="${map.y}" width="${map.w}" height="${map.h}" fill="none" stroke="${p.line2}" stroke-width="4"/>`;
-  return svgDoc('B · Sheet', 'A white map sheet with margins and ticks on the pale ground; the Solent, the island and its extent drawn on it.', defs, body);
+// A faintly gridded grey sheet for the back of the stack, as in round two.
+function greySheet(box, gratStep) {
+  const g = [];
+  for (let x = box.x + gratStep / 2; x < box.x + box.w; x += gratStep) g.push(`M${x} ${box.y}V${box.y + box.h}`);
+  for (let y = box.y + gratStep / 2; y < box.y + box.h; y += gratStep) g.push(`M${box.x} ${y}H${box.x + box.w}`);
+  return `<path d="${g.join('')}" stroke="${p.ghostGrat}" stroke-width="4" fill="none"/>`;
 }
 
-// C · Pulled layer: three distinct sheets from one server, the front one lifted away.
-// The tile ground is itself a sheet, with a faint graticule and a wash of water in
-// the corner. Back sheet: blank paper. Middle: paper with the graticule. Front,
-// white and pulled up-right: a map with margins and tick marks, the layer, and its
-// extent.
-function conceptC(feature = bold, name = 'C · Pulled layer') {
-  const w = 480, h = 560, rx = 28, m = 34;
-  const back = { x: 168, y: 356, w, h, fill: '#DCE0D8' };
-  const mid = { x: 246, y: 262, w, h, fill: '#F4F5F1' };
-  const front = { x: 344, y: 120, w, h };
-  const map = { x: front.x + m, y: front.y + m, w: w - 2 * m, h: h - 2 * m };
+// C · Pulled layer: three sheets from one server, the white front one lifted away.
+// Options pick the iteration:
+//   desk:   'plain' (flat ground) | 'grid' (the desk is a faintly gridded sheet too)
+//   front:  'bleed' (map fills the sheet) | 'margins' (margins with tick marks, map inset)
+//   lift:   how far the front sheet is pulled up-right, in px
+//   featH:  how much of the front map the islands fill
+function conceptC({ name, desk = 'plain', front = 'bleed', lift = 150, featH = 0.72, feature = bold }) {
+  const w = 480, h = 560, rx = 28, m = 32;
+  const backS = { x: 168, y: 356, w, h, fill: '#D6DBD3' };
+  const midS = { x: 246, y: 262, w, h, fill: '#E6E9E3' };
+  const frontS = { x: 246 + Math.round(lift * 0.65), y: 262 - lift, w, h };
+  const map = front === 'margins'
+    ? { x: frontS.x + m, y: frontS.y + m, w: w - 2 * m, h: h - 2 * m }
+    : { x: frontS.x, y: frontS.y, w, h };
   const defs = `${SOFT}
-    <clipPath id="back"><rect x="${back.x}" y="${back.y}" width="${w}" height="${h}" rx="${rx}"/></clipPath>
-    <clipPath id="mid"><rect x="${mid.x}" y="${mid.y}" width="${w}" height="${h}" rx="${rx}"/></clipPath>
-    <clipPath id="front"><rect x="${front.x}" y="${front.y}" width="${w}" height="${h}" rx="${rx}"/></clipPath>
+    <clipPath id="back"><rect x="${backS.x}" y="${backS.y}" width="${w}" height="${h}" rx="${rx}"/></clipPath>
+    <clipPath id="mid"><rect x="${midS.x}" y="${midS.y}" width="${w}" height="${h}" rx="${rx}"/></clipPath>
+    <clipPath id="front"><rect x="${frontS.x}" y="${frontS.y}" width="${w}" height="${h}" rx="${rx}"/></clipPath>
     <clipPath id="map"><rect x="${map.x}" y="${map.y}" width="${map.w}" height="${map.h}"/></clipPath>`;
-  const sheet = (s, clip, content) => `<rect x="${s.x}" y="${s.y + 22}" width="${w}" height="${h}" rx="${rx}" fill="#000" opacity="0.26" filter="url(#soft)"/>
+  const sheet = (s, clip, content, shadow) => `<rect x="${s.x}" y="${s.y + 22}" width="${w}" height="${h}" rx="${rx}" fill="#000" opacity="${shadow}" filter="url(#soft)"/>
     <g clip-path="url(#${clip})">
       <rect x="${s.x}" y="${s.y}" width="${w}" height="${h}" fill="${s.fill ?? p.paper}"/>
       ${content}
-    </g>
-    <rect x="${s.x}" y="${s.y}" width="${w}" height="${h}" rx="${rx}" fill="none" stroke="${p.line2}" stroke-width="3"/>`;
-  // Ground: the desk is a sheet too.
-  const tile = { x: 0, y: 0, w: 1024, h: 1024 };
-  const groundGrid = [];
-  for (let x = 72; x < 1024; x += 160) groundGrid.push(`M${x} 0V1024`);
-  for (let y = 72; y < 1024; y += 160) groundGrid.push(`M0 ${y}H1024`);
-  const ground = `<rect width="1024" height="1024" fill="${p.ground}"/>
-    <path d="M0 790 C 130 760 230 800 340 828 S 560 900 700 878 S 900 826 1024 846 V1024 H0 Z" fill="${p.water}" opacity="0.7"/>
-    <path d="${groundGrid.join('')}" stroke="rgba(34,42,38,0.07)" stroke-width="4" fill="none"/>`;
-  // Front sheet: margins with tick marks, then the map inset.
-  const ticks = [];
-  for (let x = map.x + 96; x < map.x + map.w; x += 96) ticks.push(`M${x} ${front.y + 10}V${map.y - 6}`);
-  for (let y = map.y + 96; y < map.y + map.h; y += 96) ticks.push(`M${front.x + 10} ${y}H${map.x - 6}`);
-  const frontContent = `<path d="${ticks.join('')}" stroke="${p.muted2}" stroke-width="4" fill="none"/>
-      <g clip-path="url(#map)">
-        ${mapFragment(map, 0.72, 96, 12, '34 22', feature)}
-      </g>
+    </g>`;
+  let ground = `<rect width="1024" height="1024" fill="${p.ground}"/>`;
+  if (desk === 'grid') {
+    const gg = [];
+    for (let x = 72; x < 1024; x += 160) gg.push(`M${x} 0V1024`);
+    for (let y = 72; y < 1024; y += 160) gg.push(`M0 ${y}H1024`);
+    ground += `\n    <path d="${gg.join('')}" stroke="rgba(34,42,38,0.06)" stroke-width="4" fill="none"/>`;
+  }
+  let frontContent = `<g clip-path="url(#map)">${paperMap(map, featH, 96, 12, '34 22', feature)}</g>`;
+  if (front === 'margins') {
+    const ticks = [];
+    for (let x = map.x + 96; x < map.x + map.w; x += 96) ticks.push(`M${x} ${frontS.y + 10}V${map.y - 6}`);
+    for (let y = map.y + 96; y < map.y + map.h; y += 96) ticks.push(`M${frontS.x + 10} ${y}H${map.x - 6}`);
+    frontContent = `<path d="${ticks.join('')}" stroke="${p.muted2}" stroke-width="4" fill="none"/>
+      ${frontContent}
       <rect x="${map.x}" y="${map.y}" width="${map.w}" height="${map.h}" fill="none" stroke="${p.line2}" stroke-width="3"/>`;
+  }
   const body = `${ground}
-    ${sheet(back, 'back', '')}
-    ${sheet(mid, 'mid', ghostFragment(mid, 0.7, 96, feature, false))}
-    ${sheet(front, 'front', frontContent)}`;
-  return svgDoc(name, 'Three sheets from one server on a gridded desk: blank paper, gridded paper, and the white front sheet lifted away carrying a margined map with the layer and its extent. Extraction as a gesture.', defs, body);
+    ${sheet(backS, 'back', greySheet(backS, 96), 0.18)}
+    ${sheet(midS, 'mid', greySheet(midS, 96), 0.2)}
+    ${sheet(frontS, 'front', frontContent, 0.3)}`;
+  return svgDoc(name, 'Three sheets from one server: two greyed, faintly gridded sheets behind, and the white front sheet lifted away with the blue graticule, a wash of water in the corner, the layer and its extent. Extraction as a gesture.', defs, body);
 }
 
 function hexToRgba(hex, alpha) {
@@ -249,12 +248,18 @@ function withAccent(hex, fn) {
   try { return fn(); } finally { Object.assign(p, saved); }
 }
 
-const concepts = [
-  { key: 'C', file: 'C-pulled-layer.svg', name: 'C · Pulled layer, petrol', svg: withAccent(PETROL, () => conceptC(bold, 'C · Pulled layer, petrol')), why: 'Three sheets from one server on a gridded desk with a wash of water in the corner: blank paper, gridded paper, and the white front sheet lifted away carrying a margined map with tick marks, the layer, and its extent in petrol. The only concept that shows what the app does: extraction.', tradeoff: 'Busiest silhouette; a stack can read as a generic layers glyph.' },
-  { key: 'C2', file: 'C-pulled-layer-slate.svg', name: 'C · Pulled layer, ink slate', svg: withAccent(SLATE, () => conceptC(bold, 'C · Pulled layer, ink slate')), why: 'The same frame with the extent in ink slate: no colour signal, only the drawn line, so the sand and water carry the colour.', tradeoff: 'The extent is quieter at 16px than petrol.' },
-  { key: 'A', file: 'A-footprint.svg', name: 'A · Footprint, petrol', svg: conceptA(bold, 'A · Footprint, petrol'), why: 'For context: the tile as the sheet, with the same map and extent.', tradeoff: 'Pale ground, so quiet on a light desktop.' },
-  { key: 'B', file: 'B-sheet.svg', name: 'B · Sheet, petrol', svg: conceptB(), why: 'For context: the map on a white sheet with margins and ticks on the pale ground.', tradeoff: 'The ticks vanish below 64px.' },
+// Four iterations of C, each in both shortlisted accents.
+const iterations = [
+  { key: 'C1', file: 'C1', name: 'C1 · round-two sheets', opts: { desk: 'plain', front: 'bleed', lift: 150, featH: 0.72 }, why: 'The sheets as they were in round two: greyed, faintly gridded sheets behind; the white front sheet with the blue graticule and a wash of water in the lower corner. The map fills the sheet.' },
+  { key: 'C2', file: 'C2', name: 'C2 · gridded desk', opts: { desk: 'grid', front: 'bleed', lift: 150, featH: 0.72 }, why: 'C1 with the desk drawn as a faintly gridded sheet too, so the whole tile is paper.' },
+  { key: 'C3', file: 'C3', name: 'C3 · margins and ticks', opts: { desk: 'plain', front: 'margins', lift: 150, featH: 0.74 }, why: 'C1 with margins and tick marks on the front sheet, the marginalia from the early B, and the map inset inside a thin frame.' },
+  { key: 'C4', file: 'C4', name: 'C4 · lifted further', opts: { desk: 'plain', front: 'bleed', lift: 190, featH: 0.8 }, why: 'C1 with the front sheet pulled further out and the islands larger, for presence at Dock size.' },
 ];
+
+const concepts = iterations.flatMap(it => [
+  { key: it.key + 'p', file: `${it.file}-petrol.svg`, name: `${it.name}, petrol`, svg: withAccent(PETROL, () => conceptC({ ...it.opts, name: `${it.name}, petrol` })), why: it.why, tradeoff: 'Extent in petrol (#116C7E).' },
+  { key: it.key + 's', file: `${it.file}-slate.svg`, name: `${it.name}, ink slate`, svg: withAccent(SLATE, () => conceptC({ ...it.opts, name: `${it.name}, ink slate` })), why: it.why, tradeoff: 'Extent in ink slate (#34475A).' },
+]);
 
 // ---- Preview page ----------------------------------------------------------
 
@@ -296,9 +301,9 @@ const css = `
   .strip { border-radius: 16px; padding: 24px; margin-bottom: 28px; }
   .strip.light { background: #F1F2EE; color: #222A26; --muted: #5E6863; }
   .strip.dark { background: #26292E; color: #E7EAE6; --muted: #A2ACA6; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 28px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 28px; }
   .concept { display: flex; flex-direction: column; gap: 14px; }
-  .big { width: 300px; max-width: 100%; aspect-ratio: 1; }
+  .big { width: 260px; max-width: 100%; aspect-ratio: 1; }
   .big.small { width: 220px; }
   .hex { font-weight: 400; color: var(--muted); font-size: 12px; margin-left: 6px; }
   .big svg, .sz svg, .dock-item svg { width: 100%; height: 100%; display: block; filter: drop-shadow(0 1.5px 3px rgba(0,0,0,.22)); }
@@ -315,7 +320,7 @@ const css = `
 
 const content = `<div class="wrap">
   <h1>ArcGIS Explorer app icon</h1>
-  <p class="lede">C, the pulled layer, in the two shortlisted extent colours, petrol (#116C7E) and ink slate (#34475A), with A and B alongside for context. Apple's squircle tile at Dock (128, 64), sidebar (32) and Finder list (16) sizes. The geography is Great Britain and Ireland from Overture Maps. The two Dock strips show the icons beside neighbours on a light and a dark desktop.</p>
+  <p class="lede">Four iterations of C, the pulled layer, each in petrol (#116C7E) and in ink slate (#34475A). Apple's squircle tile at Dock (128, 64), sidebar (32) and Finder list (16) sizes. The geography is Great Britain and Ireland from Overture Maps. The two Dock strips show the icons beside neighbours on a light and a dark desktop.</p>
   <div class="strip light">
     <div class="grid">${rows}</div>
     ${dock('light')}

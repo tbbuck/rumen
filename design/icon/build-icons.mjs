@@ -248,18 +248,54 @@ function withAccent(hex, fn) {
   try { return fn(); } finally { Object.assign(p, saved); }
 }
 
-// Four iterations of C, each in both shortlisted accents.
-const iterations = [
-  { key: 'C1', file: 'C1', name: 'C1 · round-two sheets', opts: { desk: 'plain', front: 'bleed', lift: 150, featH: 0.72 }, why: 'The sheets as they were in round two: greyed, faintly gridded sheets behind; the white front sheet with the blue graticule and a wash of water in the lower corner. The map fills the sheet.' },
-  { key: 'C2', file: 'C2', name: 'C2 · gridded desk', opts: { desk: 'grid', front: 'bleed', lift: 150, featH: 0.72 }, why: 'C1 with the desk drawn as a faintly gridded sheet too, so the whole tile is paper.' },
-  { key: 'C3', file: 'C3', name: 'C3 · margins and ticks', opts: { desk: 'plain', front: 'margins', lift: 150, featH: 0.74 }, why: 'C1 with margins and tick marks on the front sheet, the marginalia from the early B, and the map inset inside a thin frame.' },
-  { key: 'C4', file: 'C4', name: 'C4 · lifted further', opts: { desk: 'plain', front: 'bleed', lift: 190, featH: 0.8 }, why: 'C1 with the front sheet pulled further out and the islands larger, for presence at Dock size.' },
+// ---- Contrast-first stack ---------------------------------------------------
+
+// The stack rebuilt for Dock size: every element sits at least two value steps
+// from its neighbour, so nothing averages into a single tone at 64px. A palette
+// per variant overrides the base tokens for the render.
+function withPalette(pal, fn) {
+  const saved = { ...p };
+  Object.assign(p, pal);
+  try { return fn(); } finally { Object.assign(p, saved); }
+}
+
+// Two or three sheets, bigger map, stronger water and land, thicker extent.
+function conceptStack({ name, sheets = 2, lift = 196, featH = 0.78, feature = bold }) {
+  const w = 540, h = 620, rx = 30;
+  const layers = [];
+  if (sheets === 3) {
+    layers.push({ x: 130, y: 340, fill: p.sheetBack });
+    layers.push({ x: 222, y: 236, fill: p.sheetMid });
+    layers.push({ x: 222 + Math.round(lift * 0.6), y: 236 - lift + 20, fill: p.paper, front: true });
+  } else {
+    layers.push({ x: 150, y: 300, fill: p.sheetBack });
+    layers.push({ x: 150 + Math.round(lift * 0.95), y: 300 - lift, fill: p.paper, front: true });
+  }
+  const front = layers[layers.length - 1];
+  const map = { x: front.x, y: front.y, w, h };
+  const defs = `${SOFT}
+    ${layers.map((s, i) => `<clipPath id="s${i}"><rect x="${s.x}" y="${s.y}" width="${w}" height="${h}" rx="${rx}"/></clipPath>`).join('\n    ')}`;
+  const body = `<rect width="1024" height="1024" fill="${p.ground}"/>
+    ${layers.map((s, i) => `<rect x="${s.x}" y="${s.y + 24}" width="${w}" height="${h}" rx="${rx}" fill="#000" opacity="${s.front ? 0.34 : 0.26}" filter="url(#soft)"/>
+    <g clip-path="url(#s${i})">
+      <rect x="${s.x}" y="${s.y}" width="${w}" height="${h}" fill="${s.fill}"/>
+      ${s.front ? paperMap(map, featH, 108, 16, '40 24', feature) : greySheet({ x: s.x, y: s.y, w, h }, 108)}
+    </g>`).join('\n    ')}`;
+  return svgDoc(name, 'A stack of sheets from one server, the white front one lifted away with the graticule, a wash of water, the layer and its extent. Built for Dock size: strong value steps between ground, sheets, water, land and extent.', defs, body);
+}
+
+// Shared map tones with real contrast: deeper water, deeper sand, a graticule that survives 64px.
+const mapTones = { water: '#BCD2E5', land: '#DCCFA4', landLine: '#A99968', grat: '#AFC3D7', ghostGrat: 'rgba(34,42,38,0.14)' };
+
+const variants = [
+  { key: 'D1', name: 'D1 · petrol tile', sheets: 2, pal: { ...mapTones, ground: '#0F5F70', sheetBack: '#C9D7DA', accent: SLATE, accentSoft: 'rgba(52,71,90,0.12)' }, why: 'The tile is petrol, the sheets are light, the extent is ink slate. Three clear values: dark ground, light paper, dark line. The app’s colour becomes the tile itself.' },
+  { key: 'D2', name: 'D2 · slate tile', sheets: 2, pal: { ...mapTones, ground: '#34475A', sheetBack: '#CBD3DB', accent: PETROL, accentSoft: 'rgba(17,108,126,0.12)' }, why: 'The tile is ink slate, the sheets are light, the extent is petrol. Same value structure as D1 with the colours swapped: a neutral tile, a coloured mark.' },
+  { key: 'D3', name: 'D3 · sea tile', sheets: 2, pal: { ...mapTones, ground: '#5F8DB3', sheetBack: '#D3DEE8', accent: PETROL, accentSoft: 'rgba(17,108,126,0.12)' }, why: 'The tile is a mid sea blue, sheets float on it, the extent is petrol. Lighter than D1 and D2 but still two full steps below the paper.' },
+  { key: 'D4', name: 'D4 · light tile, three steps', sheets: 3, pal: { ...mapTones, ground: '#E3E6DF', sheetBack: '#9AA59D', sheetMid: '#C4CCC4', accent: PETROL, accentSoft: 'rgba(17,108,126,0.12)' }, why: 'Keeps the light tile you asked for, but the sheets behind step down to a real mid grey so the stack reads at 32px. Extent in petrol.' },
+  { key: 'D5', name: 'D5 · light tile, ink slate', sheets: 3, pal: { ...mapTones, ground: '#E3E6DF', sheetBack: '#9AA59D', sheetMid: '#C4CCC4', accent: SLATE, accentSoft: 'rgba(52,71,90,0.12)' }, why: 'D4 with the extent in ink slate.' },
 ];
 
-const concepts = iterations.flatMap(it => [
-  { key: it.key + 'p', file: `${it.file}-petrol.svg`, name: `${it.name}, petrol`, svg: withAccent(PETROL, () => conceptC({ ...it.opts, name: `${it.name}, petrol` })), why: it.why, tradeoff: 'Extent in petrol (#116C7E).' },
-  { key: it.key + 's', file: `${it.file}-slate.svg`, name: `${it.name}, ink slate`, svg: withAccent(SLATE, () => conceptC({ ...it.opts, name: `${it.name}, ink slate` })), why: it.why, tradeoff: 'Extent in ink slate (#34475A).' },
-]);
+const concepts = variants.map(v => ({ key: v.key, file: `${v.key}.svg`, name: v.name, svg: withPalette(v.pal, () => conceptStack({ name: v.name, sheets: v.sheets })), why: v.why, tradeoff: '' }));
 
 // ---- Preview page ----------------------------------------------------------
 
@@ -320,7 +356,7 @@ const css = `
 
 const content = `<div class="wrap">
   <h1>ArcGIS Explorer app icon</h1>
-  <p class="lede">Four iterations of C, the pulled layer, each in petrol (#116C7E) and in ink slate (#34475A). Apple's squircle tile at Dock (128, 64), sidebar (32) and Finder list (16) sizes. The geography is Great Britain and Ireland from Overture Maps. The two Dock strips show the icons beside neighbours on a light and a dark desktop.</p>
+  <p class="lede">The pulled-layer stack rebuilt for Dock size: every element sits at least two value steps from its neighbour so nothing averages to mush at 64px. Five variants on the tile colour and the extent colour (petrol #116C7E or ink slate #34475A). Apple's squircle tile at Dock (128, 64), sidebar (32) and Finder list (16) sizes; Dock strips on a light and a dark desktop.</p>
   <div class="strip light">
     <div class="grid">${rows}</div>
     ${dock('light')}

@@ -217,6 +217,32 @@ const concepts = [
   { key: 'C', file: 'C-pulled-layer.svg', name: 'C · Pulled layer', svg: conceptC(), why: 'Three sheets from one server: blank paper at the back, gridded paper in the middle, and the white front sheet lifted away with the layer highlighted. The only concept that shows what the app does: extraction.', tradeoff: 'Busiest silhouette; a stack can read as a generic layers glyph.' },
 ];
 
+// ---- Accent candidates -------------------------------------------------------
+
+// The extent's colour has to contrast with sage land and pale water without
+// reading as a warning at 16px. Each candidate is the day value; the night value
+// is the same hue lifted for the dark palette.
+const accents = [
+  { key: 'cobalt', name: 'Cobalt', day: '#2F55D4', night: '#7C9BFF', why: 'The selection marquee colour. A blue box over a map means "this area", never danger; it stays distinct from the pale water because the water is barely blue.' },
+  { key: 'violet', name: 'Violet', day: '#6A3FD6', night: '#A78BFF', why: 'Highlight rather than alarm. Nothing on a sheet is violet, so it can only be the app’s own mark.' },
+  { key: 'plum', name: 'Plum', day: '#8A2C74', night: '#D078C0', why: 'The Landranger magenta pushed toward purple: keeps the kinship with the UI tokens, loses most of the red.' },
+  { key: 'explorer', name: 'Explorer orange', day: '#DE6F16', night: '#F4A15A', why: 'The Ordnance Survey Explorer cover colour. Warm, cartographic, high contrast on sage and blue.' },
+];
+
+function hexToRgba(hex, alpha) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+}
+
+function withAccent(hex, fn) {
+  const saved = { accent: p.accent, accentSoft: p.accentSoft };
+  p.accent = hex;
+  p.accentSoft = hexToRgba(hex, 0.10);
+  try { return fn(); } finally { Object.assign(p, saved); }
+}
+
+const accentFrames = accents.map(a => ({ ...a, svg: withAccent(a.day, () => conceptA(bold, `A · ${a.name}`)) }));
+
 // ---- Preview page ----------------------------------------------------------
 
 // Inline an SVG into the page with ids namespaced per concept and the fixed size removed.
@@ -243,10 +269,22 @@ const rows = concepts.map(c => {
   </section>`;
 }).join('\n');
 
-function dock(theme) {
-  const items = concepts.map(c => `<div class="dock-item">${inlineSvg(c.key + theme, c.svg)}</div>`).join('');
-  return `<div class="dock ${theme}"><div class="dock-item ghost"></div>${items}<div class="dock-item ghost"></div></div>`;
+function dock(theme, items = concepts) {
+  const cells = items.map(c => `<div class="dock-item">${inlineSvg(c.key + theme, c.svg)}</div>`).join('');
+  return `<div class="dock ${theme}"><div class="dock-item ghost"></div>${cells}<div class="dock-item ghost"></div></div>`;
 }
+
+const accentRows = accentFrames.map(a => {
+  const art = inlineSvg('acc-' + a.key, a.svg);
+  return `<section class="concept">
+    <div class="big small">${art}</div>
+    <div class="text">
+      <h2>${a.name} <span class="hex">${a.day} day, ${a.night} night</span></h2>
+      <p>${a.why}</p>
+    </div>
+    <div class="sizes">${sizes.map(s => `<div class="sz" style="width:${s}px;height:${s}px">${art}</div>`).join('')}</div>
+  </section>`;
+}).join('\n');
 
 const css = `
   body { margin: 0; background: var(--bg); color: var(--ink); font-family: "Cabin", "Gill Sans", "Helvetica Neue", sans-serif; }
@@ -259,6 +297,8 @@ const css = `
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 28px; }
   .concept { display: flex; flex-direction: column; gap: 14px; }
   .big { width: 300px; max-width: 100%; aspect-ratio: 1; }
+  .big.small { width: 220px; }
+  .hex { font-weight: 400; color: var(--muted); font-size: 12px; margin-left: 6px; }
   .big svg, .sz svg, .dock-item svg { width: 100%; height: 100%; display: block; filter: drop-shadow(0 1.5px 3px rgba(0,0,0,.22)); }
   .sizes { display: flex; align-items: flex-end; gap: 14px; height: 128px; }
   h2 { font-size: 15px; font-weight: 700; margin: 0 0 4px; }
@@ -281,6 +321,17 @@ const content = `<div class="wrap">
   </div>
   <div class="strip dark">
     ${dock('dark')}
+    <div class="label">Dark desktop, 64px</div>
+  </div>
+  <h1>Extent colour</h1>
+  <p class="lede">The magenta reads as red at Dock size, and red means danger. Four candidates on frame A, each chosen to contrast with the sage land and pale water without alarming. The pick would also become the app's accent token.</p>
+  <div class="strip light">
+    <div class="grid">${accentRows}</div>
+    ${dock('light', accentFrames)}
+    <div class="label">Light desktop, 64px</div>
+  </div>
+  <div class="strip dark">
+    ${dock('dark', accentFrames)}
     <div class="label">Dark desktop, 64px</div>
   </div>
 </div>
@@ -318,8 +369,9 @@ ${css}
 </style>
 ${content}`;
 
-await mkdir(previewDir, { recursive: true });
+await mkdir(join(previewDir, 'accents'), { recursive: true });
 for (const c of concepts) await writeFile(join(here, c.file), c.svg);
+for (const a of accentFrames) await writeFile(join(previewDir, 'accents', `A-${a.key}.svg`), a.svg);
 await writeFile(join(previewDir, 'icon-preview.html'), page);
 await writeFile(join(previewDir, 'arcgis-explorer-icon.html'), artifactPage);
 console.log(`wrote ${concepts.length} concept SVGs to ${here}, icon-preview.html and arcgis-explorer-icon.html to ${previewDir}`);

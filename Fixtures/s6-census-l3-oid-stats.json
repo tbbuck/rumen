@@ -1,0 +1,1 @@
+{"displayFieldName":"","fieldAliases":{"min_oid":"min_oid","max_oid":"max_oid"},"fields":[{"name":"min_oid","type":"esriFieldTypeInteger","alias":"min_oid"},{"name":"max_oid","type":"esriFieldTypeInteger","alias":"max_oid"}],"features":[{"attributes":{"min_oid":1,"max_oid":51}}]}

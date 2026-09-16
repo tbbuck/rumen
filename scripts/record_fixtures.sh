@@ -45,3 +45,19 @@ fetch s6-census-l3-distinct.json    "$Q?where=1%3D1&outFields=SUB_REGION&returnD
 fetch s6-census-l3-stats.json       "$Q?where=1%3D1&outStatistics=%5B%7B%22statisticType%22%3A%22min%22%2C%22onStatisticField%22%3A%22POP2000%22%2C%22outStatisticFieldName%22%3A%22min_POP2000%22%7D%2C%7B%22statisticType%22%3A%22max%22%2C%22onStatisticField%22%3A%22POP2000%22%2C%22outStatisticFieldName%22%3A%22max_POP2000%22%7D%2C%7B%22statisticType%22%3A%22avg%22%2C%22onStatisticField%22%3A%22POP2000%22%2C%22outStatisticFieldName%22%3A%22avg_POP2000%22%7D%2C%7B%22statisticType%22%3A%22count%22%2C%22onStatisticField%22%3A%22POP2000%22%2C%22outStatisticFieldName%22%3A%22count_POP2000%22%7D%5D&returnGeometry=false&f=json"
 fetch s6-census-l3-bad-where.json   "$Q?where=NOPE%20%3D%3D%201&returnCountOnly=true&f=json"
 fetch s6-wildfire-l0-features.json  "$S6/Wildfire/FeatureServer/0/query?where=1%3D1&outFields=*&returnGeometry=true&outSR=4326&resultRecordCount=2&f=json"
+
+# PBF pages (M4) — the same pages as JSON so decoders can be compared feature for feature.
+P3="where=1%3D1&outFields=STATE_NAME,POP2000,STATE_ABBR&returnGeometry=true&outSR=4326&orderByFields=OBJECTID&resultOffset=0&resultRecordCount=3"
+fetch s6-census-l3-features.pbf     "$Q?$P3&f=pbf"
+W="$S6/Wildfire/FeatureServer"
+fetch s6-wildfire-l0-page.json      "$W/0/query?where=1%3D1&outFields=*&returnGeometry=true&outSR=4326&orderByFields=objectid&resultRecordCount=3&f=json"
+fetch s6-wildfire-l0-page.pbf       "$W/0/query?where=1%3D1&outFields=*&returnGeometry=true&outSR=4326&orderByFields=objectid&resultRecordCount=3&f=pbf"
+fetch s6-wildfire-l1-page.json      "$W/1/query?where=1%3D1&outFields=*&returnGeometry=true&outSR=4326&orderByFields=objectid&resultRecordCount=3&f=json"
+fetch s6-wildfire-l1-page.pbf       "$W/1/query?where=1%3D1&outFields=*&returnGeometry=true&outSR=4326&orderByFields=objectid&resultRecordCount=3&f=pbf"
+fetch s6-wildfire-l2-page.json      "$W/2/query?where=1%3D1&outFields=*&returnGeometry=true&outSR=4326&orderByFields=objectid&resultRecordCount=3&f=json"
+fetch s6-wildfire-l2-page.pbf       "$W/2/query?where=1%3D1&outFields=*&returnGeometry=true&outSR=4326&orderByFields=objectid&resultRecordCount=3&f=pbf"
+fetch s6-wildfire-l1-info.json      "$W/1?f=json"
+fetch s6-wildfire-l2-info.json      "$W/2?f=json"
+# OID strategies: the id list and the min/max statistics for Census states.
+fetch s6-census-l3-ids.json         "$Q?where=1%3D1&returnIdsOnly=true&f=json"
+fetch s6-census-l3-oid-stats.json   "$Q?where=1%3D1&outStatistics=%5B%7B%22statisticType%22%3A%22min%22%2C%22onStatisticField%22%3A%22OBJECTID%22%2C%22outStatisticFieldName%22%3A%22min_oid%22%7D%2C%7B%22statisticType%22%3A%22max%22%2C%22onStatisticField%22%3A%22OBJECTID%22%2C%22outStatisticFieldName%22%3A%22max_oid%22%7D%5D&returnGeometry=false&f=json"

@@ -56,8 +56,10 @@ public final class Appender {
 
     public func appendNull() throws { try check(duckdb_append_null(appender)) }
     public func append(_ value: Bool) throws { try check(duckdb_append_bool(appender, value)) }
+    public func append(_ value: Int16) throws { try check(duckdb_append_int16(appender, value)) }
     public func append(_ value: Int32) throws { try check(duckdb_append_int32(appender, value)) }
     public func append(_ value: Int64) throws { try check(duckdb_append_int64(appender, value)) }
+    public func append(_ value: Float) throws { try check(duckdb_append_float(appender, value)) }
     public func append(_ value: Double) throws { try check(duckdb_append_double(appender, value)) }
 
     public func appendString(_ value: String) throws {

@@ -29,7 +29,11 @@ public struct BoundingBox: Sendable, Equatable, Codable {
                     maxX: max(maxX, other.maxX), maxY: max(maxY, other.maxY))
     }
 
+    /// The union of `boxes`, ignoring world-sized ones (a server default, not data) unless
+    /// nothing else is there.
     public static func union(of boxes: [BoundingBox]) -> BoundingBox? {
+        let real = boxes.filter { !$0.isWorldSized }
+        let boxes = real.isEmpty ? boxes : real
         guard var result = boxes.first else { return nil }
         for box in boxes.dropFirst() { result = result.union(box) }
         return result

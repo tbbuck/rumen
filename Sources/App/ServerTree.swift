@@ -43,7 +43,10 @@ private struct ServerHeader: View {
             Text(server.friendlyName).font(.sheetUI(14, .bold)).foregroundStyle(Palette.ink).lineLimit(1)
             Caption(caption, size: 11, color: Palette.muted2).lineLimit(1)
             if let status = model.deepCrawlStatus {
-                Caption("Deep crawl: \(status)", size: 11, color: Palette.accent).lineLimit(1)
+                HStack(spacing: 4) {
+                    Caption("Deep crawl: \(status)", size: 11, color: Palette.accent).lineLimit(1)
+                    Button("cancel") { model.cancelDeepCrawl() }.buttonStyle(LinkButtonStyle(size: 11))
+                }
             }
         }
         .padding(.horizontal, 16).padding(.bottom, 12)

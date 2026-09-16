@@ -54,6 +54,10 @@ final class AppModel {
     private(set) var currentFields: [FieldRecord] = []
     private(set) var currentRawJSON: String?
     private(set) var pathContent: PathBarContent?
+    private(set) var assessment: Assessment?
+    private(set) var probing = false
+    private(set) var probeError: String?
+    private var deepCrawlTask: Task<Void, Never>?
     var layerTab: LayerTab = .overview
 
     // Chrome
@@ -166,6 +170,8 @@ final class AppModel {
         currentLayer = nil
         currentFields = []
         currentRawJSON = nil
+        assessment = nil
+        probeError = nil
         guard let id, let database, let server = currentServer else { pathContent = nil; return }
         do {
             switch id {
@@ -188,6 +194,7 @@ final class AppModel {
                 currentLayer = layer
                 currentFields = try await database.fields(layerID: layerID)
                 pathContent = PathBarContent.build(server: server, service: service, layer: layer)
+                await assessCurrentLayer()
             }
         } catch {
             errorText = String(describing: error)
@@ -211,6 +218,42 @@ final class AppModel {
               let pretty = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
         else { return text }
         return String(decoding: pretty, as: UTF8.self)
+    }
+
+    // MARK: - Extractability
+
+    /// Runs the rules (finding and, once, crawling the FeatureServer twin), persists the
+    /// verdict, and refreshes the row and the page.
+    func assessCurrentLayer() async {
+        guard let crawler, let database, let layer = currentLayer else { return }
+        do {
+            assessment = try await crawler.assess(layerID: layer.id)
+            currentLayer = try await database.layer(id: layer.id)
+            try await reloadTree()
+        } catch {
+            probeError = String(describing: error)
+        }
+    }
+
+    /// The count probe: confirms extractability and records the count, or overturns it with
+    /// the server's message.
+    func probeCurrentLayer() async {
+        guard let crawler, let database, let layer = currentLayer else { return }
+        probing = true
+        probeError = nil
+        defer { probing = false }
+        do {
+            try await crawler.probeCount(layerID: layer.id)
+        } catch {
+            probeError = String(describing: error)
+        }
+        do {
+            currentLayer = try await database.layer(id: layer.id)
+            assessment = try await crawler.assess(layerID: layer.id)
+            try await reloadTree()
+        } catch {
+            errorText = String(describing: error)
+        }
     }
 
     // MARK: - Crawling
@@ -253,7 +296,20 @@ final class AppModel {
     }
 
     /// Crawls every Map/Feature service under the current server, reporting progress.
+    /// Cancellable via `cancelDeepCrawl()`.
     func deepCrawlCurrentServer() async {
+        guard deepCrawlTask == nil else { return }
+        let task = Task { await runDeepCrawl() }
+        deepCrawlTask = task
+        await task.value
+        deepCrawlTask = nil
+    }
+
+    func cancelDeepCrawl() {
+        deepCrawlTask?.cancel()
+    }
+
+    private func runDeepCrawl() async {
         guard let crawler, let server = currentServer else { return }
         deepCrawlStatus = "Listing services…"
         defer { deepCrawlStatus = nil }
@@ -275,6 +331,8 @@ final class AppModel {
                 errorText = "\(failures.count) service\(failures.count == 1 ? "" : "s") failed to crawl: "
                     + failures.compactMap { if case .failed(let what, _) = $0 { return what } else { return nil } }.joined(separator: ", ")
             }
+        } catch is CancellationError {
+            errorText = nil
         } catch {
             errorText = String(describing: error)
         }

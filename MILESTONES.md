@@ -32,6 +32,13 @@ commit per logical unit.
   write-ahead log holding `DEFAULT nextval(...)` DDL after a force quit, so ids are now
   allocated in the INSERT and the app checkpoints after migrating (regression test included).
   Not yet in the tree: a filter box (cheap, folded into M5 with column search).
+- **M2 complete.** Extractability rules (layer type, Query capability with service fallback,
+  PBF/JSON transport, the offset → OID-range → OID-list ladder, page size) as a pure
+  assessment with the statement wording; FeatureServer twin discovery that crawls the twin
+  once and prefers it when it offers PBF or paging the MapServer lacks; the count probe that
+  confirms the verdict and records the count or overturns it with the server's message; the
+  verdict sentence, primary button, and links on the Overview; tile-cache flag on the service
+  page; deep crawl with progress, cancel, and resume (fresh services skipped). 115 tests.
 
 ---
 
@@ -77,7 +84,7 @@ commit per logical unit.
   carries the two headers.
 - **Demo:** paste a layer URL, land on it in the tree.
 
-## M2 — Layer inspector & extractability
+## M2 — Layer inspector & extractability — ✅ done 2026-09-16
 **Goal:** answer "what is this and can I get it out?" for every layer.
 - **Deliverables**
   - Overview, Fields, and Raw tabs per SPEC §5.4, including mapped DuckDB types and

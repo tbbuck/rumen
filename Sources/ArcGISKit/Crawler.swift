@@ -167,10 +167,16 @@ public actor Crawler {
     /// Re-lists the directory, then crawls every Map/Feature service. Failures of individual
     /// services are reported through `progress` and collected; the crawl continues past them
     /// so one broken service doesn't hide a whole server. Returns the failures.
+    /// Services crawled within `skipFresh` are skipped, so re-running after a cancel resumes
+    /// where it stopped rather than starting over.
     @discardableResult
-    public func deepCrawl(serverID: Int64, progress: (@Sendable (CrawlEvent) -> Void)? = nil) async throws -> [CrawlEvent] {
+    public func deepCrawl(serverID: Int64, skipFresh: TimeInterval = 3600,
+                          progress: (@Sendable (CrawlEvent) -> Void)? = nil) async throws -> [CrawlEvent] {
         try await shallowCrawl(serverID: serverID, progress: progress)
-        let services = try await db.services(serverID: serverID).filter { $0.type.hasLayers }
+        let cutoff = Date().addingTimeInterval(-skipFresh)
+        let services = try await db.services(serverID: serverID).filter { service in
+            service.type.hasLayers && (service.fetchedAt.map { $0 < cutoff } ?? true)
+        }
         var failures = [CrawlEvent]()
         for service in services {
             try Task.checkCancellation()
@@ -205,5 +211,62 @@ public actor Crawler {
             return try JSONEncoder().encode(element)
         }
         return nil
+    }
+}
+
+// MARK: - Extractability
+
+extension Crawler {
+    /// The FeatureServer twin of a MapServer layer: the same service name with type
+    /// FeatureServer in the same directory, and the layer with the same id under it. Crawls
+    /// the twin service if it is listed but not yet crawled (one or two requests, once).
+    public func twin(of layer: LayerRecord, in service: ServiceRecord) async throws -> (LayerRecord, ServiceRecord)? {
+        guard service.type == .mapServer else { return nil }
+        let twinURL = service.url.deletingLastPathComponent().appendingPathComponent(ServiceType.featureServer.name)
+        guard var twinService = try await db.service(serverID: service.serverID, url: twinURL) else { return nil }
+        if !twinService.isCrawled {
+            try await crawlService(serviceID: twinService.id)
+            twinService = try await db.service(id: twinService.id)
+        }
+        guard let twinLayer = try await db.layer(serviceID: twinService.id, layerID: layer.layerID) else { return nil }
+        return (twinLayer, twinService)
+    }
+
+    /// Assesses a layer from cached metadata (finding its twin first), persists the verdict,
+    /// and returns it. No count probe; see `probeCount`.
+    public func assess(layerID: Int64) async throws -> Assessment {
+        let layer = try await db.layer(id: layerID)
+        let service = try await db.service(id: layer.serviceID)
+        let twin = try await twin(of: layer, in: service)
+        let assessment = Extractability.assess(layer: layer, service: service, twin: twin?.0, twinService: twin?.1)
+        try await db.setExtractability(layerID: layerID, extractable: assessment.verdict, reason: assessment.reason,
+                                       transport: assessment.transport?.rawValue,
+                                       siblingLayerID: assessment.viaTwin ? assessment.sourceLayerID : nil)
+        return assessment
+    }
+
+    /// `returnCountOnly` against the layer the assessment would download from. A count
+    /// confirms extractability and is stored; a server error overturns it, with the server's
+    /// message as the reason. Returns the count.
+    @discardableResult
+    public func probeCount(layerID: Int64) async throws -> Int64 {
+        let assessment = try await assess(layerID: layerID)
+        let source = try await db.layer(id: assessment.sourceLayerID)
+        let service = try await db.service(id: source.serviceID)
+        let server = try await db.server(id: service.serverID)
+        let url = service.url.appendingPathComponent(String(source.layerID))
+        do {
+            let count = Int64(try await client.count(await connection(server), layerURL: url))
+            try await db.setFeatureCount(layerID: layerID, count: count)
+            if assessment.viaTwin { try await db.setFeatureCount(layerID: source.id, count: count) }
+            return count
+        } catch let error as ArcGISClientError {
+            if case .server(_, let message, _, _) = error {
+                try await db.setExtractability(layerID: layerID, extractable: false,
+                                               reason: "The server refused the count probe: \(message)",
+                                               transport: nil, siblingLayerID: nil)
+            }
+            throw error
+        }
     }
 }

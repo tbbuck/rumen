@@ -92,6 +92,8 @@ final class NavigationTests: XCTestCase {
         let b = BoundingBox(minX: -2, minY: 0.5, maxX: 0.5, maxY: 3)
         XCTAssertEqual(a.union(b), BoundingBox(minX: -2, minY: 0, maxX: 1, maxY: 3))
         XCTAssertEqual(BoundingBox.union(of: []), nil)
+        XCTAssertEqual(BoundingBox.union(of: [a, .world]), a, "a world-sized box is ignored beside real ones")
+        XCTAssertEqual(BoundingBox.union(of: [.world]), .world, "but stands alone when it is all there is")
         XCTAssertTrue(BoundingBox.world.isWorldSized)
         XCTAssertFalse(a.isWorldSized)
         XCTAssertEqual(BoundingBox(json: a.json), a)

@@ -139,7 +139,7 @@ private struct OverviewTab: View {
             ("Query formats", layer.supportedQueryFormats ?? "—", false),
             ("Capabilities", layer.capabilities.map { Capabilities.parse($0).sorted().joined(separator: ", ") } ?? "—", false),
             ("Paging", paging.isEmpty ? "None advertised" : paging.joined(separator: ", ").capitalizedFirst, false),
-            ("FeatureServer twin", "Assessed in milestone M2", false),
+            ("FeatureServer twin", layer.siblingLayerID != nil ? "Yes, used as the download source" : (service.type == .mapServer ? "None found" : "Not applicable"), false),
             ("Layer type", layer.type ?? "—", false),
         ]
     }
@@ -149,29 +149,64 @@ private struct OverviewTab: View {
     }
 }
 
-/// One sentence, the verdict word first. Until M2's rules run, the honest answer is Unknown.
+/// One sentence, the verdict word first, then how, then the count (or the offer to count).
+/// Below it: one primary action and two links (UI-SPEC: PrimaryActions).
 private struct ExtractionStatement: View {
+    @Environment(AppModel.self) private var model
     let layer: LayerRecord
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("\(Text(verdict.word).font(.sheetUI(15, .bold)).foregroundStyle(verdict.color)) \(detail)")
-                .font(.sheetUI(15))
-                .foregroundStyle(Palette.ink)
-                .lineSpacing(4)
-                .frame(maxWidth: 720, alignment: .leading)
+            HStack(alignment: .firstTextBaseline, spacing: 0) {
+                Text("\(Text(verdict.word).font(.sheetUI(15, .bold)).foregroundStyle(verdict.color)) \(detail)")
+                    .font(.sheetUI(15))
+                    .foregroundStyle(Palette.ink)
+                    .lineSpacing(4)
+                if verdict != .notExtractable, layer.featureCount == nil {
+                    if model.probing {
+                        ProgressView().controlSize(.mini)
+                    } else {
+                        Button("count now") { Task { await model.probeCurrentLayer() } }.buttonStyle(LinkButtonStyle(size: 15))
+                        Text(".").font(.sheetUI(15)).foregroundStyle(Palette.ink)
+                    }
+                }
+            }
+            .frame(maxWidth: 720, alignment: .leading)
+            if let error = model.probeError {
+                ErrorText(message: error)
+            }
+            HStack(spacing: 18) {
+                if verdict == .extractable {
+                    Button("Download as GeoParquet") {}
+                        .buttonStyle(PrimaryButtonStyle())
+                        .disabled(true)
+                        .help("Downloads arrive with milestone M4")
+                    Button("Change format or spatial reference") { model.layerTab = .download }.buttonStyle(LinkButtonStyle())
+                    Button("Preview a sample on the map") { model.layerTab = .map }.buttonStyle(LinkButtonStyle())
+                } else if verdict == .notExtractable, let twin = layer.siblingLayerID {
+                    Button("Use the FeatureServer twin") { Task { await model.select(.layer(twin)) } }.buttonStyle(LinkButtonStyle())
+                }
+            }
         }
     }
 
     private var verdict: Verdict { Verdict(layer.extractable) }
 
+    /// The stored reason (the rules' "how" sentence or the server's refusal), plus the count
+    /// sentence when the count is known and the assessment gives a page size.
     private var detail: String {
-        if let reason = layer.extractableReason, !reason.isEmpty { return reason }
-        switch verdict {
-        case .unknown: return "The extractability check has not run yet; it arrives with milestone M2."
-        case .extractable: return "This layer can be downloaded."
-        case .notExtractable: return "This layer cannot be queried."
+        var text = layer.extractableReason ?? ""
+        if text.isEmpty {
+            text = verdict == .unknown ? "The layer definition has not been fetched yet." : ""
         }
+        if verdict == .extractable, let count = layer.featureCount {
+            let sentence = model.assessment?.countSentence(features: count)
+                ?? "\(count.grouped) features, counted \(Age.text(layer.featureCountAt))."
+            text += " " + sentence
+        } else if verdict != .notExtractable {
+            text += " Count not probed yet, "
+        }
+        return text
     }
 }
 

@@ -179,3 +179,16 @@ private final class EventLog: @unchecked Sendable {
     func append(_ e: CrawlEvent) { lock.withLock { storage.append(e) } }
     var events: [CrawlEvent] { lock.withLock { storage } }
 }
+
+extension CrawlerTests {
+    func testDeepCrawlSkipsFreshServicesSoItResumes() async throws {
+        let opened = try await crawler.open(root)
+        _ = try await crawler.deepCrawl(serverID: opened.server.id)
+        let after = transport.count
+        _ = try await crawler.deepCrawl(serverID: opened.server.id)
+        let second = transport.count - after
+        XCTAssertEqual(second, 15, "the directory re-listing (root + 13 folders) plus one retry of the service that failed; nothing crawled successfully is fetched again")
+        _ = try await crawler.deepCrawl(serverID: opened.server.id, skipFresh: 0)
+        XCTAssertGreaterThan(transport.count - after - second, 14, "with no freshness window everything is re-crawled")
+    }
+}

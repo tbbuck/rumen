@@ -145,7 +145,7 @@ public final class DuckDB: @unchecked Sendable {
         let decimalInternal: duckdb_type
     }
 
-    private static func readResult(_ result: inout duckdb_result, maxRows: Int?) -> QueryResult {
+    static func readResult(_ result: inout duckdb_result, maxRows: Int?) -> QueryResult {
         let columnCount = Int(duckdb_column_count(&result))
         var columns = [DuckColumn]()
         var plans = [ColumnPlan]()

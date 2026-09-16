@@ -72,6 +72,16 @@ public struct LayerSummary: Decodable, Sendable, Equatable {
     public let parentLayerId: Int?
     public let subLayerIds: [Int]?
 
+    public init(id: Int, name: String, type: String? = nil, geometryType: String? = nil,
+                parentLayerId: Int? = nil, subLayerIds: [Int]? = nil) {
+        self.id = id
+        self.name = name
+        self.type = type
+        self.geometryType = geometryType
+        self.parentLayerId = parentLayerId
+        self.subLayerIds = subLayerIds
+    }
+
     /// ArcGIS uses -1 for "no parent".
     public var parentID: Int? { parentLayerId.flatMap { $0 >= 0 ? $0 : nil } }
 }

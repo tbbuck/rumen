@@ -47,6 +47,13 @@ public actor AppDatabase {
         return try db.run(sql, maxRows: maxRows)
     }
 
+    /// Runs one parameterised statement (`?` placeholders, bound in order).
+    @discardableResult
+    public func query(_ sql: String, _ params: [BindValue], maxRows: Int? = nil) throws -> QueryResult {
+        try Task.checkCancellation()
+        return try db.run(sql, params, maxRows: maxRows)
+    }
+
     /// Names of the user tables currently in the database, sorted.
     public func tableNames() throws -> [String] {
         let result = try db.run("""

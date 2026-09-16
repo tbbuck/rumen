@@ -21,13 +21,16 @@ struct LayerPage: View {
                 MapTab(session: session)
                     .padding(.bottom, 18)
                     .onAppear { model.syncMapSources() }
+            } else if model.layerTab == .raw {
+                RawJSONView()
+                    .padding(.bottom, 18)
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         switch model.layerTab {
                         case .overview: OverviewTab(layer: layer, service: service, fields: fields)
                         case .fields: FieldsTab(fields: fields)
-                        case .raw: RawJSONView()
+                        case .raw: Caption("Loading…")
                         case .query: Caption("Loading…")
                         case .download: DownloadTab(layer: layer, service: service)
                         case .map: Caption("Loading…")
@@ -160,7 +163,9 @@ private struct ExtractionStatement: View {
                     .font(.sheetUI(15))
                     .foregroundStyle(Palette.ink)
                     .lineSpacing(4)
-                if verdict != .notExtractable, layer.featureCount == nil {
+                if model.isAssessing {
+                    ProgressView().controlSize(.mini)
+                } else if verdict != .notExtractable, layer.featureCount == nil {
                     if model.probing {
                         ProgressView().controlSize(.mini)
                     } else {
@@ -294,13 +299,9 @@ private struct RawJSONView: View {
                 .buttonStyle(LinkButtonStyle(size: 12.5))
             }
             if let raw = model.currentRawJSON {
-                Text(raw)
-                    .font(.sheetMono(12))
-                    .foregroundStyle(Palette.ink)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
-                    .background(Palette.panel, in: RoundedRectangle(cornerRadius: 8))
+                RawTextView(text: raw)
+                    .frame(minHeight: 320, maxHeight: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
                     .overlay(RoundedRectangle(cornerRadius: 8).stroke(Palette.line, lineWidth: 1))
             } else {
                 ProgressView().controlSize(.small)

@@ -95,9 +95,9 @@ public struct QueryOptions: Sendable, Equatable {
 extension ArcGISClient {
     /// Runs a feature query (page, distinct values, or statistics) and decodes the feature set.
     public func features(_ server: ServerConnection, layerURL: URL, options: QueryOptions,
-                         maxAttempts: Int? = nil) async throws -> (value: FeatureSet, raw: Data) {
+                         maxAttempts: Int? = nil, progress: TransferProgressHandler? = nil) async throws -> (value: FeatureSet, raw: Data) {
         try await json(FeatureSet.self, .post, url: layerURL.appendingPathComponent("query"),
-                       params: options.params, server: server, maxAttempts: maxAttempts)
+                       params: options.params, server: server, maxAttempts: maxAttempts, progress: progress)
     }
 
     /// `returnExtentOnly=true` for a where clause, optionally in another spatial reference.

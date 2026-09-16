@@ -112,16 +112,9 @@ struct HoverTracking: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .onHover { hovering in
-                isHovered = hovering
-                if hand { (hovering ? NSCursor.pointingHand : NSCursor.arrow).set() }
-            }
-            .onDisappear {
-                if isHovered {
-                    isHovered = false
-                    if hand { NSCursor.arrow.set() }
-                }
-            }
+            .onHover { hovering in isHovered = hovering }
+            .onDisappear { if isHovered { isHovered = false } }
+            .pointerStyle(hand ? PointerStyle.link : nil)
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.12), value: isHovered)
     }
 }

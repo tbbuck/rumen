@@ -6,6 +6,15 @@ struct DetailPane: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
+        ZStack(alignment: .topLeading) {
+            Palette.bg
+            pageContent
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .clipped()
+    }
+
+    @ViewBuilder private var pageContent: some View {
         Group {
             if model.isSearching {
                 ColumnSearchResults()
@@ -31,8 +40,8 @@ struct DetailPane: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .clipped()
         .background(Palette.bg)
+        .clipped()
     }
 
     private var serverSubtitle: String {

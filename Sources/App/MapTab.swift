@@ -10,8 +10,12 @@ struct MapTab: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
                 Chip(text: chipText)
-                Text(session.caption.isEmpty ? "Loading…" : session.caption).font(.sheetUI(12.5)).foregroundStyle(Palette.muted).lineLimit(2)
-                if session.isLoading { ProgressView().controlSize(.small) }
+                if session.isLoading {
+                    Text(loadingText).font(.sheetUI(12.5)).foregroundStyle(Palette.muted).lineLimit(1)
+                    ProgressView().controlSize(.small)
+                } else {
+                    Text(session.caption).font(.sheetUI(12.5)).foregroundStyle(Palette.muted).lineLimit(2)
+                }
                 Spacer()
                 SourceMenu(session: session)
                 if session.source == .sample {
@@ -33,6 +37,16 @@ struct MapTab: View {
         }
         .task(id: session.layer.id) { await session.load() }
         .onChange(of: session.source) { Task { await session.load() } }
+    }
+
+    /// "Waiting for the server…" until the first byte, then a percentage when the length is
+    /// trustworthy, otherwise the bytes so far.
+    private var loadingText: String {
+        guard let transfer = session.transfer else { return "Waiting for the server…" }
+        if let fraction = transfer.fraction {
+            return "Receiving… \(Int((fraction * 100).rounded()))%"
+        }
+        return "Receiving… \(transfer.received.formatted(.byteCount(style: .file)))"
     }
 
     private var chipText: String {

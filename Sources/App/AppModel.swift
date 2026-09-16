@@ -61,6 +61,7 @@ final class AppModel {
     private(set) var querySession: QuerySession?
     private(set) var mapSession: MapSession?
     private(set) var probing = false
+    private(set) var isAssessing = false
     private(set) var probeError: String?
     private var deepCrawlTask: Task<Void, Never>?
     var layerTab: LayerTab = .overview
@@ -200,41 +201,43 @@ final class AppModel {
     /// Selects a node and loads what its page needs. Selecting an uncrawled service crawls it.
     func select(_ id: NodeID?) async {
         selection = id
-        currentService = nil
-        currentLayer = nil
-        currentFields = []
-        currentRawJSON = nil
-        assessment = nil
-        probeError = nil
-        currentLayerInfo = nil
-        querySession = nil
-        mapSession = nil
-        guard let id, let database, let server = currentServer else { pathContent = nil; return }
+        guard let id, let database, let server = currentServer else { clearPage(); pathContent = nil; return }
         do {
             switch id {
             case .server:
+                clearPage()
                 pathContent = PathBarContent.build(server: server)
             case .folder(_, let path):
+                clearPage()
                 pathContent = PathBarContent.build(server: server, folderPath: path)
             case .service(let serviceID):
                 let service = try await database.service(id: serviceID)
+                guard selection == id else { return }
+                clearPage()
                 currentService = service
                 pathContent = PathBarContent.build(server: server, service: service)
                 if !service.isCrawled && service.type.hasLayers {
                     await crawlService(serviceID)
+                    guard selection == id else { return }
                     currentService = try await database.service(id: serviceID)
                 }
             case .layer(let layerID):
+                // Load everything first, then swap the page in one go: no blank frame in between.
                 let layer = try await database.layer(id: layerID)
                 let service = try await database.service(id: layer.serviceID)
+                let fields = try await database.fields(layerID: layerID)
+                var info: LayerInfo?
+                if let raw = try await database.layerRawJSON(id: layerID), let data = raw.data(using: .utf8) {
+                    info = try? ArcGISJSON.decode(LayerInfo.self, from: data)
+                }
+                guard selection == id else { return }   // the user moved on while we loaded
+                clearPage()
                 currentService = service
                 currentLayer = layer
-                currentFields = try await database.fields(layerID: layerID)
+                currentFields = fields
+                currentLayerInfo = info
                 pathContent = PathBarContent.build(server: server, service: service, layer: layer)
-                if let raw = try await database.layerRawJSON(id: layerID), let data = raw.data(using: .utf8) {
-                    currentLayerInfo = try? ArcGISJSON.decode(LayerInfo.self, from: data)
-                }
-                querySession = QuerySession(layer: layer, service: service, fields: currentFields, info: currentLayerInfo,
+                querySession = QuerySession(layer: layer, service: service, fields: fields, info: info,
                                             client: client, database: database, connection: server.connection())
                 mapSession = MapSession(layer: layer, service: service, client: client, database: database,
                                         connection: server.connection(),
@@ -247,18 +250,32 @@ final class AppModel {
         }
     }
 
+    private func clearPage() {
+        currentService = nil
+        currentLayer = nil
+        currentFields = []
+        currentRawJSON = nil
+        assessment = nil
+        probeError = nil
+        currentLayerInfo = nil
+        querySession = nil
+        mapSession = nil
+    }
+
     /// Loads the pretty-printed raw JSON for the Raw tab on demand.
     func loadRawJSON() async {
         guard let database, let layer = currentLayer, currentRawJSON == nil else { return }
         do {
             let raw = try await database.layerRawJSON(id: layer.id) ?? ""
-            currentRawJSON = Self.prettyJSON(raw)
+            let pretty = await Task.detached(priority: .userInitiated) { Self.prettyJSON(raw) }.value
+            guard currentLayer?.id == layer.id else { return }
+            currentRawJSON = pretty
         } catch {
             errorText = String(describing: error)
         }
     }
 
-    private static func prettyJSON(_ text: String) -> String {
+    nonisolated private static func prettyJSON(_ text: String) -> String {
         guard let data = text.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data),
               let pretty = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
@@ -272,12 +289,16 @@ final class AppModel {
     /// verdict, and refreshes the row and the page.
     func assessCurrentLayer() async {
         guard let crawler, let database, let layer = currentLayer else { return }
+        isAssessing = true
+        defer { isAssessing = false }
         do {
-            assessment = try await crawler.assess(layerID: layer.id)
+            let result = try await crawler.assess(layerID: layer.id)
+            guard currentLayer?.id == layer.id else { return }
+            assessment = result
             currentLayer = try await database.layer(id: layer.id)
             try await reloadTree()
         } catch {
-            probeError = String(describing: error)
+            if currentLayer?.id == layer.id { probeError = String(describing: error) }
         }
     }
 

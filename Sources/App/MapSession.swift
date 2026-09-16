@@ -26,6 +26,8 @@ final class MapSession {
     private(set) var content = MapContent()
     private(set) var caption = ""
     private(set) var isLoading = false
+    /// The sample body as it arrives; nil while the server is still thinking.
+    private(set) var transfer: TransferProgress?
     private(set) var error: String?
     private(set) var graticule: Graticule?
     private(set) var viewport: MapViewport?
@@ -71,13 +73,16 @@ final class MapSession {
         isLoading = true
         error = nil
         selectedFeature = nil
-        defer { isLoading = false }
+        transfer = nil
+        defer { isLoading = false; transfer = nil }
         do {
             switch source {
             case .sample:
                 var options = QueryOptions(outFields: nil, returnGeometry: true, outWkid: 4326, count: sampleSize)
                 options.geometryPrecision = 6
-                let set = try await client.features(connection, layerURL: layerURL, options: options).value
+                let set = try await client.features(connection, layerURL: layerURL, options: options, progress: { progress in
+                    Task { @MainActor in self.transfer = progress }
+                }).value
                 let page = FeaturePage(json: set)
                 let features = Self.features(page)
                 content.featuresGeoJSON = GeoJSON.featureCollection(features)
@@ -153,7 +158,10 @@ final class MapSession {
         selectedFeature = ordered.isEmpty ? [("geometry", properties["__geometry"] ?? "feature")] : ordered
     }
 
-    func clearSelection() { selectedFeature = nil }
+    func clearSelection() {
+        selectedFeature = nil
+        content.clearToken += 1
+    }
 
     private func bounds(of page: FeaturePage) -> BoundingBox? {
         var box: BoundingBox?

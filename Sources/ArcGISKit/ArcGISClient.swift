@@ -101,9 +101,32 @@ public enum ArcGISClientError: Error, CustomStringConvertible, Equatable {
     }
 }
 
+/// Bytes received so far and the total the server announced, when it announced one that can be
+/// trusted (no content encoding in the way).
+public struct TransferProgress: Sendable, Equatable {
+    public var received: Int64
+    public var expected: Int64?
+    public init(received: Int64, expected: Int64?) {
+        self.received = received
+        self.expected = expected
+    }
+    /// 0...1 when the total is known.
+    public var fraction: Double? { expected.flatMap { $0 > 0 ? min(1, Double(received) / Double($0)) : nil } }
+}
+
+public typealias TransferProgressHandler = @Sendable (TransferProgress) -> Void
+
 /// The HTTP seam: `URLSession` in the app, a stub in tests.
 public protocol HTTPTransport: Sendable {
     func perform(_ request: URLRequest) async throws -> (Data, HTTPURLResponse)
+    /// Like `perform`, reporting the body as it arrives. The default reports nothing.
+    func perform(_ request: URLRequest, progress: @escaping TransferProgressHandler) async throws -> (Data, HTTPURLResponse)
+}
+
+public extension HTTPTransport {
+    func perform(_ request: URLRequest, progress: @escaping TransferProgressHandler) async throws -> (Data, HTTPURLResponse) {
+        try await perform(request)
+    }
 }
 
 public struct URLSessionTransport: HTTPTransport {
@@ -116,6 +139,31 @@ public struct URLSessionTransport: HTTPTransport {
         guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
+        return (data, http)
+    }
+
+    /// Streams the body, reporting every 64 KB. `Content-Length` counts encoded bytes while
+    /// `URLSession` hands back decoded ones, so the total is only trusted without an encoding.
+    public func perform(_ request: URLRequest, progress: @escaping TransferProgressHandler) async throws -> (Data, HTTPURLResponse) {
+        let (bytes, response) = try await session.bytes(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        let encoded = http.value(forHTTPHeaderField: "Content-Encoding").map { !$0.isEmpty && $0 != "identity" } ?? false
+        let expected: Int64? = (!encoded && http.expectedContentLength >= 0) ? http.expectedContentLength : nil
+        var data = Data()
+        if let expected { data.reserveCapacity(Int(expected)) }
+        var sinceReport = 0
+        progress(TransferProgress(received: 0, expected: expected))
+        for try await byte in bytes {
+            data.append(byte)
+            sinceReport += 1
+            if sinceReport >= 65_536 {
+                sinceReport = 0
+                progress(TransferProgress(received: Int64(data.count), expected: expected))
+            }
+        }
+        progress(TransferProgress(received: Int64(data.count), expected: expected))
         return (data, http)
     }
 }
@@ -147,7 +195,8 @@ public actor ArcGISClient {
     /// `params` are query parameters for GET and the form body for POST; `f=json` is added
     /// unless the caller set `f`.
     public func request(_ method: HTTPMethod, url: URL, params: [String: String] = [:],
-                        server: ServerConnection, maxAttempts: Int? = nil) async throws -> Data {
+                        server: ServerConnection, maxAttempts: Int? = nil,
+                        progress: TransferProgressHandler? = nil) async throws -> Data {
         var params = params
         if params["f"] == nil { params["f"] = "json" }
         if let token = server.token, params["token"] == nil { params["token"] = token }
@@ -160,7 +209,7 @@ public actor ArcGISClient {
         while true {
             if Task.isCancelled { throw ArcGISClientError.cancelled }
             do {
-                return try await performOnce(request, url: url)
+                return try await performOnce(request, url: url, progress: progress)
             } catch let error as ArcGISClientError {
                 guard error.isRetryable, attempt < (maxAttempts ?? retry.maxAttempts) else { throw error }
                 let delay = retry.delay(beforeRetry: attempt)
@@ -170,11 +219,15 @@ public actor ArcGISClient {
         }
     }
 
-    private func performOnce(_ request: URLRequest, url: URL) async throws -> Data {
+    private func performOnce(_ request: URLRequest, url: URL, progress: TransferProgressHandler?) async throws -> Data {
         let data: Data
         let response: HTTPURLResponse
         do {
-            (data, response) = try await transport.perform(request)
+            if let progress {
+                (data, response) = try await transport.perform(request, progress: progress)
+            } else {
+                (data, response) = try await transport.perform(request)
+            }
         } catch is CancellationError {
             throw ArcGISClientError.cancelled
         } catch {
@@ -198,8 +251,9 @@ public actor ArcGISClient {
     /// cache it verbatim.
     public func json<T: Decodable>(_ type: T.Type, _ method: HTTPMethod = .get, url: URL,
                                    params: [String: String] = [:],
-                                   server: ServerConnection, maxAttempts: Int? = nil) async throws -> (value: T, raw: Data) {
-        let data = try await request(method, url: url, params: params, server: server, maxAttempts: maxAttempts)
+                                   server: ServerConnection, maxAttempts: Int? = nil,
+                                   progress: TransferProgressHandler? = nil) async throws -> (value: T, raw: Data) {
+        let data = try await request(method, url: url, params: params, server: server, maxAttempts: maxAttempts, progress: progress)
         do {
             return (try ArcGISJSON.decode(type, from: data), data)
         } catch {

@@ -61,6 +61,10 @@ targets:
           - "/opt/homebrew/opt/duckdb/lib"
         LD_RUNPATH_SEARCH_PATHS:
           - "/opt/homebrew/opt/duckdb/lib"
+        # The engine (Homebrew libduckdb, bundled by the release script) is arm64 only, so the
+        # app is too: a Release build otherwise builds both standard slices and the x86_64 one
+        # cannot link.
+        ARCHS: arm64
 
   # Apple's accessibility audit and a launch-time metric, driven through XCUITest against a
   # scratch home (`--home`) and a loopback ArcGIS server the tests synthesise. Run with

@@ -106,8 +106,9 @@ struct PreferencesView: View {
                     }
                 }
                 row("Domain labels") {
-                    Toggle("Add a <field>_label column beside each coded-value field", isOn: binding(\.domainLabels))
+                    Toggle("Add <field>_label columns for coded values", isOn: binding(\.domainLabels))
                         .toggleStyle(.checkbox).font(.sheetUI(12.5))
+                        .help("A sibling column beside each coded-value field, decoded from the domain")
                 }
                 Caption("Each download's tab starts from these and can change them for that run.", size: 11.5, color: Palette.muted2)
             }

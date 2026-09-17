@@ -36,6 +36,14 @@ struct ArcGISExplorerApp: App {
         return args[index + 1]
     }
 
+    /// Opens the Settings scene the way ⌘, does: through the app menu's item, whose action the
+    /// SwiftUI runtime owns.
+    @MainActor static func openSettingsWindow() {
+        guard let appMenu = NSApp.mainMenu?.items.first?.submenu,
+              let item = appMenu.items.first(where: { $0.keyEquivalent == "," }) else { return }
+        NSApp.sendAction(item.action ?? Selector(("showSettingsWindow:")), to: item.target, from: item)
+    }
+
     init() {
         SheetFonts.register()
     }
@@ -53,7 +61,7 @@ struct ArcGISExplorerApp: App {
                     if let tab = Self.tabArgument, let chosen = LayerTab(rawValue: tab.capitalizedFirst) { model.layerTab = chosen }
                     if Self.runArgument == "export-geojson" { await model.storedSession?.reexport(.geoJSON, overwrite: true) }
                     if Self.runArgument == "export-csv" { await model.storedSession?.reexport(.csv, overwrite: true) }
-                    if Self.runArgument == "preferences" { NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) }
+                    if Self.runArgument == "preferences" { Self.openSettingsWindow() }
                     if Self.runArgument == "preview" { await model.querySession?.preview() }
                     if let text = Self.searchArgument { model.columnSearch = text }
                     if let text = Self.filterArgument { model.treeFilter = text }

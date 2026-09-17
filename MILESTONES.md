@@ -132,6 +132,34 @@ commit per logical unit.
   model's error sites turned `clearError` into a call to itself; the compiler's recursion
   warning caught it on the next build. 186 tests; verified by captures on sampleserver6
   (expanded service, selected layer) and ONS (3,937 services filtered flat).
+- **M8 follow-up** (2026-09-17, from first use): the outline refused `collapseItem` while the
+  delegate hid the outline cell (`shouldShowOutlineCellForItem`), so nothing collapsed by
+  chevron or by Left; the cell now gets a zero frame instead. Left and Right are handled
+  explicitly (collapse or parent; expand or first child), Space toggles, a click takes
+  keyboard focus, and the tree is handed focus after a server opens and on Escape or Down
+  from the filter and column-search fields, so typing no longer lands in the search box.
+  Found with a CGEvent-driven capture script (`claude-scripts/key_test.sh`), which also
+  showed that synthetic arrow keys need the function-key and keypad flags before AppKit's
+  key bindings recognise them.
+- **M9 complete** (2026-09-17). **Preferences** (⌘,): download folder, default format and
+  spatial reference (locked to WGS 84 for GeoJSON), domain labels, requests per host,
+  attempts per request, appearance; kept in the `setting` table, seeding each layer's
+  Download tab and the Overview's primary button; the client's per-host cap and retry policy
+  and the engine's per-run concurrency are settable at runtime (a raised cap wakes waiters;
+  tested). **Packaging** as in DuckLake Explorer: `scripts/bundle-duckdb-engine.sh` copies
+  `libduckdb` into `Contents/Frameworks` and rewrites the install name and rpath;
+  `scripts/release.sh` builds Release, bundles, signs with Developer ID and the hardened
+  runtime under `Config/ArcGISExplorer.entitlements` (`disable-library-validation` only),
+  runs the signed binary's `--selftest` (a packaged build points DuckDB's default
+  configuration at `~/Library/Application Support/ArcGIS Explorer/duckdb-extensions`, so
+  `INSTALL spatial` lands there and every engine finds it), notarises, staples, and packages
+  the DMG; `release.yml` does the same on a `v*` tag. Verified on this Mac: the signature
+  verifies, the self-test fetched `spatial` v1.5.5 into the per-user folder and reprojected
+  London through it under library validation, no Homebrew reference remains in the bundle,
+  `notarytool` accepted the submission, the staple validates, and `spctl` reports
+  "accepted, source=Notarized Developer ID"; an 18 MB DMG. Not done: the app icon, which is
+  being designed under `design/icon` in a separate session and is not wired into the bundle.
+  187 tests.
 
 ---
 
@@ -293,7 +321,7 @@ commit per logical unit.
   Retry where one applies, and Reduce-Motion-aware slide-in. Keep run failures in the
   transfers drawer where they are.
 
-## M9 — Preferences & packaging
+## M9 — Preferences & packaging — ✅ done 2026-09-17 (icon pending)
 **Goal:** secured servers and a shippable app.
 - **Deliverables**
   - Preferences: download directory, default format and SR, concurrency, retry

@@ -206,7 +206,7 @@ private struct ErrorBanner: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Palette.panel)
         .overlay(alignment: .bottom) { Rectangle().fill(Palette.line2).frame(height: 1) }
-        .shadow(color: .black.opacity(0.25), radius: 9, y: 6)
+        .edgeShade(.bottom)
     }
 }
 

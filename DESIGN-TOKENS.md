@@ -155,9 +155,11 @@ Expose as `Font.sheetDisplay(_:)`, `Font.sheetUI(_:)`, `Font.sheetMono(_:)`.
 - Selection: `accent-soft` fill + `inset 2px 0 0 accent` left rail (tree rows);
   current path segment: `accent-soft` fill, radius 5.
 - Focus ring: `2px solid accent`, `outline-offset: 2px`.
-- Shadows: only on sheets, popovers and the drawer's top edge —
-  `0 30px 70px -25px rgba(0,0,0,.45)` for sheets, `0 -6px 18px -12px rgba(0,0,0,.25)`
-  for the drawer. Nothing else casts a shadow.
+- Shadows: only on sheets and popovers — `0 30px 70px -25px rgba(0,0,0,.45)`. The
+  transfers drawer's top edge and the error banner's bottom edge carry an **edge shade**
+  instead of a blurred shadow: a `line2` hairline and a short gradient beyond the edge,
+  black at 35% over 18px at night (depth on slate), 6% over 10px by day (a blurred shadow
+  reads as a smudge on paper). Nothing else casts a shadow.
 
 **Spacing & motion**
 - Side gutter 36px in the layer page, 16px in the tree; panel padding 14–18px.

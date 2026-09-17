@@ -67,6 +67,7 @@ struct ArcGISExplorerApp: App {
                     if Self.runArgument == "export-geojson" { await model.storedSession?.reexport(.geoJSON, overwrite: true) }
                     if Self.runArgument == "export-csv" { await model.storedSession?.reexport(.csv, overwrite: true) }
                     if Self.runArgument == "preferences" { Self.openSettingsWindow() }
+                    if Self.runArgument == "transfers" { model.showTransfers = true }
                     if Self.runArgument == "preview" { await model.querySession?.preview() }
                     if let text = Self.searchArgument { model.columnSearch = text }
                     if let text = Self.filterArgument { model.treeFilter = text }

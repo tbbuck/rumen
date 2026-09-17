@@ -169,8 +169,8 @@ struct TransfersDrawer: View {
         .frame(height: 340)
         .frame(maxWidth: .infinity)
         .background(Palette.panel)
-        .overlay(alignment: .top) { Rectangle().fill(Palette.line).frame(height: 1) }
-        .shadow(color: .black.opacity(0.25), radius: 9, y: -6)
+        .overlay(alignment: .top) { Rectangle().fill(Palette.line2).frame(height: 1) }
+        .edgeShade(.top)
     }
 
     private var summary: String {

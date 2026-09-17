@@ -267,6 +267,33 @@ struct ErrorText: View {
     }
 }
 
+/// The shade a raised panel casts onto what it overlaps, drawn as a short gradient beyond its
+/// edge instead of a blurred shadow: 35% over 18px at night, where it reads as depth, and 6%
+/// over 10px by day, where a real shadow looks like a smudge on paper. Pair it with a `line2`
+/// hairline on the edge.
+struct EdgeShade: ViewModifier {
+    enum Edge { case top, bottom }
+    let edge: Edge
+    @Environment(\.colorScheme) private var scheme
+
+    func body(content: Content) -> some View {
+        let dark = scheme == .dark
+        let height: CGFloat = dark ? 18 : 10
+        let strength = dark ? 0.35 : 0.06
+        content.overlay(alignment: edge == .top ? .top : .bottom) {
+            LinearGradient(colors: [Color.black.opacity(strength), .clear],
+                           startPoint: edge == .top ? .bottom : .top, endPoint: edge == .top ? .top : .bottom)
+                .frame(height: height)
+                .offset(y: edge == .top ? -height : height)
+                .allowsHitTesting(false)
+        }
+    }
+}
+
+extension View {
+    func edgeShade(_ edge: EdgeShade.Edge) -> some View { modifier(EdgeShade(edge: edge)) }
+}
+
 /// Run progress: 6px, radius 3; `yes` when done, `warn` when paused, `accent` while running.
 struct ProgressBar: View {
     let fraction: Double

@@ -10,10 +10,12 @@ struct ArcGISExplorerApp: App {
 
     /// `--open <url>`: navigate to an ArcGIS URL after launch (`open -a "ArcGIS Explorer" --args --open <url>`).
     static var openArgument: String? { argument("--open") }
-    /// `--tab <name>` and `--run preview`: for scripted window captures.
+    /// `--tab <name>`, `--run preview|download|export-geojson|export-csv`, `--stored <download id>`
+    /// (open that download's layer on the Stored tab, from cache): for scripted window captures.
     static var tabArgument: String? { argument("--tab") }
     static var runArgument: String? { argument("--run") }
     static var searchArgument: String? { argument("--search") }
+    static var storedArgument: Int64? { argument("--stored").flatMap(Int64.init) }
     /// `--bench-filter`: after opening, set the tree filter in steps and log main-thread busy time.
     static var benchFilter: Bool { CommandLine.arguments.contains("--bench-filter") }
 
@@ -36,7 +38,10 @@ struct ArcGISExplorerApp: App {
                 .task {
                     await model.start()
                     if let url = Self.openArgument { await model.openFromLaunch(url) }
+                    if let id = Self.storedArgument { await model.showStoredDownload(id: id) }
                     if let tab = Self.tabArgument, let chosen = LayerTab(rawValue: tab.capitalizedFirst) { model.layerTab = chosen }
+                    if Self.runArgument == "export-geojson" { await model.storedSession?.reexport(.geoJSON, overwrite: true) }
+                    if Self.runArgument == "export-csv" { await model.storedSession?.reexport(.csv, overwrite: true) }
                     if Self.runArgument == "preview" { await model.querySession?.preview() }
                     if let text = Self.searchArgument { model.columnSearch = text }
                     if Self.benchFilter {

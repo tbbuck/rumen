@@ -263,7 +263,8 @@ private struct RunActions: View {
                     .help("Stops after the requests in flight; the run can be resumed")
             case .complete:
                 Button("Show in Finder") { model.reveal(run.record.outputPath) }.buttonStyle(LinkButtonStyle())
-                Button("Re-export") {}.buttonStyle(LinkButtonStyle()).disabled(true).help("Arrives with milestone M7")
+                Button("Re-export") { Task { await model.showStored(run.record) } }.buttonStyle(LinkButtonStyle())
+                    .help("Open the stored file: its rows, a SQL scratch box, and export as GeoJSON or CSV without the server")
                 Button("Map") { Task { await model.showStoredMap(run.record) } }.buttonStyle(LinkButtonStyle())
             case .paused:
                 if run.record.error?.contains("token") == true {

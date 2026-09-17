@@ -11,6 +11,7 @@ struct DownloadTab: View {
     let service: ServiceRecord
     @State private var whereClause = "1=1"
     @State private var wgs84 = false
+    @State private var format: ExportFormat = .geoParquet
     @State private var domainLabels = false
     @State private var manualStrategy: Assessment.Strategy = .offset
     @State private var manualPageSize = 1000
@@ -20,20 +21,27 @@ struct DownloadTab: View {
     private var verdict: Verdict { Verdict(layer.extractable) }
 
     var body: some View {
-        DownloadPlanText(layer: layer, assessment: assessment, wgs84: wgs84, whereClause: whereClause)
+        DownloadPlanText(layer: layer, assessment: assessment, wgs84: wgs84 || format.forcesWGS84, format: format, whereClause: whereClause)
         HStack(spacing: 18) {
             Menu {
-                ForEach(ExportFormat.allCases, id: \.self) { format in Button(format.label) {} }
-                Button("GeoPackage, GeoJSON, FlatGeobuf, CSV arrive with M7") {}.disabled(true)
+                ForEach(ExportFormat.allCases, id: \.self) { choice in
+                    Button(choice == format ? "✓ \(choice.label)" : choice.label) {
+                        format = choice
+                        if choice.forcesWGS84 { wgs84 = true }
+                    }
+                }
             } label: {
-                Text("Format: GeoParquet").font(.sheetUI(12.5)).hoverLabel()
+                Text("Format: \(format.label)").font(.sheetUI(12.5)).hoverLabel()
             }
             .menuStyle(.borderlessButton).fixedSize()
+            .help(format.geometryNote.capitalizedFirst)
             Picker("", selection: $wgs84) {
                 Text(verbatim: layer.effectiveWkid.map { "Native (\($0))" } ?? "Native").tag(false)
                 Text("WGS 84").tag(true)
             }
             .pickerStyle(.segmented).labelsHidden().fixedSize().tint(Palette.accent)
+            .disabled(format.forcesWGS84)
+            .help(format.forcesWGS84 ? "GeoJSON is always WGS 84 (RFC 7946)" : "The spatial reference the features are written in")
             Toggle("Domain label columns", isOn: $domainLabels).toggleStyle(.checkbox).font(.sheetUI(12.5))
                 .help("Adds a <field>_label column beside each coded-value field")
             Spacer()
@@ -42,7 +50,7 @@ struct DownloadTab: View {
             Caption("Where")
             TextField("1=1", text: $whereClause).textFieldStyle(SheetFieldStyle(mono: true)).frame(maxWidth: 720)
         }
-        OutputPathPreview(path: model.outputPath(for: layer, service: service).path)
+        OutputPathPreview(path: model.outputPath(for: layer, service: service, format: format).path)
         if verdict != .extractable || useManual {
             DisclosureGroup(isExpanded: $useManual) {
                 HStack(spacing: 14) {
@@ -64,7 +72,7 @@ struct DownloadTab: View {
             Button("Start download") { start() }
                 .buttonStyle(PrimaryButtonStyle())
                 .disabled(verdict != .extractable && !useManual)
-                .help(verdict == .extractable || useManual ? "Fetch every matching feature and write \(model.outputPath(for: layer, service: service).lastPathComponent)"
+                .help(verdict == .extractable || useManual ? "Fetch every matching feature and write \(model.outputPath(for: layer, service: service, format: format).lastPathComponent)"
                       : "Not extractable; open Manual strategy to force an attempt")
             if model.transfersError != nil {
                 ErrorText(message: model.transfersError ?? "")
@@ -83,6 +91,8 @@ struct DownloadTab: View {
                         Spacer()
                         if run.status == .complete {
                             Button("Show in Finder") { model.reveal(run.record.outputPath) }.buttonStyle(LinkButtonStyle(size: 12))
+                            Button("Stored") { Task { await model.showStored(run.record) } }.buttonStyle(LinkButtonStyle(size: 12))
+                                .help("The file's rows, a SQL scratch box, and re-export")
                         }
                     }
                     .frame(height: 27)
@@ -96,7 +106,8 @@ struct DownloadTab: View {
     private func start() {
         var request = DownloadRequest(layerID: layer.id, outputDirectory: model.downloadDirectory)
         request.whereClause = whereClause.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "1=1" : whereClause
-        request.outWkid = wgs84 ? 4326 : (layer.effectiveWkid ?? 4326)
+        request.outWkid = wgs84 || format.forcesWGS84 ? 4326 : (layer.effectiveWkid ?? 4326)
+        request.format = format
         request.domainLabels = domainLabels
         if useManual {
             request.manualStrategy = manualStrategy
@@ -111,6 +122,7 @@ private struct DownloadPlanText: View {
     let layer: LayerRecord
     let assessment: Assessment?
     let wgs84: Bool
+    let format: ExportFormat
     let whereClause: String
 
     var body: some View {
@@ -132,14 +144,14 @@ private struct DownloadPlanText: View {
             s += " The count is probed first, then every page is fetched in parallel."
         }
         let sr = wgs84 ? "WGS 84" : (layer.effectiveWkid.map { "the native spatial reference (\($0))" } ?? "the native spatial reference")
-        s += " Written as GeoParquet in \(sr)"
+        s += " Written as \(format.label) in \(sr)"
         let w = whereClause.trimmingCharacters(in: .whitespacesAndNewlines)
         if !w.isEmpty, w != "1=1" { s += ", where \(w)" }
         return s + "."
     }
 }
 
-/// `<dir>/<server>/<service>/<layer>.parquet` in mono with Change and Reveal.
+/// `<dir>/<server>/<service>/<layer>.<ext>` in mono with Change and Reveal.
 private struct OutputPathPreview: View {
     @Environment(AppModel.self) private var model
     let path: String

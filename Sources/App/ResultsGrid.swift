@@ -93,7 +93,11 @@ struct ResultsGrid: NSViewRepresentable {
             }()
             let value = grid.rows[row][index]
             let isNull = value == "NULL"
-            field.stringValue = value
+            // Multi-line values (addresses with carriage returns) would otherwise be drawn as a
+            // stack of lines squeezed into one row; show the break instead.
+            field.stringValue = value.contains(where: \.isNewline)
+                ? value.replacingOccurrences(of: "\r\n", with: "↵ ").replacingOccurrences(of: "\r", with: "↵ ").replacingOccurrences(of: "\n", with: "↵ ")
+                : value
             field.textColor = isNull ? .sheet(0x8A948E, 0x7B867F) : .sheet(0x222A26, 0xE7EAE6)   // muted2 / ink
             field.alignment = grid.columns[index].isNumeric && !isNull ? .right : .left
             return field

@@ -94,6 +94,24 @@ commit per logical unit.
   screens: a **start page** (known servers with counts, or a URL field) instead of landing
   in the last server, and an **opening page** that names the server and the crawler's
   current step while a new server is added; "Start page" in the recents popover.
+- **M7 complete** (2026-09-17). Export formats: GeoJSON through the spatial extension's GDAL
+  writer (RFC 7946, so always WGS 84: the Download tab's spatial reference picker locks to it)
+  and CSV with the geometry as WKT, written from the staging table at download time (a real
+  format menu; the plan sentence and output path follow it) or as **re-exports** of a stored
+  GeoParquet read back through DuckDB, landing beside it and recorded in a new `export` table
+  (migration 0004). The **Stored** tab: the file's facts (rows, columns, size, spatial
+  reference, age, invalid geometries as received), Show in Finder and Map, an Exports section
+  with the two re-export links and the files written so far, and a DuckDB SQL scratch box over
+  the file as the table `data` with the results grid (first 1,000 rows, geometry as WKT for
+  points or a shape summary, nested types as text, DuckDB errors verbatim), all on the file's
+  own engine so the app database never waits. The transfers drawer's Re-export and the run
+  history's Stored link open it. Found on the way: DuckDB 1.5.5 reads a GeoParquet's CRS onto
+  the geometry type (`GEOMETRY('EPSG:27700')`), so column type checks match by prefix; the
+  GDAL writer wants `geometry_always_xy` set and an `SRS`; attribute values with carriage
+  returns (multi-line addresses) drew as a squeezed stack in the grid and now show a ↵ mark;
+  the Overview's primary button was still disabled "until M4" and now starts a download with
+  the defaults. 183 tests; verified live: a 378-feature stored layer re-exported as GeoJSON
+  reads back in DuckDB with 378 features inside Teesside's longitude and latitude.
 
 ---
 
@@ -216,7 +234,7 @@ commit per logical unit.
   history scan script confirms).
 - **Demo:** preview a layer, download it, map the file.
 
-## M7 — Export formats & stored data
+## M7 — Export formats & stored data — ✅ done 2026-09-17
 **Goal:** get data into every format the user asked for, from server or from disk.
 - **Deliverables**
   - GeoJSON and CSV (WKT), through the DuckDB COPY() TO syntax;

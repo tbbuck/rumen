@@ -1,15 +1,31 @@
 import Foundation
 import SQLiteKit
 
-/// Export formats. GeoParquet is the default (SPEC §5.7); the rest arrive with M7.
+/// Export formats (SPEC §5.7). GeoParquet is the default and the one a download keeps; GeoJSON
+/// and CSV are written from the staging table at download time or re-exported from a stored
+/// GeoParquet later, without touching the server.
 public enum ExportFormat: String, Sendable, CaseIterable, Equatable {
     case geoParquet = "geoparquet"
+    case geoJSON = "geojson"
+    case csv = "csv"
 
     public var fileExtension: String {
-        switch self { case .geoParquet: "parquet" }
+        switch self { case .geoParquet: "parquet"; case .geoJSON: "geojson"; case .csv: "csv" }
     }
     public var label: String {
-        switch self { case .geoParquet: "GeoParquet" }
+        switch self { case .geoParquet: "GeoParquet"; case .geoJSON: "GeoJSON"; case .csv: "CSV" }
+    }
+    /// GeoJSON (RFC 7946) is always WGS 84; the spatial reference picker has no say.
+    public var forcesWGS84: Bool { self == .geoJSON }
+    /// Formats a stored GeoParquet can be re-exported to.
+    public static var reexportable: [ExportFormat] { [.geoJSON, .csv] }
+    /// How the geometry travels, for captions.
+    public var geometryNote: String {
+        switch self {
+        case .geoParquet: "geometry as WKB with the CRS in the file's metadata"
+        case .geoJSON: "written in WGS 84 as RFC 7946 requires"
+        case .csv: "geometry as WKT in a geometry column"
+        }
     }
 }
 
@@ -174,6 +190,7 @@ extension AppDatabase {
     }
 
     public func deleteDownload(id: Int64) throws {
+        try query("DELETE FROM export WHERE download_id = ?;", [.int(id)])
         try query("DELETE FROM download_chunk WHERE download_id = ?;", [.int(id)])
         try query("DELETE FROM download WHERE id = ?;", [.int(id)])
     }
@@ -232,6 +249,79 @@ extension AppDatabase {
         try query("""
             UPDATE download_chunk SET status = ?, count = ?, attempts = ?, last_error = ? WHERE download_id = ? AND seq = ?;
             """, [.string(status.rawValue), .optional(count), .int(Int64(attempts)), .optional(error), .int(downloadID), .int(Int64(seq))])
+    }
+}
+
+// MARK: - Exports
+
+/// A file re-exported from a stored download (M7): a row of `export`.
+public struct ExportRecord: Sendable, Equatable, Identifiable {
+    public let id: Int64
+    public let downloadID: Int64
+    public let format: ExportFormat
+    public let outWkid: Int
+    public let outputPath: String
+    public let outputSHA256: String?
+    public let bytes: Int64?
+    public let featureCount: Int64?
+    public let createdAt: Date
+
+    public init(id: Int64, downloadID: Int64, format: ExportFormat, outWkid: Int, outputPath: String,
+                outputSHA256: String? = nil, bytes: Int64? = nil, featureCount: Int64? = nil, createdAt: Date = Date()) {
+        self.id = id
+        self.downloadID = downloadID
+        self.format = format
+        self.outWkid = outWkid
+        self.outputPath = outputPath
+        self.outputSHA256 = outputSHA256
+        self.bytes = bytes
+        self.featureCount = featureCount
+        self.createdAt = createdAt
+    }
+}
+
+extension AppDatabase {
+    private static let exportColumns = "id, download_id, format, out_wkid, output_path, output_sha256, bytes, feature_count, created_at"
+
+    /// Records a re-export. A previous record for the same output path is replaced: the file was.
+    @discardableResult
+    public func recordExport(downloadID: Int64, format: ExportFormat, outWkid: Int, result: ExportResult,
+                             at date: Date = Date()) throws -> ExportRecord {
+        try query("DELETE FROM export WHERE output_path = ?;", [.string(result.path)])
+        let id = try query("""
+            INSERT INTO export (download_id, format, out_wkid, output_path, output_sha256, bytes, feature_count, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id;
+            """, [.int(downloadID), .string(format.rawValue), .int(Int64(outWkid)), .string(result.path), .string(result.sha256),
+                  .int(result.bytes), .int(result.featureCount), date.bindValue]).rows.first?.first?.int64
+        guard let id else { throw MetadataStoreError.unexpectedRow("export insert") }
+        return ExportRecord(id: id, downloadID: downloadID, format: format, outWkid: outWkid, outputPath: result.path,
+                            outputSHA256: result.sha256, bytes: result.bytes, featureCount: result.featureCount, createdAt: date)
+    }
+
+    /// Re-exports of one download, newest first.
+    public func exports(downloadID: Int64) throws -> [ExportRecord] {
+        try query("SELECT \(Self.exportColumns) FROM export WHERE download_id = ? ORDER BY created_at DESC, id DESC;",
+                  [.int(downloadID)]).rows.compactMap(Self.exportRecord)
+    }
+
+    /// Re-exports of every download of a layer, newest first.
+    public func exports(layerID: Int64) throws -> [ExportRecord] {
+        try query("""
+            SELECT \(Self.exportColumns) FROM export
+            WHERE download_id IN (SELECT id FROM download WHERE layer_id = ?) ORDER BY created_at DESC, id DESC;
+            """, [.int(layerID)]).rows.compactMap(Self.exportRecord)
+    }
+
+    public func deleteExport(id: Int64) throws {
+        try query("DELETE FROM export WHERE id = ?;", [.int(id)])
+    }
+
+    private static func exportRecord(_ r: [SQLValue]) -> ExportRecord? {
+        guard r.count == 9, let id = r[0].int64, let downloadID = r[1].int64,
+              let format = r[2].stringValue.flatMap(ExportFormat.init(rawValue:)), let wkid = r[3].intValue,
+              let path = r[4].stringValue, let created = r[8].dateFromMicros else { return nil }
+        return ExportRecord(id: id, downloadID: downloadID, format: format, outWkid: wkid, outputPath: path,
+                            outputSHA256: r[5].stringValue, bytes: r[6].int64, featureCount: r[7].int64, createdAt: created)
     }
 }
 

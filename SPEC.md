@@ -256,16 +256,21 @@ Coded-value domains are exported as the raw code; an opt-in option (off by defau
   staging table with the `GEOMETRY` column, which lets the spatial extension write
   the `geo` metadata (CRS, geometry types, bbox). Verify the exact behaviour and
   options against the DuckDB docs index at implementation time, not from memory.
-- Additional formats via the spatial extension's GDAL driver:
-  **GeoPackage**, **GeoJSON**, **FlatGeobuf**, **CSV** (WKT geometry column), and a
-  plain **DuckDB** database file.
+- **GeoJSON** through the spatial extension's GDAL writer (`COPY … (FORMAT gdal, DRIVER
+  'GeoJSON')`, RFC 7946, so always WGS 84: the download reprojects to it and the SR picker
+  is locked) and **CSV** through DuckDB's writer with the geometry as WKT in a `geometry`
+  column, in the chosen SR. GeoPackage, FlatGeobuf, and a plain DuckDB file are the same
+  one-line additions if ever wanted (the GDAL drivers are present); not offered in v1.
 - Output location: a user-chosen directory (default
   `~/Documents/ArcGIS Explorer/`), laid out `<server friendly name>/<service>/
   <layer>.<ext>`. Existing files are never overwritten without confirmation.
 - **Exports and downloads never live inside the app database.** The app DB holds
   only the `download` record with the output path and a content hash.
 - A stored download can be **re-exported** to another format without touching the
-  server, by reading the GeoParquet back through DuckDB.
+  server, by reading the GeoParquet back through DuckDB: the file lands beside the
+  GeoParquet with the format's extension and is recorded in `export`. The layer's
+  **Stored** tab is where that happens, alongside a grid over the file, a DuckDB SQL
+  scratch box (the file is the table `data`), row count, size, and open-in-Finder.
 
 ### 5.8 Column search
 - Searches the cached `field` table by **name** and optionally **alias**.
@@ -378,6 +383,8 @@ Tables (initial):
   invalid_geometry_count, bytes, error.
 - `download_chunk` — download_id, seq, kind, lo, hi, offset, count, status,
   attempts, last_error.
+- `export` — id, download_id, format, out_wkid, output_path, output_sha256, bytes,
+  feature_count, created_at: a re-export of a stored download to another format (M7).
 - `query_history` — id, layer_id, where_clause, out_fields, ran_at, count,
   duration_ms.
 - `setting` — key, value.

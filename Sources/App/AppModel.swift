@@ -14,7 +14,7 @@ struct TreeRowItem: Identifiable, Equatable {
 }
 
 enum LayerTab: String, CaseIterable, Identifiable {
-    case overview = "Overview", fields = "Fields", query = "Query", download = "Download", map = "Map", raw = "Raw"
+    case overview = "Overview", fields = "Fields", query = "Query", download = "Download", stored = "Stored", map = "Map", raw = "Raw"
     var id: String { rawValue }
 }
 
@@ -60,6 +60,7 @@ final class AppModel {
     private(set) var currentLayerInfo: LayerInfo?
     private(set) var querySession: QuerySession?
     private(set) var mapSession: MapSession?
+    private(set) var storedSession: StoredSession?
     private(set) var probing = false
     private(set) var isAssessing = false
     private(set) var probeError: String?
@@ -284,10 +285,10 @@ final class AppModel {
                 pathContent = PathBarContent.build(server: server, service: service, layer: layer)
                 querySession = QuerySession(layer: layer, service: service, fields: fields, info: info,
                                             client: client, database: database, connection: server.connection())
+                let stored = storedRuns(for: layer.id)
                 mapSession = MapSession(layer: layer, service: service, client: client, database: database,
-                                        connection: server.connection(),
-                                        storedRuns: runs.filter { $0.record.layerID == layer.id && $0.status == .complete }.map(\.record),
-                                        querySet: nil, queryWkid: nil)
+                                        connection: server.connection(), storedRuns: stored, querySet: nil, queryWkid: nil)
+                storedSession = StoredSession(layer: layer, database: database, runs: stored)
                 await assessCurrentLayer()
             }
         } catch {
@@ -305,6 +306,12 @@ final class AppModel {
         currentLayerInfo = nil
         querySession = nil
         mapSession = nil
+        storedSession = nil
+    }
+
+    /// Finished downloads of a layer whose file is recorded, newest first.
+    func storedRuns(for layerID: Int64) -> [DownloadRecord] {
+        runs.filter { $0.record.layerID == layerID && $0.status == .complete && $0.record.outputPath != nil }.map(\.record)
     }
 
     /// Loads the pretty-printed raw JSON for the Raw tab on demand.
@@ -619,9 +626,9 @@ extension AppModel {
         runs.first { $0.status == .running } ?? runs.first { $0.status == .paused } ?? runs.first
     }
 
-    func outputPath(for layer: LayerRecord, service: ServiceRecord) -> URL {
+    func outputPath(for layer: LayerRecord, service: ServiceRecord, format: ExportFormat = .geoParquet) -> URL {
         guard let server = currentServer else { return downloadDirectory }
-        return Exporter.outputPath(directory: downloadDirectory, server: server, service: service, layer: layer, format: .geoParquet)
+        return Exporter.outputPath(directory: downloadDirectory, server: server, service: service, layer: layer, format: format)
     }
 
     func reloadRuns() async {
@@ -645,9 +652,23 @@ extension AppModel {
                                          progress: liveProgress[record.id], chunks: chunks, startedRunningAt: runStarted[record.id]))
             }
             runs = built
+            if let layer = currentLayer {
+                let stored = storedRuns(for: layer.id)
+                storedSession?.updateRuns(stored)
+                mapSession?.updateStoredRuns(stored)
+            }
         } catch {
             transfersError = String(describing: error)
         }
+    }
+
+    /// The Overview's primary button: a download with the defaults (native spatial reference,
+    /// every feature, GeoParquet). The Download tab is where those change.
+    func downloadCurrentLayerWithDefaults() async {
+        guard let layer = currentLayer else { return }
+        var request = DownloadRequest(layerID: layer.id, outputDirectory: downloadDirectory)
+        request.outWkid = layer.effectiveWkid ?? 4326
+        await startDownload(request)
     }
 
     func startDownload(_ request: DownloadRequest) async {
@@ -682,6 +703,7 @@ extension AppModel {
                     var request = DownloadRequest(layerID: record.layerID, outputDirectory: downloadDirectory)
                     request.whereClause = record.whereClause
                     request.outWkid = record.outWkid
+                    request.format = record.format
                     request.domainLabels = record.domainLabels
                     request.overwrite = true
                     pendingOverwrite = request
@@ -842,6 +864,23 @@ extension AppModel {
         await select(.layer(layer.id))
         layerTab = .map
         mapSession?.source = .stored(record.id)
+    }
+
+    /// `--stored <id>`: the download by id, from cache.
+    func showStoredDownload(id: Int64) async {
+        guard let record = try? await database?.download(id: id) else { errorText = "download \(id) not found"; return }
+        await showStored(record)
+    }
+
+    /// Opens the layer a finished download came from, on the Stored tab, with that file selected.
+    func showStored(_ record: DownloadRecord) async {
+        guard let database, let layer = try? await database.layer(id: record.layerID) else { return }
+        let service = try? await database.service(id: layer.serviceID)
+        if let service, currentServer?.id != service.serverID { await selectServer(service.serverID) }
+        expanded.insert(.service(layer.serviceID))
+        await select(.layer(layer.id))
+        layerTab = .stored
+        storedSession?.selectedRunID = record.id
     }
 
     /// Hands the Query tab's latest preview to the map.

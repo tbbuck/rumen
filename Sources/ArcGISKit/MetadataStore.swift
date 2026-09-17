@@ -85,6 +85,7 @@ extension AppDatabase {
         try execScript("BEGIN IMMEDIATE;")
         do {
             let layersOf = "SELECT l.id FROM layer l JOIN service s ON s.id = l.service_id WHERE s.server_id = ?"
+            try query("DELETE FROM export WHERE download_id IN (SELECT d.id FROM download d WHERE d.layer_id IN (\(layersOf)));", [.int(id)])
             try query("DELETE FROM download_chunk WHERE download_id IN (SELECT d.id FROM download d WHERE d.layer_id IN (\(layersOf)));", [.int(id)])
             try query("DELETE FROM download WHERE layer_id IN (\(layersOf));", [.int(id)])
             try query("DELETE FROM query_history WHERE layer_id IN (\(layersOf));", [.int(id)])
@@ -161,6 +162,7 @@ extension AppDatabase {
 
     public func deleteService(id: Int64) throws {
         let layersOf = "SELECT id FROM layer WHERE service_id = ?"
+        try query("DELETE FROM export WHERE download_id IN (SELECT d.id FROM download d WHERE d.layer_id IN (\(layersOf)));", [.int(id)])
         try query("DELETE FROM download_chunk WHERE download_id IN (SELECT d.id FROM download d WHERE d.layer_id IN (\(layersOf)));", [.int(id)])
         try query("DELETE FROM download WHERE layer_id IN (\(layersOf));", [.int(id)])
         try query("DELETE FROM query_history WHERE layer_id IN (\(layersOf));", [.int(id)])
@@ -254,6 +256,7 @@ extension AppDatabase {
         let keep = Set(layerIDs)
         for row in current {
             guard let id = row[0].int64, let layerID = row[1].intValue, !keep.contains(layerID) else { continue }
+            try query("DELETE FROM export WHERE download_id IN (SELECT id FROM download WHERE layer_id = ?);", [.int(id)])
             try query("DELETE FROM download_chunk WHERE download_id IN (SELECT id FROM download WHERE layer_id = ?);", [.int(id)])
             try query("DELETE FROM download WHERE layer_id = ?;", [.int(id)])
             try query("DELETE FROM query_history WHERE layer_id = ?;", [.int(id)])

@@ -79,3 +79,98 @@ extension AppDatabase {
         }
     }
 }
+
+// MARK: - Stored files (M7)
+
+/// A downloaded GeoParquet opened through its own spatial engine for the Stored tab: the rows
+/// as a grid, a SQL scratch box over a `data` view, counts, and file facts. One connection per
+/// open file, owned by this actor, so the app database never waits behind a long query.
+public actor StoredFile {
+    public let path: String
+    private let db: DuckDB
+
+    /// The view the scratch box's SQL sees the file as.
+    public static let viewName = "data"
+    public static let defaultSQL = "SELECT * FROM data"
+
+    public struct Column: Sendable, Equatable {
+        public let name: String
+        public let type: String
+    }
+
+    public struct Summary: Sendable, Equatable {
+        public let rows: Int64
+        public let bytes: Int64
+        public let columns: [Column]
+    }
+
+    /// The rows of one query, rendered for the grid; `total` is the whole result's size when
+    /// the grid stopped short of it.
+    public struct Page: Sendable, Equatable {
+        public let grid: QueryGrid
+        public let total: Int64
+        public let truncated: Bool
+    }
+
+    public init(path: String) throws {
+        guard FileManager.default.fileExists(atPath: path) else { throw ExportError.missingSource(path) }
+        self.path = path
+        db = try DuckDB()
+        try db.run("INSTALL spatial;")
+        try db.run("LOAD spatial;")
+        try db.run("CREATE VIEW \(Self.viewName) AS SELECT * FROM read_parquet('\(Exporter.escape(path))');")
+    }
+
+    public func summary() throws -> Summary {
+        let rows = Int64(try db.run("SELECT count(*) FROM \(Self.viewName);").scalarString ?? "0") ?? 0
+        let columns = try db.run("DESCRIBE \(Self.viewName);").rows.compactMap { row -> Column? in
+            guard let name = row[0].stringValue, let type = row[1].stringValue else { return nil }
+            return Column(name: name, type: type)
+        }
+        let bytes = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int64) ?? 0
+        return Summary(rows: rows, bytes: bytes, columns: columns)
+    }
+
+    /// Runs SQL over the file. The statement becomes a view so its columns are known before any
+    /// row is read: geometry is rendered as a WKT point or a shape summary, nested types as
+    /// text, and the grid stops at `limit` rows. DuckDB's own message is thrown verbatim.
+    public func query(_ sql: String, limit: Int = 1000) throws -> Page {
+        var text = sql.trimmingCharacters(in: .whitespacesAndNewlines)
+        while text.hasSuffix(";") { text = String(text.dropLast()).trimmingCharacters(in: .whitespacesAndNewlines) }
+        try db.run("CREATE OR REPLACE TEMP VIEW scratch AS \(text);")
+        let described = try db.run("DESCRIBE scratch;").rows.compactMap { row -> Column? in
+            guard let name = row[0].stringValue, let type = row[1].stringValue else { return nil }
+            return Column(name: name, type: type)
+        }
+        let select = described.map { column -> String in
+            let q = StagingDatabase.quote(column.name)
+            if column.type.hasPrefix("GEOMETRY") { return "\(Self.geometrySummary(q)) AS \(q)" }
+            return Self.isScalar(column.type) ? q : "\(q)::VARCHAR AS \(q)"
+        }.joined(separator: ", ")
+        let result = try db.run("SELECT \(select) FROM scratch LIMIT \(max(1, limit) + 1);")
+        let truncated = result.rows.count > limit
+        let shown = Array(result.rows.prefix(limit))
+        let total = truncated ? (Int64(try db.run("SELECT count(*) FROM scratch;").scalarString ?? "0") ?? Int64(shown.count))
+                              : Int64(shown.count)
+        let columns = zip(described, result.columns).map { column, decoded in
+            GridColumn(name: column.name, typeLabel: column.type, isNumeric: decoded.type.isNumeric)
+        }
+        let grid = QueryGrid(columns: columns, rows: shown.map { $0.map(\.displayString) })
+        return Page(grid: grid, total: total, truncated: truncated)
+    }
+
+    /// WKT for a point, else the shape and its vertex count: what fits in a cell.
+    static func geometrySummary(_ q: String) -> String {
+        "CASE WHEN \(q) IS NULL THEN NULL WHEN ST_GeometryType(\(q)) = 'POINT' THEN ST_AsText(\(q)) " +
+        "ELSE ST_GeometryType(\(q))::VARCHAR || ', ' || ST_NPoints(\(q))::VARCHAR || ' vertices' END"
+    }
+
+    /// Types the engine decodes natively; anything else (lists, structs, maps, enums, unions)
+    /// is cast to text for display.
+    static func isScalar(_ type: String) -> Bool {
+        let scalars = ["BOOLEAN", "TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT", "UTINYINT", "USMALLINT",
+                       "UINTEGER", "UBIGINT", "UHUGEINT", "FLOAT", "DOUBLE", "DECIMAL", "VARCHAR", "BLOB", "UUID",
+                       "BIT", "DATE", "TIME", "TIMESTAMP", "INTERVAL"]
+        return scalars.contains { type.hasPrefix($0) } && !type.hasSuffix("[]")
+    }
+}

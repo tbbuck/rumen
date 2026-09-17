@@ -93,8 +93,8 @@ margins.
   *"What is this and can I get it out?"*
 - **`LayerHeader`** — name (24/700) + sub-line "Layer 3 in LLPG (MapServer), Property
   folder. Cached 14 minutes ago, refresh." *Identity and freshness.*
-- **`LayerTabs`** — Overview · Fields · Query · Download · Map · Raw as underlined
-  text tabs. *Six views of one layer.*
+- **`LayerTabs`** — Overview · Fields · Query · Download · Stored · Map · Raw as underlined
+  text tabs. *Seven views of one layer.*
 
 ### Overview tab
 - **`OverviewTab`** — `ExtractionStatement` + `PrimaryActions` + `FactList` +
@@ -143,6 +143,24 @@ margins.
   `DomainLabelsToggle` + `OutputPathPreview` + `ManualStrategyDisclosure` +
   "Start download", then `RunHistory` for this layer. *Configure, then run
   (SPEC §5.6–5.7).*
+- **`FormatPicker`** — "Format: GeoParquet" menu over GeoParquet, GeoJSON, CSV; choosing
+  GeoJSON locks the `SRPicker` to WGS 84 (RFC 7946). *The file's shape, in one word.*
+
+### Stored tab
+- **`StoredTab`** — `StoredFileHeader` + `ExportsSection` + `ScratchBox` + `ResultsGrid`.
+  *The layer's data on disk (SPEC §5.7): rows, SQL, re-export, none of it touching the server.*
+- **`StoredFileHeader`** — format chip, the file's path in mono with Show in Finder and Map,
+  a "File: name, age" menu when the layer has several downloads, and one fact line: rows,
+  columns, size, spatial reference, age, invalid-geometry count, how the geometry travels.
+  *Which file, where, what.*
+- **`ExportsSection`** — "Exports" with "Export as GeoJSON" · "Export as CSV" links, a
+  spinner while writing, and one row per file written beside the stored one (chip, path,
+  features, size, SR, age, Show in Finder). An existing target asks before it is replaced.
+  *Other formats from the file, not the server.*
+- **`ScratchBox`** — "Query the file": a mono `TextEditor` holding DuckDB SQL over the
+  file, which is the table `data`; Run (⌘↩). The grid shows the first 1,000 rows and says
+  how many there are; geometry cells read as WKT for points and "POLYGON, 33 vertices"
+  otherwise; DuckDB's error text verbatim. *Poke at what you fetched.*
 - **`DownloadPlan`** — transport, strategy, page size, request count, where, outSR,
   as plain sentences in the statement's voice. *What will happen, before it does.*
 - **`ManualStrategyDisclosure`** — collapsed until automatic selection has failed;
@@ -190,9 +208,9 @@ margins.
   stalled run shows exactly which requests are stuck.*
 - **`RunProgressBar`** — 6px bar, `yes` when done, `warn` when paused. *Progress
   for runs without a chunk plan, and a quiet summary for finished ones.*
-- **`RunActions`** — running: Pause · Cancel; done: Show in Finder · Re-export ·
-  Map; paused on 498/499: "Sign in and resume" (small primary) · Cancel; failed:
-  Retry · Cancel. *Every state has its next step.*
+- **`RunActions`** — running: Pause · Cancel; done: Show in Finder · Re-export (opens
+  the layer's Stored tab on that file) · Map; paused on 498/499: "Sign in and resume"
+  (small primary) · Cancel; failed: Retry · Cancel. *Every state has its next step.*
 - **`Chip`** — `PBF`, `Offset paging`, `OID range`, `Done`, `Paused`, `Failed`.
   *Transport, strategy and state in form.*
 - **`DownloadRun` / `DownloadChunk` (models)** — from the `download` and

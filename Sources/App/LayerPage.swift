@@ -1,8 +1,9 @@
 import SwiftUI
 import ArcGISKit
 
-/// The layer as a document: header, six tabs, and the active tab. Overview, Fields, and Raw
-/// are live; Query, Download, and Map arrive with M3, M4, and M6 and say so.
+/// The layer as a document: header, seven tabs, and the active tab. Overview, Fields, and
+/// Download scroll as a page; Query, Stored, Map, and Raw fill the height with their own
+/// scrolling content.
 struct LayerPage: View {
     @Environment(AppModel.self) private var model
     let layer: LayerRecord
@@ -21,6 +22,9 @@ struct LayerPage: View {
                 MapTab(session: session)
                     .padding(.bottom, 18)
                     .onAppear { model.syncMapSources() }
+            } else if model.layerTab == .stored, let session = model.storedSession {
+                StoredTab(session: session)
+                    .padding(.bottom, 18)
             } else if model.layerTab == .raw {
                 RawJSONView()
                     .padding(.bottom, 18)
@@ -33,6 +37,7 @@ struct LayerPage: View {
                         case .raw: Caption("Loading…")
                         case .query: Caption("Loading…")
                         case .download: DownloadTab(layer: layer, service: service)
+                        case .stored: Caption("Loading…")
                         case .map: Caption("Loading…")
                         }
                     }
@@ -74,7 +79,7 @@ private struct LayerHeader: View {
     }
 }
 
-/// Overview · Fields · Query · Download · Map · Raw as underlined text tabs.
+/// Overview · Fields · Query · Download · Stored · Map · Raw as underlined text tabs.
 private struct LayerTabs: View {
     @Binding var selection: LayerTab
 
@@ -180,10 +185,9 @@ private struct ExtractionStatement: View {
             }
             HStack(spacing: 18) {
                 if verdict == .extractable {
-                    Button("Download as GeoParquet") {}
+                    Button("Download as GeoParquet") { Task { await model.downloadCurrentLayerWithDefaults() } }
                         .buttonStyle(PrimaryButtonStyle())
-                        .disabled(true)
-                        .help("Downloads arrive with milestone M4")
+                        .help("Every feature, in the native spatial reference, to \(model.downloadDirectory.lastPathComponent)")
                     Button("Change format or spatial reference") { model.layerTab = .download }.buttonStyle(LinkButtonStyle())
                     Button("Preview a sample on the map") { model.layerTab = .map }.buttonStyle(LinkButtonStyle())
                 } else if verdict == .notExtractable, let twin = layer.siblingLayerID {

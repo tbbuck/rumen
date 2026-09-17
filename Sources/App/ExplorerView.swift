@@ -39,7 +39,7 @@ struct ExplorerView: View {
             Button("Keep it", role: .cancel) { model.pendingOverwrite = nil }
         } message: {
             if let request = model.pendingOverwrite, let layer = model.currentLayer, let service = model.currentService {
-                let path = model.outputPath(for: layer, service: service).path
+                let path = model.outputPath(for: layer, service: service, format: request.format).path
                 let age = (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date).map { Age.text($0) } ?? "unknown age"
                 Text("\(path)\nwritten \(age). Replacing it cannot be undone.")
                     .onAppear { _ = request }

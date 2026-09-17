@@ -14,8 +14,8 @@ struct ExplorerView: View {
             Rectangle().fill(Palette.line).frame(height: 1)
             HStack(spacing: 0) {
                 ServerTree()
-                    .frame(width: 288)
-                Rectangle().fill(Palette.line).frame(width: 1)
+                    .frame(width: model.treeWidth)
+                PanelDivider()
                 DetailPane()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     // Errors sit at the top of the page, under the title bar, where a failed open
@@ -60,6 +60,44 @@ struct ExplorerView: View {
                 FatalView(message: message)
             }
         }
+    }
+}
+
+/// The hairline between the tree and the page, with a 9px grab zone: drag to resize the tree
+/// (220 to 560), double-click to put it back to 288. The width is remembered.
+private struct PanelDivider: View {
+    @Environment(AppModel.self) private var model
+    @State private var startWidth: CGFloat?
+    @State private var hovered = false
+
+    var body: some View {
+        Rectangle()
+            .fill(hovered || startWidth != nil ? Palette.line2 : Palette.line)
+            .frame(width: 1)
+            .overlay {
+                Color.clear
+                    .frame(width: 9)
+                    .contentShape(Rectangle())
+                    .onHover { hovered = $0 }
+                    .pointerStyle(.columnResize(directions: .all))
+                    .gesture(
+                        DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                            .onChanged { value in
+                                if startWidth == nil { startWidth = model.treeWidth }
+                                model.setTreeWidth((startWidth ?? AppModel.defaultTreeWidth) + value.translation.width)
+                            }
+                            .onEnded { _ in
+                                startWidth = nil
+                                Task { await model.saveTreeWidth() }
+                            }
+                    )
+                    .onTapGesture(count: 2) {
+                        model.setTreeWidth(AppModel.defaultTreeWidth)
+                        Task { await model.saveTreeWidth() }
+                    }
+                    .help("Drag to resize the tree; double-click to reset")
+            }
+            .zIndex(1)
     }
 }
 

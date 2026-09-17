@@ -116,14 +116,18 @@ struct TransfersStrip: View {
         .background(hovered ? Palette.line.opacity(0.5) : Palette.panel)
         .overlay(alignment: .top) { Rectangle().fill(Palette.line).frame(height: 1) }
         .contentShape(Rectangle())
-        .hoverTracking($hovered, hand: model.headlineRun != nil)
-        .onTapGesture { if model.headlineRun != nil { model.showTransfers = true } }
+        .hoverTracking($hovered, hand: true)
+        // The whole row opens the drawer; the link inside still takes its own click.
+        .onTapGesture { model.showTransfers = true }
+        .help("Show the transfers (⌘⇧T)")
     }
 }
 
-/// The strip grown to 340px: header + scrolling run rows.
+/// The strip grown to 340px: header + scrolling run rows. The whole header row collapses it,
+/// as the whole strip opens it.
 struct TransfersDrawer: View {
     @Environment(AppModel.self) private var model
+    @State private var headerHovered = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -145,6 +149,11 @@ struct TransfersDrawer: View {
             }
             .padding(.horizontal, 16)
             .frame(height: 40)
+            .frame(maxWidth: .infinity)
+            .background(headerHovered ? Palette.line.opacity(0.5) : Palette.panel)
+            .contentShape(Rectangle())
+            .hoverTracking($headerHovered, hand: true)
+            .onTapGesture { model.showTransfers = false }
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(model.runs) { run in

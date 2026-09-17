@@ -86,6 +86,19 @@ final class AppModel {
     /// text field); the outline view watches it.
     private(set) var treeFocusRequest = 0
     func focusTree() { treeFocusRequest += 1 }
+
+    /// The tree panel's width: 288 by DESIGN-TOKENS, draggable on its right edge, remembered.
+    static let defaultTreeWidth: CGFloat = 288
+    static let treeWidthRange: ClosedRange<CGFloat> = 220...560
+    private(set) var treeWidth: CGFloat = AppModel.defaultTreeWidth
+
+    func setTreeWidth(_ width: CGFloat) {
+        treeWidth = min(max(width.rounded(), Self.treeWidthRange.lowerBound), Self.treeWidthRange.upperBound)
+    }
+
+    func saveTreeWidth() async {
+        do { try await database?.setSetting("tree_width", String(Int(treeWidth))) } catch { report(error) }
+    }
     var appearanceOverride: ColorScheme?
     private(set) var errorText: String?
     /// Runs the failed step again, when the banner can offer that.
@@ -132,6 +145,7 @@ final class AppModel {
             preferences = try await Preferences.load(from: db)
             await client.setLimits(maxConcurrentPerHost: preferences.concurrency, retry: preferences.retryPolicy)
             await engine?.setConcurrency(preferences.concurrency)
+            if let raw = try await db.setting("tree_width"), let width = Double(raw) { setTreeWidth(CGFloat(width)) }
             switch try await db.setting("appearance") {
             case "light": appearanceOverride = .light
             case "dark": appearanceOverride = .dark

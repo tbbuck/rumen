@@ -42,8 +42,9 @@ margins.
 - **`AppModel` (`@Observable`)** — known servers, current node (server / folder /
   service / layer), open tab, transfers, column search state, appearance override.
   *Single source of truth, injected via `@Environment`.*
-- **`ExplorerView`** — the window: `PathBar` in the toolbar, then
-  `HSplitView(ServerTree, LayerPage)`, then `TransfersStrip` (or `TransfersDrawer`)
+- **`ExplorerView`** — the window: `PathBar` in the toolbar, then the tree beside the
+  page with `PanelDivider` between them (drag to resize the tree between 220 and 560px,
+  double-click to reset, remembered), then `TransfersStrip` (or `TransfersDrawer`)
   pinned to the bottom. *The Directory layout.*
 - **`Theme`** — semantic colour + type tokens read from the Asset Catalog. *Keeps
   every view on-palette in both appearances.*
@@ -199,11 +200,12 @@ margins.
 - **`TransfersStrip`** — 40px bar along the bottom: label, the most relevant run
   (running > paused > latest) with `StatusDot`, name, `ProgressBar` 220 × 4, mono
   stats "138 of 207 requests, 4.2k features/s, 1:40 left", and "Show all n".
-  Clicking opens the drawer. *Downloads are visible from every screen without
-  owning one.*
+  Clicking anywhere on it opens the drawer. *Downloads are visible from every screen
+  without owning one.*
 - **`TransfersDrawer`** — the strip grown to 340px: `DrawerHeader` ("Transfers",
-  "3 runs, 1 running, 4 requests in flight to gis.ashcombe.gov.uk", collapse) +
-  scrolling `RunRow`s. *The full picture of what is moving.*
+  "3 runs, 1 running, 4 requests in flight to gis.ashcombe.gov.uk", Clear finished,
+  collapse; clicking anywhere on the header collapses) + scrolling `RunRow`s. *The full
+  picture of what is moving.*
 - **`RunRow`** — three columns: who (name, chips, mono target line "Planning /
   PlanningApplications / 0, where 1=1, WGS 84, GeoParquet" or the output path when
   done, one stats sentence), progress (`ChunkGrid` while running, `RunProgressBar`

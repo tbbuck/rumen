@@ -97,7 +97,9 @@ Expose as `Font.sheetDisplay(_:)`, `Font.sheetUI(_:)`, `Font.sheetMono(_:)`.
   then the column search field (190 × 30, radius 7).
 
 **Main window** — two columns over a strip:
-- **Tree 288px**, `panel`, 1px `line` right edge, 14px top padding. Server header
+- **Tree 288px** by default, `panel`, 1px `line` right edge that drags between 220 and
+  560px (a 9px grab zone with the column-resize pointer; the line turns `line2` while hovered
+  or dragging; double-click resets to 288; the width is remembered), 14px top padding. Server header
   (name + caption) with 16px side padding. Rows 27px; indents 14 / 32 / 52px for
   folder / service / layer; chevron 10px; layer id column 14px; 7px gaps; 14px
   right padding. **Extent locator** 22 × 15 right-aligned in every row.
@@ -108,7 +110,9 @@ Expose as `Font.sheetDisplay(_:)`, `Font.sheetUI(_:)`, `Font.sheetMono(_:)`.
   ellipsis rather than wrap. Fields table: columns `160 150 130 100 1fr`, 14px gaps,
   rows 27px, header 26px, 1px `line2` top rule, 1px `line` row rules.
 - **Transfers strip 40px** along the bottom: label, status dot 8px, run name,
-  progress bar 220 × 4 radius 2, mono stats, right-aligned "Show all n".
+  progress bar 220 × 4 radius 2, mono stats, right-aligned "Show all n". The whole strip
+  opens the drawer and the drawer's whole 40px header closes it (both hover `line` at 0.5
+  with the pointing hand); the links and the chevron inside keep their own clicks.
 - **Transfers drawer** grows from the strip to 340px: 40px header (label, summary,
   collapse chevron) + run rows. Run row grid `1fr 220px 214px`, 24px gaps, 12px
   vertical padding, 1px `line` rules.

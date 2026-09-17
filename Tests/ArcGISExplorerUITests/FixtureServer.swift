@@ -19,16 +19,27 @@ final class FixtureServer: @unchecked Sendable {
     init() throws {
         listener = try NWListener(using: .tcp, on: .any)
         let ready = DispatchSemaphore(value: 0)
-        listener.stateUpdateHandler = { state in
-            if case .ready = state { ready.signal() }
+        let assigned = PortBox()
+        listener.stateUpdateHandler = { [listener] state in
+            // The assigned port is only reliable read from within the ready state, on the listener's queue.
+            if case .ready = state { assigned.value = listener.port?.rawValue ?? 0; ready.signal() }
             if case .failed = state { ready.signal() }
         }
         listener.newConnectionHandler = { [weak self] connection in self?.serve(connection) }
         listener.start(queue: queue)
-        guard ready.wait(timeout: .now() + 5) == .success, let port = listener.port?.rawValue else {
+        guard ready.wait(timeout: .now() + 5) == .success, assigned.value != 0 else {
             throw FixtureServerError.notReady
         }
-        self.port = port
+        self.port = assigned.value
+    }
+
+    private final class PortBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: UInt16 = 0
+        var value: UInt16 {
+            get { lock.withLock { stored } }
+            set { lock.withLock { stored = newValue } }
+        }
     }
 
     deinit { listener.cancel() }

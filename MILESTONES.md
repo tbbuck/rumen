@@ -219,30 +219,52 @@ commit per logical unit.
 ## M7 — Export formats & stored data
 **Goal:** get data into every format the user asked for, from server or from disk.
 - **Deliverables**
-  - GeoPackage, GeoJSON, FlatGeobuf, CSV (WKT), and DuckDB-file exports through the
-    spatial extension's GDAL writer; format picker at download time and for
+  - GeoJSON and CSV (WKT), through the DuckDB COPY() TO syntax;
+    format picker at download time and for
     re-export of an existing GeoParquet without touching the server.
   - Stored-data tab: grid over the file, a DuckDB SQL scratch box, row count and
     file size, open-in-Finder.
 - **Acceptance:** each format round-trips a fixture layer's count and geometry
   types when read back with DuckDB; re-export never issues a network request.
-- **Demo:** re-export a stored layer as GeoPackage.
+- **Demo:** re-export a (small) stored layer as GeoJSON.
 
-## M8 — Auth, preferences & packaging
+## M8 — Stretch Goals
+**Goal:** the rough edges noted after a week of real use; none blocks the others.
+- **Tree keyboard navigation.** The tree is a SwiftUI `LazyVStack`: no arrow keys, no
+  type-to-select, and every filter keystroke costs 40–70 ms of row rebuilding on a
+  4,000-service server. Rebuild it on `NSOutlineView` (the results grid already uses
+  `NSTableView`) with cell reuse, so arrows, Home/End, type-ahead, and Return-to-open
+  come free and filtering is bounded by the visible rows. Keep the Sheet row: chevron or
+  spinner, mono layer id, name, kind label, stale caption, locator, selection rail.
+- **Folders that fail to list.** Folder rows are derived from the paths of the services
+  under them, so a folder the shallow crawl could not read (a 500, a timeout, a
+  permission wall) has no row; the banner names it and that is all. Persist the folder
+  listing itself (name, parent, last error, `fetched_at`) as rows, build folder nodes
+  from that table, and show a failed folder with the error glyph, its message in the
+  tooltip, and Retry on its page. Deep crawl and column search then know what they
+  could not see.
+- **Housekeeping.** Delete `KeychainMigration` and the `cookies_moved_from_keychain`
+  setting once no pre-decision-17 build exists (the only one was a day old). Drop the
+  `--bench-filter` argument, `Perf.swift`, and the `--row` capture variants, or move the
+  hang observer behind a Debug-only flag. Make the MapLibre hover and selection fades
+  respect Reduce Motion the way the SwiftUI ones do (pass the setting into the page).
+- **Error banner at the top.** Errors surface in a banner overlaid at the bottom, above
+  the transfers strip, where it competes with the strip and is easy to miss, so a
+  failed open reads as "nothing happened". Move it to the top of the content area, under
+  the title bar and spanning the page (not the tree), with the same dismiss control, a
+  Retry where one applies, and Reduce-Motion-aware slide-in. Keep run failures in the
+  transfers drawer where they are.
+
+## M9 — Preferences & packaging
 **Goal:** secured servers and a shippable app.
 - **Deliverables**
-  - ArcGIS token auth per server (username/password or pasted API key), Keychain
-    storage, token service discovery, refresh on 498/499.
   - Preferences: download directory, default format and SR, concurrency, retry
     limits, domain-label default.
   - Packaging as in DuckLake Explorer: bundle `libduckdb`, runtime-install `spatial`
     under `disable-library-validation`, Developer ID + hardened runtime, notarise,
     staple, DMG; `release.yml` on tag; app icon.
-- **Acceptance:** a token-secured layer downloads end to end; no secret appears in
-  the app DB; `notarytool` accepts and `spctl` passes the release build; a
+- **Acceptance:** `notarytool` accepts and `spctl` passes the release build; a
   clean-Mac first run autoinstalls `spatial` and downloads a layer.
-- **Demo:** sign in to a secured server, download, quit, relaunch without
-  re-entering credentials.
 
 ---
 

@@ -20,7 +20,7 @@ extension DownloadEngine {
         // A picture: the WMS layer's only download when it has no features to give, and the
         // other one when it has.
         if targetService.type == .wms, request.format.isRaster {
-            let plan = try imagePlan(layer: target, service: targetService, format: request.format)
+            let plan = try await imagePlan(layer: target, service: targetService, format: request.format)
             let record = try await db.createDownload(layerID: target.id, transport: .image, strategy: .single, whereClause: "1=1",
                                                      outWkid: plan.wkid, format: request.format, domainLabels: false)
             requests[record.id] = request
@@ -50,7 +50,7 @@ extension DownloadEngine {
             }
         case .wms:
             // GetMap answered in GeoJSON: one request over the extent, in the frame's CRS.
-            let frame = try frame(layer: source, service: service)
+            let frame = try await frame(layer: source, service: service)
             record = try await db.createDownload(layerID: target.id, transport: .geojson, strategy: .single, whereClause: "1=1",
                                                  outWkid: frame.wkid, format: request.format, domainLabels: false)
             chunks = [DownloadChunk(downloadID: record.id, seq: 0, kind: .offset, offset: nil, limit: nil)]
@@ -75,15 +75,18 @@ extension DownloadEngine {
     }
 
     /// The frame plus a check that the server offers the picture format asked for.
-    func imagePlan(layer: LayerRecord, service: ServiceRecord, format: ExportFormat) throws -> ImagePlan {
+    func imagePlan(layer: LayerRecord, service: ServiceRecord, format: ExportFormat) async throws -> ImagePlan {
         guard let detail = service.ogcDetail else { throw DownloadError.notExtractable("the service's capabilities have not been fetched yet") }
-        guard format.mediaType.map({ media in detail.formats.contains { $0.lowercased().hasPrefix(media) } || detail.formats.isEmpty }) == true else {
+        guard format.offeredMediaType(in: detail.formats) != nil else {
             throw DownloadError.notExtractable("the server does not offer \(format.label) for GetMap; it offers \(detail.formats.joined(separator: ", "))")
         }
-        return try frame(layer: layer, service: service)
+        return try await frame(layer: layer, service: service)
     }
 
-    func frame(layer: LayerRecord, service: ServiceRecord) throws -> ImagePlan {
+    /// Web Mercator when the layer offers it, else WGS 84, else the layer's own first CRS
+    /// with the extent's corners carried over by the spatial engine (a British server that
+    /// offers only EPSG:27700 still draws its picture).
+    func frame(layer: LayerRecord, service: ServiceRecord) async throws -> ImagePlan {
         guard let detail = service.ogcDetail, let ogc = layer.ogcDetail else {
             throw DownloadError.notExtractable("the service's capabilities have not been fetched yet")
         }
@@ -101,8 +104,17 @@ extension DownloadEngine {
         } else if let wgs = ogc.wgs84CRS ?? (ogc.crs.isEmpty ? "EPSG:4326" : nil) {
             crs = wgs
             wkid = 4326
+        } else if let native = ogc.crs.first, let code = OGCURL.epsgCode(native) {
+            crs = native
+            wkid = code
+            let corners = try await db.transform([(box.minX, box.minY), (box.maxX, box.minY), (box.maxX, box.maxY), (box.minX, box.maxY)], from: 4326, to: code)
+            guard corners.count == 4, corners.allSatisfy({ $0.0.isFinite && $0.1.isFinite }) else {
+                throw DownloadError.notExtractable("the layer's extent could not be carried into \(native)")
+            }
+            minX = corners.map(\.0).min()!; maxX = corners.map(\.0).max()!
+            minY = corners.map(\.1).min()!; maxY = corners.map(\.1).max()!
         } else {
-            throw DownloadError.notExtractable("the layer offers neither Web Mercator nor WGS 84; it offers \(ogc.crs.joined(separator: ", "))")
+            throw DownloadError.notExtractable("the layer offers no coordinate reference this app can frame; it offers \(ogc.crs.joined(separator: ", "))")
         }
         let cap = min(detail.maxWidth ?? 4096, detail.maxHeight ?? 4096, 4096)
         let aspect = (maxX - minX) / max(1e-9, maxY - minY)
@@ -112,7 +124,7 @@ extension DownloadEngine {
     }
 
     /// Spherical Web Mercator, enough for a picture's frame; latitudes are clamped to the projection's edge.
-    static func webMercator(lon: Double, lat: Double) -> (Double, Double) {
+    public static func webMercator(lon: Double, lat: Double) -> (Double, Double) {
         let r = 6_378_137.0
         let clamped = min(85.05112878, max(-85.05112878, lat))
         let x = lon * .pi / 180 * r
@@ -158,7 +170,7 @@ extension DownloadEngine {
                                        startIndex: chunk.offset.map(Int.init), count: chunk.limit, srsName: srsName)
             }
         case .wms:
-            let frame = try frame(layer: layer, service: service)
+            let frame = try await frame(layer: layer, service: service)
             let vector = detail.geoJSONFormat ?? "application/json"
             let bbox = OGCRequests.getMapBBox(version: detail.version, crs: frame.crs, minX: frame.minX, minY: frame.minY, maxX: frame.maxX, maxY: frame.maxY)
             let params = OGCRequests.getMap(version: detail.version, layer: typeName, style: layer.ogcDetail?.styles.first ?? "", crs: frame.crs,
@@ -324,7 +336,7 @@ extension DownloadEngine {
               let media = record.format.mediaType else {
             throw DownloadError.notExtractable("the service's capabilities have not been fetched yet")
         }
-        let plan = try imagePlan(layer: layer, service: service, format: record.format)
+        let plan = try await imagePlan(layer: layer, service: service, format: record.format)
         let connection = server.connection(token: await tokenProvider(server))
         let outputDirectory = requests[id]?.outputDirectory ?? resumeContext[id]?.0 ?? stagingDirectory
         let overwrite = requests[id]?.overwrite ?? resumeContext[id]?.1 ?? false

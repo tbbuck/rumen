@@ -26,9 +26,19 @@ public enum ExportFormat: String, Sendable, CaseIterable, Equatable {
     public static var vector: [ExportFormat] { [.geoParquet, .geoJSON, .csv] }
     /// Formats a stored GeoParquet can be re-exported to.
     public static var reexportable: [ExportFormat] { [.geoJSON, .csv] }
-    /// The WMS media type for an image format.
-    public var mediaType: String? {
-        switch self { case .png: "image/png"; case .geoTIFF: "image/geotiff"; default: nil }
+    /// The WMS media types an image format can be asked for as, best first. MapServer's
+    /// `image/tiff` GetMap output is a GeoTIFF; GeoServer spells it `image/geotiff`.
+    public var mediaTypes: [String] {
+        switch self { case .png: ["image/png"]; case .geoTIFF: ["image/geotiff", "image/tiff"]; default: [] }
+    }
+    public var mediaType: String? { mediaTypes.first }
+    /// The media type to request from a server that lists `formats`: the first of ours it
+    /// offers, or our first when it lists none at all.
+    public func offeredMediaType(in formats: [String]) -> String? {
+        guard !mediaTypes.isEmpty else { return nil }
+        if formats.isEmpty { return mediaTypes.first }
+        let offered = formats.map { $0.lowercased() }
+        return mediaTypes.first { candidate in offered.contains { $0 == candidate || $0.hasPrefix(candidate + ";") } }
     }
     /// How the geometry travels, for captions.
     public var geometryNote: String {

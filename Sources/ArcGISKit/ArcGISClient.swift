@@ -244,7 +244,7 @@ public actor ArcGISClient {
         return data
     }
 
-    static func looksLikeXML(_ data: Data) -> Bool {
+    public static func looksLikeXML(_ data: Data) -> Bool {
         for byte in data.prefix(64) {
             if byte == 0x3C { return true }          // '<'
             if byte != 0x20 && byte != 0x0A && byte != 0x0D && byte != 0x09 && byte != 0xEF && byte != 0xBB && byte != 0xBF { return false }

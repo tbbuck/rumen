@@ -459,12 +459,18 @@ public enum OGCCapabilities {
             layer.abstract = XMLSupport.text(element, "./*[local-name()='Abstract']")
             layer.keywords = XMLSupport.texts(element, "./*[local-name()='KeywordList']/*[local-name()='Keyword']")
             layer.queryable = XMLSupport.attr(element, "queryable").map { $0 == "1" || $0.lowercased() == "true" }
-            // CRS and the geographic box are inherited from enclosing layers.
+            // CRS and the geographic box are inherited from enclosing layers. A group layer
+            // that declares none of its own (MapServer writes an empty element) can only be
+            // asked for in what its children answer, so it borrows theirs.
             let lineage = "ancestor-or-self::*[local-name()='Layer']"
             var crs = [String]()
-            for value in XMLSupport.texts(element, "\(lineage)/*[local-name()='CRS' or local-name()='SRS']") {
-                for part in value.split(whereSeparator: { $0.isWhitespace }) where !crs.contains(String(part)) { crs.append(String(part)) }
+            func collect(_ xpath: String) {
+                for value in XMLSupport.texts(element, xpath) {
+                    for part in value.split(whereSeparator: { $0.isWhitespace }) where !crs.contains(String(part)) { crs.append(String(part)) }
+                }
             }
+            collect("\(lineage)/*[local-name()='CRS' or local-name()='SRS']")
+            if crs.isEmpty { collect("descendant::*[local-name()='Layer']/*[local-name()='CRS' or local-name()='SRS']") }
             layer.crs = crs
             layer.defaultCRS = crs.first
             if let box = XMLSupport.nodes(element, "\(lineage)/*[local-name()='EX_GeographicBoundingBox']").last,

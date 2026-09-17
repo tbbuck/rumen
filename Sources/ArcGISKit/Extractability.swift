@@ -158,11 +158,9 @@ public enum Extractability {
             return Assessment(verdict: true, reason: "WFS GetFeature for \(name) as \(how), \(paged).",
                               transport: transport, strategy: strategy, pageSize: detail.paging ? pageSize : nil, layerID: id)
         case .wms:
-            if let vector = detail.geoJSONFormat {
-                return Assessment(verdict: true,
-                                  reason: "WMS GetMap for \(name) as GeoJSON (\(vector)), one request over the layer's extent. Scale-dependent styling can hide features from a GetMap; a WFS is the surer source when there is one.",
-                                  transport: .geojson, strategy: .single, layerID: id)
-            }
+            // The WFS twin is the surer source: every field, every feature, paged. A GetMap
+            // answered in GeoJSON comes second: it is rendered output, and scale-dependent
+            // styling or a trimmed attribute list can leave things out.
             if let twin, let twinService, twinService.type == .wfs {
                 let viaTwin = assessOGC(layer: twin, service: twinService)
                 if viaTwin.verdict == true, let transport = viaTwin.transport, let strategy = viaTwin.strategy {
@@ -172,6 +170,11 @@ public enum Extractability {
                                       reason: "WFS GetFeature through the WFS twin \(twin.ogcName ?? twin.name) as \(how), \(paged). A picture of the WMS layer is the other download.",
                                       transport: transport, strategy: strategy, pageSize: viaTwin.pageSize, layerID: id, sourceLayerID: twin.id)
                 }
+            }
+            if let vector = detail.geoJSONFormat {
+                return Assessment(verdict: true,
+                                  reason: "WMS GetMap for \(name) as GeoJSON (\(vector)), one request over the layer's extent. This is rendered output: scale-dependent styling can hide features and the attributes are what the server chooses to include; a WFS would be the surer source.",
+                                  transport: .geojson, strategy: .single, layerID: id)
             }
             return Assessment(verdict: false,
                               reason: "A WMS layer is a picture, not features, and this endpoint has no WFS twin for it. Save it as an image from the Download tab, or preview it on the map.",

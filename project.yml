@@ -76,6 +76,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.moomoomoo.ArcGISExplorerUITests
         GENERATE_INFOPLIST_FILE: YES
+        # The runner is sandboxed by Xcode; the tests' loopback server needs the network server side.
+        CODE_SIGN_ENTITLEMENTS: Config/ArcGISExplorerUITests.entitlements
 
 schemes:
   ArcGISExplorer:

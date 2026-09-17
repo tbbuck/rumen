@@ -16,9 +16,9 @@
 #   NOTARY_PROFILE     notarytool keychain profile (default: arcgis-notary)
 #   SKIP_NOTARIZE=1    sign + package only, no notarization (local pipeline testing)
 #   BUILD_DIR          where DerivedData and the DMG land (default: <repo>/build)
-#   MAPTILER_API_KEY   the basemap key, baked into Info.plist for this build; it overrides the
-#                      untracked Config/maptiler.local.xcconfig. Without either, the shipped
-#                      map has no basemap tiles (the app says so on the map).
+#
+# No MapTiler key is baked into a release: the app reads MAPTILER_API_KEY from its environment
+# at run time (see Sources/App/MapConfig.swift).
 #
 set -euo pipefail
 
@@ -41,18 +41,8 @@ mkdir -p "$BUILD_DIR"
 
 echo "==> 1/6  Generate + build ($CONFIG)"
 xcodegen generate
-# A key in the environment becomes a command-line build setting, which outranks the xcconfig.
-KEY_SETTING=()
-if [ -n "${MAPTILER_API_KEY:-}" ]; then
-  KEY_SETTING=("MAPTILER_API_KEY=$MAPTILER_API_KEY")
-  echo "    basemap key: from the environment"
-elif [ -f "$R/Config/maptiler.local.xcconfig" ]; then
-  echo "    basemap key: from Config/maptiler.local.xcconfig"
-else
-  echo "    basemap key: none; the map will run without tiles"
-fi
 xcodebuild -project ArcGISExplorer.xcodeproj -scheme "$SCHEME" -configuration "$CONFIG" \
-  -derivedDataPath "$DDP" -quiet clean build ${KEY_SETTING[@]+"${KEY_SETTING[@]}"}
+  -derivedDataPath "$DDP" -quiet clean build
 
 echo "==> 2/6  Bundle libduckdb"
 "$R/scripts/bundle-duckdb-engine.sh" "$APP"

@@ -10,11 +10,8 @@ name: Release
 #   APPLE_ID                          Apple ID email used for notarization
 #   APPLE_TEAM_ID                     Developer Team ID
 #   APPLE_APP_SPECIFIC_PASSWORD       an app-specific password for that Apple ID
-# Optional, as a repository variable (Settings → Secrets and variables → Actions → Variables)
-# or a secret, either works:
-#   MAPTILER_API_KEY                  the basemap key, handed to scripts/release.sh as an
-#                                       environment variable; without it the shipped map has
-#                                       no tiles (the app says so on the map).
+# No MapTiler key is baked into the release: the app reads MAPTILER_API_KEY from its own
+# environment at run time (Sources/App/MapConfig.swift).
 on:
   push:
     tags: ['v*']
@@ -70,8 +67,6 @@ jobs:
             --password "$APPLE_APP_SPECIFIC_PASSWORD"
 
       - name: Build, sign, notarize, package
-        env:
-          MAPTILER_API_KEY: ${{ vars.MAPTILER_API_KEY || secrets.MAPTILER_API_KEY }}
         run: bash scripts/release.sh
 
       - name: Attach DMG to the GitHub Release

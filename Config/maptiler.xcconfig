@@ -3,9 +3,9 @@
 //   Config/maptiler.local.xcconfig
 // containing:
 //   MAPTILER_API_KEY = your_key_here
-// (it is git-ignored and overrides the empty default below). scripts/release.sh instead takes
-// the key from the MAPTILER_API_KEY environment variable when it is set, which outranks the
-// local file; and at run time the app falls back to that variable when the plist has none.
+// (it is git-ignored and overrides the empty default below). That is for dev builds only:
+// releases bake nothing, and at run time the app reads the MAPTILER_API_KEY environment
+// variable first, falling back to the plist value.
 
 MAPTILER_API_KEY =
 

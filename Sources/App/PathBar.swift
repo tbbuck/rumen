@@ -27,6 +27,7 @@ struct PathBar: View {
                         .font(.system(size: 9, weight: .medium))
                         .foregroundStyle(Palette.muted2)
                         .frame(width: 12)
+                        .accessibilityHidden(true)   // punctuation between segments
                     PathSegmentView(segment: segment, isCurrent: index == content.segments.count - 2)
                 }
                 Spacer(minLength: 8)
@@ -49,6 +50,7 @@ struct PathBar: View {
                         .font(.system(size: 9, weight: .medium))
                         .foregroundStyle(Palette.muted2)
                         .frame(width: 12)
+                        .accessibilityHidden(true)   // punctuation between segments
                 }
                 Text("Paste an ArcGIS URL, or press ⌘L")
                     .font(.sheetUI(13)).foregroundStyle(Palette.muted2)
@@ -81,7 +83,7 @@ private struct HostSegment: View {
             model.showRecents = true
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: "server.rack").font(.system(size: 11)).foregroundStyle(Palette.muted)
+                Image(systemName: "server.rack").font(.system(size: 11)).foregroundStyle(Palette.muted).accessibilityHidden(true)
                 Text(server.friendlyName).font(.sheetUI(13)).foregroundStyle(Palette.ink)
             }
             .padding(.horizontal, 6).padding(.vertical, 3)

@@ -46,7 +46,7 @@ private struct WhereEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Caption("Where")
-            TextEditor(text: $text)
+            TextEditor(text: $text).accessibilityLabel("Where clause")
                 .font(.sheetMono(12.5))
                 .foregroundStyle(Palette.ink)
                 .scrollContentBackground(.hidden)

@@ -71,11 +71,19 @@ targets:
     sources:
       - Tests/ArcGISExplorerUITests
       # The palette test reads the tokens from the code and the design doc; carried in the
-      # bundle so the test also runs on a Mac that has no checkout.
-      - path: Sources/App/Theme.swift
-        buildPhase: resources
+      # bundle so the test also runs on a Mac that has no checkout. Xcode will not copy a
+      # Swift source as a resource, so the script below carries it as Theme.txt.
       - path: DESIGN-TOKENS.md
         buildPhase: resources
+    postCompileScripts:
+      - name: Carry Theme.swift as Theme.txt
+        script: |
+          mkdir -p "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
+          cp "$SRCROOT/Sources/App/Theme.swift" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Theme.txt"
+        inputFiles:
+          - $(SRCROOT)/Sources/App/Theme.swift
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Theme.txt
     dependencies:
       - target: ArcGISExplorer
     settings:

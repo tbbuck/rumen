@@ -36,6 +36,8 @@ struct AddServerSheet: View {
         .padding(22)
         .frame(width: 480)
         .background(Palette.panel)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Add a server")
         .onAppear { friendlyName = pending.rootURL.host ?? "" }
     }
 
@@ -79,6 +81,8 @@ struct ServerSettingsSheet: View {
         .padding(22)
         .frame(width: 480)
         .background(Palette.panel)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Server settings")
         .onAppear {
             name = server.friendlyName
             origin = server.originOverride ?? ""

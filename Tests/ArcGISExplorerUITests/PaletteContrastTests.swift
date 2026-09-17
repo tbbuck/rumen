@@ -9,7 +9,7 @@ final class PaletteContrastTests: XCTestCase {
 
     /// Both files travel in the test bundle (see project.yml), so the test runs on a Mac with
     /// no checkout; a checkout beside the test is preferred when present, being the newer copy.
-    private static func source(_ name: String, at repoPath: String) throws -> String {
+    private static func source(bundled name: String, at repoPath: String) throws -> String {
         let repo = URL(fileURLWithPath: #filePath)   // Tests/ArcGISExplorerUITests/PaletteContrastTests.swift
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let checkout = repo.appendingPathComponent(repoPath)
@@ -17,14 +17,14 @@ final class PaletteContrastTests: XCTestCase {
         let base = (name as NSString).deletingPathExtension
         let ext = (name as NSString).pathExtension
         guard let bundled = Bundle(for: PaletteContrastTests.self).url(forResource: base, withExtension: ext) else {
-            throw NSError(domain: "PaletteContrastTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "\(name) is neither beside the test nor in its bundle"])
+            throw NSError(domain: "PaletteContrastTests", code: 1, userInfo: [NSLocalizedDescriptionKey: "\(repoPath) is neither beside the test nor in its bundle as \(name)"])
         }
         return try String(contentsOf: bundled, encoding: .utf8)
     }
 
     /// `name: (day, night)` from every `static let name = Color.sheet(0xDAY, 0xNIGHT…)` line.
     private func palette() throws -> [String: (day: UInt32, night: UInt32)] {
-        let text = try Self.source("Theme.swift", at: "Sources/App/Theme.swift")
+        let text = try Self.source(bundled: "Theme.txt", at: "Sources/App/Theme.swift")
         let pattern = #"static let (\w+)\s*=\s*Color\.sheet\(0x([0-9A-Fa-f]{6}),\s*0x([0-9A-Fa-f]{6})"#
         let regex = try NSRegularExpression(pattern: pattern)
         var out = [String: (day: UInt32, night: UInt32)]()
@@ -39,7 +39,7 @@ final class PaletteContrastTests: XCTestCase {
 
     /// `token: (day, night)` from the DESIGN-TOKENS.md colour table.
     private func documented() throws -> [String: (day: String, night: String)] {
-        let text = try Self.source("DESIGN-TOKENS.md", at: "DESIGN-TOKENS.md")
+        let text = try Self.source(bundled: "DESIGN-TOKENS.md", at: "DESIGN-TOKENS.md")
         let pattern = #"^\| `([\w-]+)` \| `#([0-9A-Fa-f]{6})` \| `#([0-9A-Fa-f]{6})` \|"#
         let regex = try NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines])
         var out = [String: (day: String, night: String)]()

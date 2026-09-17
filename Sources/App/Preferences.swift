@@ -134,6 +134,8 @@ struct PreferencesView: View {
         }
         .padding(22)
         .frame(width: 520)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Preferences")
         .background(Palette.panel)
     }
 

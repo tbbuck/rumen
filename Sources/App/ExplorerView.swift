@@ -33,6 +33,8 @@ struct ExplorerView: View {
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.showTransfers)
         .background(Palette.bg)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("ArcGIS Explorer")
         .ignoresSafeArea(.container, edges: .top)
         .onAppear { FieldFocus.install(); TitleBarZoom.install(model: model); FieldFocus.clearInitialFocus() }
         .sheet(item: $model.pendingAdd) { pending in

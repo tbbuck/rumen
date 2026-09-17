@@ -16,6 +16,7 @@ struct RawTextView: NSViewRepresentable {
         scroll.borderType = .noBorder
 
         let textView = NSTextView()
+        textView.setAccessibilityLabel("The definition as the server sent it")
         textView.isEditable = false
         textView.isSelectable = true
         textView.isRichText = false

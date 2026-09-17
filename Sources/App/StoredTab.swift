@@ -180,7 +180,7 @@ private struct ScratchBox: View {
                 Spacer()
             }
             HStack(alignment: .top, spacing: 12) {
-                TextEditor(text: $session.sql)
+                TextEditor(text: $session.sql).accessibilityLabel("SQL over the stored file")
                     .font(.sheetMono(12.5))
                     .foregroundStyle(Palette.ink)
                     .scrollContentBackground(.hidden)

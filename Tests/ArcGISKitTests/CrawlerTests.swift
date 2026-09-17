@@ -278,3 +278,21 @@ extension CrawlerTests {
         XCTAssertEqual(gone.count, 0)
     }
 }
+
+// MARK: - Deep crawl parallelism
+
+extension CrawlerTests {
+    /// Services are crawled several at a time, bounded by the crawl's width and the client's
+    /// per-host cap, and the result is the same set of crawled services and failures.
+    func testDeepCrawlRunsServicesInParallel() async throws {
+        let opened = try await crawler.open(root)
+        transport.delay = .milliseconds(15)
+        let failures = try await crawler.deepCrawl(serverID: opened.server.id, concurrency: 4)
+        XCTAssertEqual(failures.count, 1)
+        XCTAssertGreaterThan(transport.maxConcurrent, 1, "service crawls overlap")
+        XCTAssertLessThanOrEqual(transport.maxConcurrent, 4, "never beyond the client's per-host cap")
+        let services = try await db.services(serverID: opened.server.id)
+        let crawled = services.filter { $0.type.hasLayers && $0.name != "Hurricanes" }
+        XCTAssertTrue(crawled.allSatisfy(\.isCrawled), "every service that can be crawled was")
+    }
+}

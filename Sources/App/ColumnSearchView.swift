@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import ArcGISKit
 
 /// Replaces the layer page while the search field has text (SPEC §5.8): options, results,
@@ -32,23 +33,33 @@ struct ColumnSearchResults: View {
             if let error = model.searchError {
                 ErrorText(message: error)
             }
-            ScrollView([.vertical, .horizontal]) {
-                VStack(spacing: 0) {
-                    HStack(spacing: 14) {
-                        header("Field", 170); header("Layer", 170); header("Service", 150); header("Server", 110); header("Type", 80)
-                        Text("Verdict").font(.sheetUI(11, .semibold)).foregroundStyle(Palette.muted).frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(height: 26)
-                    .overlay(alignment: .top) { Rectangle().fill(Palette.line2).frame(height: 1) }
-                    ForEach(model.searchHits) { hit in
-                        SearchHitRow(hit: hit)
-                    }
-                    if model.searchHits.isEmpty, model.searchError == nil {
-                        Caption("No columns match.").frame(height: 27)
+            // The table fills what is left of the page: columns are sized from their content, the
+            // three text columns share any spare width, and the rows scroll.
+            GeometryReader { proxy in
+                let widths = SearchColumns.plan(hits: model.searchHits, available: proxy.size.width)
+                ScrollView(.vertical) {
+                    LazyVStack(spacing: 0) {
+                        HStack(spacing: SearchColumns.gap) {
+                            ForEach(Array(SearchColumns.titles.enumerated()), id: \.offset) { index, title in
+                                Text(title).font(.sheetUI(11, .semibold)).foregroundStyle(Palette.muted)
+                                    .frame(width: widths[index], alignment: .leading)
+                            }
+                        }
+                        .padding(.horizontal, SearchColumns.inset)
+                        .frame(height: 26)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .overlay(alignment: .top) { Rectangle().fill(Palette.line2).frame(height: 1) }
+                        ForEach(model.searchHits) { hit in
+                            SearchHitRow(hit: hit, widths: widths)
+                        }
+                        if model.searchHits.isEmpty, model.searchError == nil {
+                            Caption("No columns match.").frame(height: 27).padding(.horizontal, SearchColumns.inset)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
                 }
-                .frame(minWidth: 760, maxWidth: 1100, alignment: .leading)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .padding(.top, 22).padding(.horizontal, 36).padding(.bottom, 18)
         .onChange(of: model.search) { Task { await model.runColumnSearch() } }
@@ -61,36 +72,95 @@ struct ColumnSearchResults: View {
         let scope = model.searchAllServers ? "every known server" : (model.currentServer?.friendlyName ?? "this server")
         return "\(n.grouped) column\(n == 1 ? "" : "s") in cached metadata on \(scope)\(n >= model.search.limit ? ", first \(model.search.limit.grouped) shown" : "")."
     }
+}
 
-    private func header(_ text: String, _ width: CGFloat) -> some View {
-        Text(text).font(.sheetUI(11, .semibold)).foregroundStyle(Palette.muted).frame(width: width, alignment: .leading)
+/// Column widths for the results table, from the content: each column's natural width is its
+/// widest cell (up to 300 rows measured) or its header, never below a floor; the three text
+/// columns (field, layer, service) then share whatever width is spare in proportion, or give
+/// it back the same way when the page is narrow. Narrow columns stop being mostly air, wide
+/// ones get the room.
+enum SearchColumns {
+    static let titles = ["Field", "Layer", "Service", "Server", "Type", "Verdict"]
+    static let gap: CGFloat = 14
+    static let inset: CGFloat = 6
+    private static let floors: [CGFloat] = [90, 120, 120, 80, 70, 90]
+    private static let flexible: Set<Int> = [0, 1, 2]
+    private static let cellPadding: CGFloat = 12
+
+    static func plan(hits: [FieldSearchHit], available: CGFloat) -> [CGFloat] {
+        let mono = SheetFonts.mono(size: 12, weight: 400) ?? .monospacedSystemFont(ofSize: 12, weight: .regular)
+        let ui = SheetFonts.ui(size: 12.5) ?? .systemFont(ofSize: 12.5)
+        let kind = SheetFonts.ui(size: 9.5) ?? .systemFont(ofSize: 9.5)
+        let alias = SheetFonts.ui(size: 11) ?? .systemFont(ofSize: 11)
+        let header = SheetFonts.ui(size: 11, weight: 600) ?? .systemFont(ofSize: 11, weight: .semibold)
+        var natural = titles.map { width(of: $0, font: header) }
+        for hit in hits.prefix(300) {
+            var field = width(of: hit.fieldName, font: mono)
+            if hit.matchedAlias, let a = hit.alias { field += 6 + width(of: "alias \(a)", font: alias) }
+            natural[0] = max(natural[0], field)
+            natural[1] = max(natural[1], width(of: "\(hit.layerNumber) \(hit.layerName)", font: ui))
+            natural[2] = max(natural[2], width(of: hit.serviceShortName, font: ui) + 6 + width(of: hit.serviceType.name, font: kind))
+            natural[3] = max(natural[3], width(of: hit.serverName, font: ui))
+            natural[4] = max(natural[4], width(of: hit.duckType, font: mono))
+            natural[5] = max(natural[5], width(of: String(Verdict(hit.extractable).word.dropLast()), font: ui))
+        }
+        var widths = zip(natural, floors).map { max($0 + cellPadding, $1) }
+        let usable = available - 2 * inset - gap * CGFloat(titles.count - 1)
+        let total = widths.reduce(0, +)
+        let flexibleTotal = flexible.reduce(CGFloat(0)) { $0 + widths[$1] }
+        guard flexibleTotal > 0, usable.isFinite, usable > 0 else { return widths }
+        let spare = usable - total
+        for index in flexible {
+            let share = spare * widths[index] / flexibleTotal
+            widths[index] = max(floors[index], (widths[index] + share).rounded(.down))
+        }
+        return widths
     }
+
+    nonisolated(unsafe) private static var cache: [String: CGFloat] = [:]
+
+    private static func width(of text: String, font: NSFont) -> CGFloat {
+        let key = "\(font.pointSize)|\(font.fontName)|\(text)"
+        if let cached = cache[key] { return cached }
+        let measured = ceil((text as NSString).size(withAttributes: [.font: font]).width)
+        if cache.count > 20_000 { cache.removeAll() }
+        cache[key] = measured
+        return measured
+    }
+}
+
+private extension FieldSearchHit {
+    var serviceShortName: String { serviceName.split(separator: "/").last.map(String.init) ?? serviceName }
 }
 
 private struct SearchHitRow: View {
     @Environment(AppModel.self) private var model
     let hit: FieldSearchHit
+    let widths: [CGFloat]
     @State private var hovered = false
 
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: SearchColumns.gap) {
             HStack(spacing: 6) {
                 Text(hit.fieldName).font(.sheetMono(12)).foregroundStyle(Palette.ink).lineLimit(1)
                 if hit.matchedAlias, let alias = hit.alias { Caption("alias \(alias)", size: 11, color: Palette.muted2).lineLimit(1) }
             }
-            .frame(width: 170, alignment: .leading)
-            Text("\(hit.layerNumber) \(hit.layerName)").font(.sheetUI(12.5)).foregroundStyle(Palette.ink).lineLimit(1).frame(width: 170, alignment: .leading)
+            .frame(width: widths[0], alignment: .leading)
+            Text("\(hit.layerNumber) \(hit.layerName)").font(.sheetUI(12.5)).foregroundStyle(Palette.ink).lineLimit(1)
+                .truncationMode(.middle).frame(width: widths[1], alignment: .leading).help(hit.layerName)
             HStack(spacing: 6) {
-                Text(hit.serviceName.split(separator: "/").last.map(String.init) ?? hit.serviceName).font(.sheetUI(12.5)).foregroundStyle(Palette.ink).lineLimit(1)
+                Text(hit.serviceShortName).font(.sheetUI(12.5)).foregroundStyle(Palette.ink).lineLimit(1).truncationMode(.middle)
                 KindLabel(type: hit.serviceType)
             }
-            .frame(width: 150, alignment: .leading)
-            Text(hit.serverName).font(.sheetUI(12.5)).foregroundStyle(Palette.muted).lineLimit(1).frame(width: 110, alignment: .leading)
-            Text(hit.duckType).font(.sheetMono(12)).foregroundStyle(Palette.ink).lineLimit(1).frame(width: 80, alignment: .leading)
+            .frame(width: widths[2], alignment: .leading).help(hit.serviceName)
+            Text(hit.serverName).font(.sheetUI(12.5)).foregroundStyle(Palette.muted).lineLimit(1).frame(width: widths[3], alignment: .leading)
+            Text(hit.duckType).font(.sheetMono(12)).foregroundStyle(Palette.ink).lineLimit(1).frame(width: widths[4], alignment: .leading)
             let verdict = Verdict(hit.extractable)
-            Text(verdict.word.dropLast()).font(.sheetUI(12.5, .semibold)).foregroundStyle(verdict.color).frame(maxWidth: .infinity, alignment: .leading)
+            Text(verdict.word.dropLast()).font(.sheetUI(12.5, .semibold)).foregroundStyle(verdict.color).frame(width: widths[5], alignment: .leading)
         }
+        .padding(.horizontal, SearchColumns.inset)
         .frame(height: 27)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(hovered ? Palette.line.opacity(0.55) : .clear)
         .overlay(alignment: .top) { Rectangle().fill(Palette.line).frame(height: 1) }
         .contentShape(Rectangle())

@@ -228,30 +228,49 @@ public actor Crawler {
 
     // MARK: - Deep crawl
 
-    /// Re-lists the directory, then crawls every Map/Feature service. Failures of individual
+    /// Re-lists the directory, then crawls every Map/Feature service, `concurrency` at a time
+    /// (the client's per-host cap still bounds the requests in flight). Failures of individual
     /// services are reported through `progress` and collected; the crawl continues past them
     /// so one broken service doesn't hide a whole server. Returns the failures.
     /// Services crawled within `skipFresh` are skipped, so re-running after a cancel resumes
     /// where it stopped rather than starting over.
     @discardableResult
-    public func deepCrawl(serverID: Int64, skipFresh: TimeInterval = 3600,
+    public func deepCrawl(serverID: Int64, skipFresh: TimeInterval = 3600, concurrency: Int = 4,
                           progress: (@Sendable (CrawlEvent) -> Void)? = nil) async throws -> [CrawlEvent] {
         try await shallowCrawl(serverID: serverID, progress: progress)
         let cutoff = Date().addingTimeInterval(-skipFresh)
         let services = try await db.services(serverID: serverID).filter { service in
             service.type.hasLayers && (service.fetchedAt.map { $0 < cutoff } ?? true)
         }
+        let width = max(1, concurrency)
         var failures = [CrawlEvent]()
-        for service in services {
-            try Task.checkCancellation()
-            do {
-                try await crawlService(serviceID: service.id, progress: progress)
-            } catch is CancellationError {
-                throw CancellationError()
-            } catch {
-                let event = CrawlEvent.failed(what: service.name, error: String(describing: error))
-                failures.append(event)
-                progress?(event)
+        try await withThrowingTaskGroup(of: CrawlEvent?.self) { group in
+            var pending = services[...]
+            var inFlight = 0
+            func enqueue(_ service: ServiceRecord) {
+                group.addTask { [self] in
+                    do {
+                        try await self.crawlService(serviceID: service.id, progress: progress)
+                        return nil
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch let error as ArcGISClientError where error == .cancelled {
+                        throw CancellationError()
+                    } catch {
+                        let event = CrawlEvent.failed(what: service.name, error: String(describing: error))
+                        progress?(event)
+                        return event
+                    }
+                }
+                inFlight += 1
+            }
+            while inFlight < width, let next = pending.popFirst() { enqueue(next) }
+            while inFlight > 0 {
+                guard let outcome = try await group.next() else { break }
+                inFlight -= 1
+                if let failure = outcome { failures.append(failure) }
+                try Task.checkCancellation()
+                while inFlight < width, let next = pending.popFirst() { enqueue(next) }
             }
         }
         try await db.markDeepCrawl(serverID: serverID)

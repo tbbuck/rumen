@@ -453,12 +453,12 @@ final class AppModel {
         deepCrawlStatus = "Listing services…"
         defer { deepCrawlStatus = nil }
         do {
-            let failures = try await crawler.deepCrawl(serverID: server.id) { [weak self] event in
+            let failures = try await crawler.deepCrawl(serverID: server.id, concurrency: preferences.concurrency) { [weak self] event in
                 Task { @MainActor in
                     guard let self else { return }
                     switch event {
-                    case .service(let name, let layers): self.deepCrawlStatus = "\(name): \(layers) layers"
-                    case .directory(let folder, let count): self.deepCrawlStatus = "\(folder.isEmpty ? "root" : folder): \(count) services"
+                    case .service(let name, let layers): self.deepCrawlStatus = "\(name): \(layers) layer\(layers == 1 ? "" : "s")"
+                    case .directory(let folder, let count): self.deepCrawlStatus = "\(folder.isEmpty ? "root" : folder): \(count) service\(count == 1 ? "" : "s")"
                     case .layer(let name): self.deepCrawlStatus = name
                     case .failed(let what, _): self.deepCrawlStatus = "\(what) failed"
                     }
@@ -591,9 +591,9 @@ final class AppModel {
         guard openingStatus != nil else { return }
         switch event {
         case .directory(let folder, let services):
-            openingStatus?.step = "Listed \(folder.isEmpty ? "the root" : folder): \(services) services"
+            openingStatus?.step = "Listed \(folder.isEmpty ? "the root" : folder): \(services) service\(services == 1 ? "" : "s")"
         case .service(let name, let layers):
-            openingStatus?.step = "Read \(name): \(layers) layers"
+            openingStatus?.step = "Read \(name): \(layers) layer\(layers == 1 ? "" : "s")"
         case .layer(let name):
             openingStatus?.step = "Reading \(name)…"
         case .failed(let what, let error):

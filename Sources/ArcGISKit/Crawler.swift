@@ -25,9 +25,9 @@ public enum CrawlEvent: Sendable, Equatable {
 /// layer-bearing service under a server) on demand. Cache reads never hit the network;
 /// only these entry points do.
 public actor Crawler {
-    private let client: ArcGISClient
-    private let db: AppDatabase
-    private let tokenProvider: @Sendable (ServerRecord) async -> String?
+    let client: ArcGISClient
+    let db: AppDatabase
+    let tokenProvider: @Sendable (ServerRecord) async -> String?
 
     /// `tokenProvider` supplies a server's token from wherever it is kept (the Keychain in
     /// the app, nothing in tests).
@@ -38,7 +38,7 @@ public actor Crawler {
         self.tokenProvider = tokenProvider
     }
 
-    private func connection(_ server: ServerRecord) async -> ServerConnection {
+    func connection(_ server: ServerRecord) async -> ServerConnection {
         server.connection(token: await tokenProvider(server))
     }
 
@@ -64,7 +64,13 @@ public actor Crawler {
     public func open(_ text: String, friendlyName: String? = nil,
                      headerOverrides: (origin: String?, referer: String?)? = nil, cookie: String? = nil,
                      progress: (@Sendable (CrawlEvent) -> Void)? = nil) async throws -> Opened {
-        let location = try ArcGISURL.parse(text)
+        let location: ArcGISLocation
+        do {
+            location = try ArcGISURL.parse(text)
+        } catch ArcGISURLError.notArcGIS {
+            // Anything else that is a URL may be an OGC endpoint (M10); the probe decides.
+            return try await openOGC(text, friendlyName: friendlyName, headerOverrides: headerOverrides, cookie: cookie, progress: progress)
+        }
         let existing = try await db.server(rootURL: location.rootURL)
         var server = try await db.addServer(rootURL: location.rootURL,
                                             friendlyName: friendlyName ?? location.rootURL.host ?? "server")
@@ -111,7 +117,10 @@ public actor Crawler {
     /// must list; a folder that fails is returned as a problem and the rest carries on.
     @discardableResult
     public func shallowCrawl(serverID: Int64, progress: (@Sendable (CrawlEvent) -> Void)? = nil) async throws -> [CrawlProblem] {
-        try await crawlDirectory(serverID: serverID, folderPath: "", recursive: true, progress: progress)
+        if try await db.server(id: serverID).kind == .ogc {
+            return try await probeOGC(serverID: serverID, progress: progress)
+        }
+        return try await crawlDirectory(serverID: serverID, folderPath: "", recursive: true, progress: progress)
     }
 
     /// Lists one directory (root when `folderPath` is empty), upserting and pruning its
@@ -178,6 +187,7 @@ public actor Crawler {
     /// bulk endpoint is missing, errors, or omits a layer.
     public func crawlService(serviceID: Int64, progress: (@Sendable (CrawlEvent) -> Void)? = nil) async throws {
         let service = try await db.service(id: serviceID)
+        if service.type.isOGC { return try await crawlOGCService(serviceID: serviceID, progress: progress) }
         let server = try await db.server(id: service.serverID)
         let conn = await connection(server)
 
@@ -212,6 +222,8 @@ public actor Crawler {
     public func crawlLayer(layerID: Int64, progress: (@Sendable (CrawlEvent) -> Void)? = nil) async throws {
         let layer = try await db.layer(id: layerID)
         let service = try await db.service(id: layer.serviceID)
+        // An OGC layer has no definition of its own beyond the capabilities: refresh the service.
+        if service.type.isOGC { return try await crawlOGCService(serviceID: service.id, progress: progress) }
         let server = try await db.server(id: service.serverID)
         try await crawlLayer(layerID: layerID, connection: await connection(server), serviceURL: service.url,
                              progress: progress)
@@ -321,7 +333,9 @@ extension Crawler {
         let layer = try await db.layer(id: layerID)
         let service = try await db.service(id: layer.serviceID)
         let twin = try await twin(of: layer, in: service)
-        let assessment = Extractability.assess(layer: layer, service: service, twin: twin?.0, twinService: twin?.1)
+        let assessment = service.type.isOGC
+            ? Extractability.assessOGC(layer: layer, service: service)
+            : Extractability.assess(layer: layer, service: service, twin: twin?.0, twinService: twin?.1)
         try await db.setExtractability(layerID: layerID, extractable: assessment.verdict, reason: assessment.reason,
                                        transport: assessment.transport?.rawValue,
                                        siblingLayerID: assessment.viaTwin ? assessment.sourceLayerID : nil)
@@ -337,6 +351,7 @@ extension Crawler {
         let source = try await db.layer(id: assessment.sourceLayerID)
         let service = try await db.service(id: source.serviceID)
         let server = try await db.server(id: service.serverID)
+        if service.type.isOGC { return try await probeOGCCount(layer: source, service: service, server: server) }
         let url = service.url.appendingPathComponent(String(source.layerID))
         do {
             let count = Int64(try await client.count(await connection(server), layerURL: url))

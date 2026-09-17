@@ -6,20 +6,29 @@ public enum ServiceType: Sendable, Equatable, Hashable {
     case mapServer
     case featureServer
     case imageServer
+    /// OGC services at an OGC endpoint (M10), never ArcGIS's own `WMSServer` extensions.
+    case wms
+    case wfs
+    case wmts
     case other(String)
 
-    /// Canonical casing as ArcGIS publishes it, e.g. `FeatureServer`.
+    /// Canonical casing as ArcGIS publishes it, e.g. `FeatureServer`; the plain acronym for OGC.
     public var name: String {
         switch self {
         case .mapServer: return "MapServer"
         case .featureServer: return "FeatureServer"
         case .imageServer: return "ImageServer"
+        case .wms: return "WMS"
+        case .wfs: return "WFS"
+        case .wmts: return "WMTS"
         case .other(let s): return s
         }
     }
 
-    /// True when the service can contain layers/tables that `query` applies to.
-    public var hasLayers: Bool { self == .mapServer || self == .featureServer }
+    /// True when the service can contain layers/tables that `query` applies to, or OGC layers.
+    public var hasLayers: Bool { self == .mapServer || self == .featureServer || isOGC }
+
+    public var isOGC: Bool { self == .wms || self == .wfs || self == .wmts }
 
     /// Every service type ArcGIS REST can list, matched case-insensitively.
     static let known = ["MapServer", "FeatureServer", "ImageServer", "GPServer", "GeocodeServer",
@@ -34,6 +43,9 @@ public enum ServiceType: Sendable, Equatable, Hashable {
         case "mapserver": self = .mapServer
         case "featureserver": self = .featureServer
         case "imageserver": self = .imageServer
+        case "wms": self = .wms
+        case "wfs": self = .wfs
+        case "wmts": self = .wmts
         default:
             self = .other(Self.known.first { $0.lowercased() == raw.lowercased() } ?? raw)
         }

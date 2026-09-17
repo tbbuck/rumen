@@ -150,11 +150,20 @@ final class CrawlerTests: XCTestCase {
         }
     }
 
-    func testNonArcGISURLIsRejectedBeforeAnyRequest() async throws {
+    /// A URL that is not ArcGIS is taken for an OGC endpoint (M10): the three capabilities are
+    /// asked for, and when none answers the error names every attempt and nothing is kept.
+    func testNonArcGISURLIsProbedForOGCServicesAndForgottenWhenNoneAnswer() async throws {
         await XCTAssertThrowsErrorAsync(try await self.crawler.open("https://example.com/nothing")) { error in
+            guard case OGCError.noServices(let url, let attempts) = error else { return XCTFail("\(error)") }
+            XCTAssertEqual(url.absoluteString, "https://example.com/nothing")
+            XCTAssertEqual(attempts.count, 3)
+        }
+        XCTAssertEqual(transport.count, 3)
+        let servers = try await db.servers()
+        XCTAssertTrue(servers.isEmpty)
+        XCTAssertThrowsError(try ArcGISURL.parse("https://example.com/nothing")) { error in
             XCTAssertEqual(error as? ArcGISURLError, .notArcGIS("https://example.com/nothing"))
         }
-        XCTAssertEqual(transport.count, 0)
     }
 
     func testDeepCrawlContinuesPastBrokenServicesAndReportsThem() async throws {

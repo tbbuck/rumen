@@ -8,23 +8,36 @@ public enum ExportFormat: String, Sendable, CaseIterable, Equatable {
     case geoParquet = "geoparquet"
     case geoJSON = "geojson"
     case csv = "csv"
+    /// A WMS GetMap picture (M10): PNG with a world file beside it, or GeoTIFF when the server offers it.
+    case png = "png"
+    case geoTIFF = "geotiff"
 
     public var fileExtension: String {
-        switch self { case .geoParquet: "parquet"; case .geoJSON: "geojson"; case .csv: "csv" }
+        switch self { case .geoParquet: "parquet"; case .geoJSON: "geojson"; case .csv: "csv"; case .png: "png"; case .geoTIFF: "tif" }
     }
     public var label: String {
-        switch self { case .geoParquet: "GeoParquet"; case .geoJSON: "GeoJSON"; case .csv: "CSV" }
+        switch self { case .geoParquet: "GeoParquet"; case .geoJSON: "GeoJSON"; case .csv: "CSV"; case .png: "PNG image"; case .geoTIFF: "GeoTIFF" }
     }
     /// GeoJSON (RFC 7946) is always WGS 84; the spatial reference picker has no say.
     public var forcesWGS84: Bool { self == .geoJSON }
+    /// A picture rather than features: no rows to store, nothing to re-export.
+    public var isRaster: Bool { self == .png || self == .geoTIFF }
+    /// The formats features can be written in.
+    public static var vector: [ExportFormat] { [.geoParquet, .geoJSON, .csv] }
     /// Formats a stored GeoParquet can be re-exported to.
     public static var reexportable: [ExportFormat] { [.geoJSON, .csv] }
+    /// The WMS media type for an image format.
+    public var mediaType: String? {
+        switch self { case .png: "image/png"; case .geoTIFF: "image/geotiff"; default: nil }
+    }
     /// How the geometry travels, for captions.
     public var geometryNote: String {
         switch self {
         case .geoParquet: "geometry as WKB with the CRS in the file's metadata"
         case .geoJSON: "written in WGS 84 as RFC 7946 requires"
         case .csv: "geometry as WKT in a geometry column"
+        case .png: "a rendered picture with a world file beside it"
+        case .geoTIFF: "a rendered picture with its georeferencing inside"
         }
     }
 }

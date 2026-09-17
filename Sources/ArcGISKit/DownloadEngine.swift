@@ -41,12 +41,12 @@ public struct DownloadProgress: Sendable, Equatable {
 /// bounded concurrency, stages rows in a per-run DuckDB, records every chunk so a run can
 /// resume, and exports at the end.
 public actor DownloadEngine {
-    private let client: ArcGISClient
-    private let db: AppDatabase
-    private let crawler: Crawler
-    private let stagingDirectory: URL
-    private var concurrency: Int
-    private let tokenProvider: @Sendable (ServerRecord) async -> String?
+    let client: ArcGISClient
+    let db: AppDatabase
+    let crawler: Crawler
+    let stagingDirectory: URL
+    var concurrency: Int
+    let tokenProvider: @Sendable (ServerRecord) async -> String?
     private var tasks: [Int64: Task<DownloadRecord, Error>] = [:]
 
     public init(client: ArcGISClient, database: AppDatabase, crawler: Crawler, stagingDirectory: URL,
@@ -98,11 +98,16 @@ public actor DownloadEngine {
 
     // MARK: - Planning
 
-    private var requests: [Int64: DownloadRequest] = [:]
-    private var resumeContext: [Int64: (URL, Bool)] = [:]
+    var requests: [Int64: DownloadRequest] = [:]
+    var resumeContext: [Int64: (URL, Bool)] = [:]
 
     private func plan(_ request: DownloadRequest) async throws -> DownloadRecord {
         let assessment = try await crawler.assess(layerID: request.layerID)
+        let target = try await db.layer(id: request.layerID)
+        let targetService = try await db.service(id: target.serviceID)
+        if targetService.type.isOGC {
+            return try await planOGC(request, layer: target, service: targetService, assessment: assessment)
+        }
         guard assessment.verdict == true else { throw DownloadError.notExtractable(assessment.reason) }
         let strategy = request.manualStrategy ?? assessment.strategy
         guard let strategy, let transport = assessment.transport else { throw DownloadError.unknownStrategy }
@@ -140,6 +145,8 @@ public actor DownloadEngine {
                 throw DownloadError.tooManyObjectIDs(ids.count)
             }
             chunks = DownloadPlanner.listChunks(downloadID: record.id, objectIDs: ids, pageSize: pageSize)
+        case .single:
+            chunks = [DownloadChunk(downloadID: record.id, seq: 0, kind: .offset, offset: 0, limit: nil)]
         }
         try await db.insertChunks(chunks)
         let staging = stagingDirectory.appendingPathComponent("download-\(record.id).duckdb").path
@@ -159,7 +166,7 @@ public actor DownloadEngine {
     }
 
     /// Runs a persistence step outside the (possibly cancelled) run task.
-    private func persist<T: Sendable>(_ body: @escaping @Sendable () async throws -> T) async throws -> T {
+    func persist<T: Sendable>(_ body: @escaping @Sendable () async throws -> T) async throws -> T {
         try await Task { try await body() }.value
     }
 
@@ -182,7 +189,7 @@ public actor DownloadEngine {
     }
 
     /// Engine requests retry less than the interactive client: a refused chunk is split instead.
-    private static let attemptsPerChunk = 2
+    static let attemptsPerChunk = 2
 
     private func run(_ id: Int64, progress: @escaping @Sendable (DownloadProgress) -> Void) async throws -> DownloadRecord {
         var record = try await db.download(id: id)
@@ -191,6 +198,12 @@ public actor DownloadEngine {
         let source = try await db.layer(id: sourceID)
         let service = try await db.service(id: source.serviceID)
         let server = try await db.server(id: service.serverID)
+        if service.type == .wms {
+            return try await runImage(id, record: record, layer: source, service: service, server: server, progress: progress)
+        }
+        if service.type.isOGC {
+            return try await runWFS(id, record: record, layer: source, service: service, server: server, progress: progress)
+        }
         let connection = server.connection(token: await tokenProvider(server))
         let url = service.url.appendingPathComponent(String(source.layerID))
         let fields = try await db.fields(layerID: source.id)

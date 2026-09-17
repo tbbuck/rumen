@@ -66,6 +66,7 @@ public enum Exporter {
 
     public static func export(_ staging: StagingDatabase, to url: URL, format: ExportFormat, outWkid: Int,
                               domainLabels: Bool, overwrite: Bool) throws -> ExportResult {
+        guard !format.isRaster else { throw ExportError.unsupportedFormat(format) }
         try prepare(url, overwrite: overwrite)
         let selectList = try columns(staging, format: format, domainLabels: domainLabels)
         let orderBy = staging.oidField.map { " ORDER BY \(StagingDatabase.quote($0))" } ?? ""
@@ -84,6 +85,8 @@ public enum Exporter {
                 to: url))
         case .csv:
             try staging.run(csvCopy(select: "\(selectList), ST_AsText(ST_GeomFromWKB(geom_wkb)) AS geometry FROM features\(orderBy)", to: url))
+        case .png, .geoTIFF:
+            throw ExportError.unsupportedFormat(format)
         }
         let count = try staging.rowCount()
         let (hash, bytes) = try hashFile(at: url)
@@ -182,7 +185,7 @@ public enum Exporter {
         switch format {
         case .geoJSON: geometry = geometryColumn.map { wgs84($0, from: sourceWkid) } ?? "NULL::GEOMETRY"
         case .csv: geometry = geometryColumn.map { "ST_AsText(\($0))" } ?? "NULL::VARCHAR"
-        case .geoParquet: throw ExportError.unsupportedFormat(format)
+        case .geoParquet, .png, .geoTIFF: throw ExportError.unsupportedFormat(format)
         }
         let select = (attributes + ["\(geometry) AS geometry"]).joined(separator: ", ") + " FROM \(source)"
         try db.run(format == .geoJSON ? geoJSONCopy(select: select, to: url) : csvCopy(select: select, to: url))

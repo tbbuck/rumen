@@ -21,21 +21,21 @@ extension AppDatabase {
 
     private static let serverColumns = """
         id, root_url, friendly_name, origin_override, referer_override, auth_kind, username,
-        token_service_url, arcgis_version, created_at, last_visited_at, last_deep_crawl_at, cookie
+        token_service_url, arcgis_version, created_at, last_visited_at, last_deep_crawl_at, cookie, kind
         """
 
     /// Registers a server root, or touches `last_visited_at` on an existing one. The friendly
-    /// name is only used for a new row — renames go through `renameServer`.
+    /// name and the kind are only used for a new row — renames go through `renameServer`.
     @discardableResult
-    public func addServer(rootURL: URL, friendlyName: String, now: Date = Date()) throws -> ServerRecord {
+    public func addServer(rootURL: URL, friendlyName: String, kind: ServerKind = .arcgis, now: Date = Date()) throws -> ServerRecord {
         let name = friendlyName.trimmingCharacters(in: .whitespacesAndNewlines)
         let id = try query("""
-            INSERT INTO server (root_url, friendly_name, created_at, last_visited_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO server (root_url, friendly_name, created_at, last_visited_at, kind)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT (root_url) DO UPDATE SET last_visited_at = excluded.last_visited_at
             RETURNING id;
             """, [.string(rootURL.absoluteString), .string(name.isEmpty ? (rootURL.host ?? "server") : name),
-                  now.bindValue, now.bindValue]).rows.first?.first?.int64
+                  now.bindValue, now.bindValue, .string(kind.rawValue)]).rows.first?.first?.int64
         guard let id else { throw MetadataStoreError.unexpectedRow("server insert") }
         return try server(id: id)
     }
@@ -102,14 +102,14 @@ extension AppDatabase {
     }
 
     private static func serverRecord(_ r: [SQLValue]) throws -> ServerRecord {
-        guard r.count == 13, let id = r[0].int64, let urlText = r[1].stringValue, let url = URL(string: urlText),
+        guard r.count == 14, let id = r[0].int64, let urlText = r[1].stringValue, let url = URL(string: urlText),
               let name = r[2].stringValue, let auth = r[5].stringValue, let created = r[9].dateFromMicros
         else { throw MetadataStoreError.unexpectedRow("server") }
         return ServerRecord(id: id, rootURL: url, friendlyName: name, originOverride: r[3].stringValue,
                             refererOverride: r[4].stringValue, authKind: auth, username: r[6].stringValue,
                             tokenServiceURL: r[7].stringValue, arcgisVersion: r[8].doubleValue, createdAt: created,
                             lastVisitedAt: r[10].dateFromMicros, lastDeepCrawlAt: r[11].dateFromMicros,
-                            cookie: r[12].stringValue)
+                            cookie: r[12].stringValue, kind: r[13].stringValue.flatMap(ServerKind.init(rawValue:)) ?? .arcgis)
     }
 
     /// Blank clears it.
@@ -221,7 +221,7 @@ extension AppDatabase {
 
     private static let serviceColumns = """
         id, server_id, folder_path, name, type, url, capabilities, max_record_count,
-        supported_query_formats, is_tile_cache, fetched_at, extent_wgs84_json
+        supported_query_formats, is_tile_cache, fetched_at, extent_wgs84_json, ogc_json
         """
 
     /// Records the services listed in a directory (root or folder). New rows get their URL
@@ -308,14 +308,15 @@ extension AppDatabase {
     }
 
     private static func serviceRecord(_ r: [SQLValue]) throws -> ServiceRecord {
-        guard r.count == 12, let id = r[0].int64, let serverID = r[1].int64, let folder = r[2].stringValue,
+        guard r.count == 13, let id = r[0].int64, let serverID = r[1].int64, let folder = r[2].stringValue,
               let name = r[3].stringValue, let type = r[4].stringValue, let urlText = r[5].stringValue,
               let url = URL(string: urlText)
         else { throw MetadataStoreError.unexpectedRow("service") }
         return ServiceRecord(id: id, serverID: serverID, folderPath: folder, name: name, type: ServiceType(type),
                              url: url, capabilities: r[6].stringValue, maxRecordCount: r[7].intValue,
                              supportedQueryFormats: r[8].stringValue, isTileCache: r[9].boolValue,
-                             extentWGS84: BoundingBox(json: r[11].stringValue), fetchedAt: r[10].dateFromMicros)
+                             extentWGS84: BoundingBox(json: r[11].stringValue), fetchedAt: r[10].dateFromMicros,
+                             ogcJSON: r[12].stringValue)
     }
 
     // MARK: - Layers
@@ -325,7 +326,7 @@ extension AppDatabase {
         global_id_field, has_z, has_m, has_attachments, extent_json, wkid, latest_wkid, max_record_count,
         supported_query_formats, capabilities, supports_pagination, supports_statistics, supports_order_by,
         supports_result_type, transport, extractable, extractable_reason, sibling_layer_id, feature_count,
-        feature_count_at, fetched_at, extent_wgs84_json
+        feature_count_at, fetched_at, extent_wgs84_json, ogc_name, ogc_json
         """
 
     /// Records the layers and tables a service lists. Existing rows keep their crawled detail.
@@ -458,7 +459,7 @@ extension AppDatabase {
     }
 
     private static func layerRecord(_ r: [SQLValue]) throws -> LayerRecord {
-        guard r.count == 31, let id = r[0].int64, let serviceID = r[1].int64, let layerID = r[2].intValue,
+        guard r.count == 33, let id = r[0].int64, let serviceID = r[1].int64, let layerID = r[2].intValue,
               let name = r[3].stringValue, let isTable = r[5].boolValue
         else { throw MetadataStoreError.unexpectedRow("layer") }
         return LayerRecord(
@@ -471,7 +472,8 @@ extension AppDatabase {
             supportsOrderBy: r[21].boolValue, supportsResultType: r[22].boolValue, transport: r[23].stringValue,
             extractable: r[24].boolValue, extractableReason: r[25].stringValue, siblingLayerID: r[26].int64,
             featureCount: r[27].int64, featureCountAt: r[28].dateFromMicros,
-            extentWGS84: BoundingBox(json: r[30].stringValue), fetchedAt: r[29].dateFromMicros)
+            extentWGS84: BoundingBox(json: r[30].stringValue), fetchedAt: r[29].dateFromMicros,
+            ogcName: r[31].stringValue, ogcJSON: r[32].stringValue)
     }
 
     private static func fieldRecord(_ r: [SQLValue]) throws -> FieldRecord {

@@ -222,9 +222,39 @@ public actor ArcGISClient {
         if params["f"] == nil { params["f"] = "json" }
         if let token = server.token, params["token"] == nil { params["token"] = token }
         let request = try Self.build(method, url: url, params: params, server: server)
+        return try await send(request, url: url, maxAttempts: maxAttempts, progress: progress)
+    }
 
-        await acquire(server.hostKey)
-        defer { release(server.hostKey) }
+    /// A GET against an OGC endpoint (M10): the same headers, cap and retries, but no `f=json`
+    /// and no token, and the root's vendor parameters (`map=`) ride along with every request.
+    /// An OGC exception report in a 200 body becomes a `server` error, verbatim.
+    public func fetch(root: URL, params: [String: String], server: ServerConnection, accept: String = "*/*",
+                      maxAttempts: Int? = nil, progress: TransferProgressHandler? = nil) async throws -> Data {
+        let (endpoint, vendor) = OGCURL.split(root)
+        var all = vendor
+        for (key, value) in params { all[key] = value }
+        var request = try Self.build(.get, url: endpoint, params: all, server: server)
+        request.setValue(accept, forHTTPHeaderField: "Accept")
+        let url = request.url ?? endpoint
+        let data = try await send(request, url: url, maxAttempts: maxAttempts, progress: progress)
+        if Self.looksLikeXML(data), OGCCapabilities.isExceptionReport(data),
+           let document = try? XMLDocument(data: data, options: []), let rootElement = document.rootElement() {
+            throw ArcGISClientError.server(code: nil, message: OGCCapabilities.exceptionText(rootElement), details: [], url: url)
+        }
+        return data
+    }
+
+    static func looksLikeXML(_ data: Data) -> Bool {
+        for byte in data.prefix(64) {
+            if byte == 0x3C { return true }          // '<'
+            if byte != 0x20 && byte != 0x0A && byte != 0x0D && byte != 0x09 && byte != 0xEF && byte != 0xBB && byte != 0xBF { return false }
+        }
+        return false
+    }
+
+    private func send(_ request: URLRequest, url: URL, maxAttempts: Int?, progress: TransferProgressHandler?) async throws -> Data {
+        await acquire(server(for: request))
+        defer { release(server(for: request)) }
 
         var attempt = 1
         while true {
@@ -238,6 +268,11 @@ public actor ArcGISClient {
                 attempt += 1
             }
         }
+    }
+
+    /// The per-host key of a built request.
+    private func server(for request: URLRequest) -> String {
+        request.url.map { ArcGISURL.origin(of: $0) } ?? ""
     }
 
     private func performOnce(_ request: URLRequest, url: URL, progress: TransferProgressHandler?) async throws -> Data {

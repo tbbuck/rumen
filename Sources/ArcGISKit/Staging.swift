@@ -93,6 +93,93 @@ public final class StagingDatabase: @unchecked Sendable {
         return appended
     }
 
+    // MARK: - OGC pages (M10)
+
+    /// Appends the features of a GeoJSON or GML file (read through GDAL) as chunk `seq`,
+    /// matching the file's columns to the staged fields by name, case-blind, and casting each
+    /// to its staged type; a staged field the file lacks is NULL, a file column no field names
+    /// is dropped. The geometry is whichever column GDAL typed as geometry, stored as WKB in the
+    /// file's own coordinates. Returns the number of features appended.
+    @discardableResult
+    public func ingest(file: String, chunk seq: Int) throws -> Int {
+        try db.run("SET TimeZone = 'UTC';")
+        let source = "ST_Read('\(file.replacingOccurrences(of: "'", with: "''"))')"
+        var columns = [String: String]()   // lowercased name → name as GDAL spells it
+        var geometryColumn: String?
+        for row in try db.run("DESCRIBE SELECT * FROM \(source);").rows {
+            guard let name = row[0].stringValue, let type = row[1].stringValue else { continue }
+            if type.uppercased().hasPrefix("GEOMETRY"), geometryColumn == nil { geometryColumn = name } else { columns[name.lowercased()] = name }
+        }
+        let selects = stagedFields.map { field -> String in
+            let type = Self.stagingType(field.esriType)
+            guard let column = columns[field.name.lowercased()] else { return "NULL::\(type)" }
+            return "TRY_CAST(\(Self.quote(column)) AS \(type))"
+        }
+        let geometry = geometryColumn.map { "ST_AsWKB(\(Self.quote($0)))::BLOB" } ?? "NULL::BLOB"
+        let before = try rowCount()
+        try db.run("INSERT INTO features SELECT \(selects.joined(separator: ", ")), \(geometry), \(seq) FROM \(source);")
+        let appended = Int(try rowCount() - before)
+        if geometryColumn != nil, appended > 0 {
+            let extent = try db.run("""
+                SELECT ST_XMin(e), ST_YMin(e), ST_XMax(e), ST_YMax(e)
+                FROM (SELECT ST_Extent_Agg(ST_GeomFromWKB(geom_wkb)) AS e FROM features WHERE _chunk = ? AND geom_wkb IS NOT NULL);
+                """, [.int(Int64(seq))]).rows.first
+            if let e = extent, e.count == 4, let a = e[0].doubleValue, let b = e[1].doubleValue, let c = e[2].doubleValue, let d = e[3].doubleValue,
+               a.isFinite, b.isFinite, c.isFinite, d.isFinite {
+                let box = BoundingBox(minX: a, minY: b, maxX: c, maxY: d)
+                bbox = bbox.map { $0.union(box) } ?? box
+            }
+            for row in try db.run("SELECT DISTINCT CAST(ST_GeometryType(ST_GeomFromWKB(geom_wkb)) AS VARCHAR) FROM features WHERE _chunk = ? AND geom_wkb IS NOT NULL;",
+                                  [.int(Int64(seq))]).rows {
+                if let name = row.first?.stringValue { geometryTypes.insert(Self.geoParquetTypeName(name)) }
+            }
+        }
+        try saveMeta()
+        return appended
+    }
+
+    /// DuckDB's `POINT` / `MULTIPOLYGON` spelling as GeoParquet's `Point` / `MultiPolygon`.
+    static func geoParquetTypeName(_ duck: String) -> String {
+        switch duck.uppercased() {
+        case "POINT": return "Point"
+        case "LINESTRING": return "LineString"
+        case "POLYGON": return "Polygon"
+        case "MULTIPOINT": return "MultiPoint"
+        case "MULTILINESTRING": return "MultiLineString"
+        case "MULTIPOLYGON": return "MultiPolygon"
+        case "GEOMETRYCOLLECTION": return "GeometryCollection"
+        default: return duck
+        }
+    }
+
+    /// The fields a GeoJSON or GML file carries, for a feature type whose schema the server
+    /// would not describe: GDAL's column types read back as XSD-ish types. GDAL's own
+    /// bookkeeping columns and the geometry are left out.
+    public static func describeFields(file: String) throws -> [OGCField] {
+        let engine = try DuckDB()
+        try engine.run("INSTALL spatial;")
+        try engine.run("LOAD spatial;")
+        var fields = [OGCField]()
+        for row in try engine.run("DESCRIBE SELECT * FROM ST_Read('\(file.replacingOccurrences(of: "'", with: "''"))');").rows {
+            guard let name = row[0].stringValue, let type = row[1].stringValue?.uppercased() else { continue }
+            if name == "OGC_FID" || name == "lowerCorner" || name == "upperCorner" { continue }
+            let xsd: String
+            if type.hasPrefix("GEOMETRY") { xsd = "GeometryPropertyType" }
+            else if type.hasPrefix("VARCHAR") { xsd = "string" }
+            else if type == "INTEGER" || type == "SMALLINT" || type == "TINYINT" { xsd = "int" }
+            else if type == "BIGINT" || type == "HUGEINT" { xsd = "long" }
+            else if type == "DOUBLE" || type.hasPrefix("DECIMAL") { xsd = "double" }
+            else if type == "FLOAT" { xsd = "float" }
+            else if type.hasPrefix("TIMESTAMP") { xsd = "dateTime" }
+            else if type == "DATE" { xsd = "date" }
+            else if type == "TIME" { xsd = "time" }
+            else if type == "BLOB" { xsd = "base64Binary" }
+            else { xsd = "string" }
+            fields.append(OGCField(name: name, xsdType: xsd))
+        }
+        return fields
+    }
+
     static func append(_ value: AttributeValue, as type: EsriFieldType, to appender: Appender) throws {
         if value.isNull { try appender.appendNull(); return }
         switch type {

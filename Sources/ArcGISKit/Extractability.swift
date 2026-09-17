@@ -3,12 +3,19 @@ import Foundation
 /// The answer to "can I get this out?" (SPEC §5.3) and how (SPEC §5.6), computed from cached
 /// metadata alone. The count probe (network) confirms or overturns it.
 public struct Assessment: Sendable, Equatable {
-    public enum Transport: String, Sendable { case pbf, json }
+    /// How the features travel: Esri PBF or JSON from ArcGIS; GeoJSON or GML from a WFS; a
+    /// picture from a WMS (M10).
+    public enum Transport: String, Sendable { case pbf, json, geojson, gml, image }
     public enum Strategy: String, Sendable {
         case offset, oidRange = "oid_range", oidList = "oid_list"
+        /// One request for everything: a WFS that does not page, or a WMS picture.
+        case single
 
         public var label: String {
-            switch self { case .offset: "offset paging"; case .oidRange: "OID range chunking"; case .oidList: "OID list chunking" }
+            switch self {
+            case .offset: "offset paging"; case .oidRange: "OID range chunking"; case .oidList: "OID list chunking"
+            case .single: "one request"
+            }
         }
     }
 
@@ -123,5 +130,38 @@ public enum Extractability {
         let via = viaTwin ? " through the FeatureServer twin" : ""
         let size = pageSize.map { " at \($0.formatted(.number.grouping(.automatic))) records per request" } ?? ""
         return "\(transport == .pbf ? "PBF" : "JSON")\(via), \(strategy.label)\(size)."
+    }
+
+    // MARK: - OGC (M10)
+
+    /// A WFS feature type is extractable through GetFeature (GeoJSON when the server offers it,
+    /// GML otherwise; paged when the server pages). A WMS layer is a picture and a WMTS layer a
+    /// tile cache: neither yields features, and the statement says what can be had instead.
+    public static func assessOGC(layer: LayerRecord, service: ServiceRecord) -> Assessment {
+        let id = layer.id
+        guard let detail = service.ogcDetail, let name = layer.ogcName else {
+            return Assessment(verdict: nil, reason: "The service's capabilities have not been fetched yet.", layerID: id)
+        }
+        switch service.type {
+        case .wfs:
+            guard detail.operations.contains("GetFeature") || detail.operations.isEmpty else {
+                return Assessment(verdict: false, reason: "The WFS does not advertise GetFeature.", layerID: id)
+            }
+            let transport: Assessment.Transport = detail.geoJSONFormat != nil ? .geojson : .gml
+            let pageSize = detail.countDefault ?? 1000
+            let strategy: Assessment.Strategy = detail.paging ? .offset : .single
+            let how = transport == .geojson ? "GeoJSON" : "GML"
+            let paged = detail.paging ? "paged \(pageSize.formatted(.number.grouping(.automatic))) at a time" : "in one request, since the server does not page"
+            return Assessment(verdict: true, reason: "WFS GetFeature for \(name) as \(how), \(paged).",
+                              transport: transport, strategy: strategy, pageSize: detail.paging ? pageSize : nil, layerID: id)
+        case .wms:
+            return Assessment(verdict: false, reason: "A WMS layer is a picture, not features. Save it as an image from the Download tab, or preview it on the map.",
+                              transport: .image, strategy: .single, layerID: id)
+        case .wmts:
+            return Assessment(verdict: false, reason: "A WMTS layer is a tile cache; tile extraction is out of scope. Preview it on the map.",
+                              layerID: id)
+        default:
+            return Assessment(verdict: false, reason: "Not an OGC layer type this app extracts.", layerID: id)
+        }
     }
 }

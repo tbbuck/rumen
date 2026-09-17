@@ -20,11 +20,15 @@ public struct ServerRecord: Sendable, Equatable, Identifiable {
     public var lastDeepCrawlAt: Date?
     /// A raw `Cookie` header for every request to this server, as curl's `-b` (decision 17).
     public var cookie: String?
+    /// ArcGIS REST root, or an OGC endpoint (M10).
+    public var kind: ServerKind
 
     public init(id: Int64, rootURL: URL, friendlyName: String, originOverride: String? = nil,
                 refererOverride: String? = nil, authKind: String = "none", username: String? = nil,
                 tokenServiceURL: String? = nil, arcgisVersion: Double? = nil, createdAt: Date = Date(),
-                lastVisitedAt: Date? = nil, lastDeepCrawlAt: Date? = nil, cookie: String? = nil) {
+                lastVisitedAt: Date? = nil, lastDeepCrawlAt: Date? = nil, cookie: String? = nil,
+                kind: ServerKind = .arcgis) {
+        self.kind = kind
         self.id = id
         self.rootURL = rootURL
         self.friendlyName = friendlyName
@@ -95,10 +99,14 @@ public struct ServiceRecord: Sendable, Equatable, Identifiable {
     public var isTileCache: Bool?
     public var extentWGS84: BoundingBox?
     public var fetchedAt: Date?
+    /// The OGC service detail (version, formats, paging, tile matrix sets) as JSON; nil for ArcGIS.
+    public var ogcJSON: String?
 
     public init(id: Int64, serverID: Int64, folderPath: String = "", name: String, type: ServiceType, url: URL,
                 capabilities: String? = nil, maxRecordCount: Int? = nil, supportedQueryFormats: String? = nil,
-                isTileCache: Bool? = nil, extentWGS84: BoundingBox? = nil, fetchedAt: Date? = nil) {
+                isTileCache: Bool? = nil, extentWGS84: BoundingBox? = nil, fetchedAt: Date? = nil,
+                ogcJSON: String? = nil) {
+        self.ogcJSON = ogcJSON
         self.id = id
         self.serverID = serverID
         self.folderPath = folderPath
@@ -118,6 +126,10 @@ public struct ServiceRecord: Sendable, Equatable, Identifiable {
     public var capabilitySet: Set<String> { Capabilities.parse(capabilities) }
     /// True once the service's own JSON has been fetched (not just its directory entry).
     public var isCrawled: Bool { fetchedAt != nil }
+    public var ogcDetail: OGCServiceDetail? {
+        guard let ogcJSON, let data = ogcJSON.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(OGCServiceDetail.self, from: data)
+    }
 }
 
 public struct LayerRecord: Sendable, Equatable, Identifiable {
@@ -152,6 +164,10 @@ public struct LayerRecord: Sendable, Equatable, Identifiable {
     public var featureCountAt: Date?
     public var extentWGS84: BoundingBox?
     public var fetchedAt: Date?
+    /// The identifier an OGC request uses for this layer (typeName, Name, Identifier); nil for ArcGIS.
+    public var ogcName: String?
+    /// The OGC layer detail (CRS list, styles, tile matrix set links) as JSON; nil for ArcGIS.
+    public var ogcJSON: String?
 
     public init(id: Int64, serviceID: Int64, layerID: Int, name: String, type: String? = nil, isTable: Bool = false,
                 geometryType: String? = nil, parentLayerID: Int? = nil, objectIdField: String? = nil,
@@ -161,7 +177,9 @@ public struct LayerRecord: Sendable, Equatable, Identifiable {
                 supportsStatistics: Bool? = nil, supportsOrderBy: Bool? = nil, supportsResultType: Bool? = nil,
                 transport: String? = nil, extractable: Bool? = nil, extractableReason: String? = nil,
                 siblingLayerID: Int64? = nil, featureCount: Int64? = nil, featureCountAt: Date? = nil,
-                extentWGS84: BoundingBox? = nil, fetchedAt: Date? = nil) {
+                extentWGS84: BoundingBox? = nil, fetchedAt: Date? = nil, ogcName: String? = nil, ogcJSON: String? = nil) {
+        self.ogcName = ogcName
+        self.ogcJSON = ogcJSON
         self.id = id
         self.serviceID = serviceID
         self.layerID = layerID
@@ -200,6 +218,11 @@ public struct LayerRecord: Sendable, Equatable, Identifiable {
     /// True once the layer's own definition (fields, capabilities) has been fetched.
     public var isCrawled: Bool { fetchedAt != nil }
     public var effectiveWkid: Int? { latestWkid ?? wkid }
+    public var isOGC: Bool { ogcName != nil }
+    public var ogcDetail: OGCLayerDetail? {
+        guard let ogcJSON, let data = ogcJSON.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(OGCLayerDetail.self, from: data)
+    }
 
     /// The native extent parsed back from `extentJSON`, if stored.
     public var nativeExtent: (xmin: Double, ymin: Double, xmax: Double, ymax: Double)? {

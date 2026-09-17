@@ -410,7 +410,7 @@ const css = `
   .strip { border-radius: 16px; padding: 24px; margin-bottom: 28px; }
   .strip.light { background: #F1F2EE; color: #222A26; --muted: #5E6863; }
   .strip.dark { background: #26292E; color: #E7EAE6; --muted: #A2ACA6; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 28px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 28px; }
   .concept { display: flex; flex-direction: column; gap: 14px; }
   .big { width: 260px; max-width: 100%; aspect-ratio: 1; }
   .big svg, .sz svg, .dock-item svg { width: 100%; height: 100%; display: block; filter: drop-shadow(0 1.5px 3px rgba(0,0,0,.22)); }

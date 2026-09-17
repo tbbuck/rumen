@@ -12,7 +12,8 @@ struct ServerTree: View {
                 TreeFilterField()
                 TreeOutline(model: model, state: TreeState(version: model.treeVersion, filter: model.treeFilter,
                                                            selection: model.selection, expanded: model.expanded,
-                                                           loading: model.loadingNodes, errors: model.nodeErrors))
+                                                           loading: model.loadingNodes, errors: model.nodeErrors,
+                                                           focusRequest: model.treeFocusRequest))
             } else {
                 VStack(alignment: .leading, spacing: 6) {
                     if let opening = model.openingStatus {
@@ -97,7 +98,9 @@ private struct TreeFilterField: View {
                 .font(.sheetUI(12))
                 .foregroundStyle(Palette.ink)
                 .focused($focused)
-                .onExitCommand { model.treeFilter = ""; focused = false }
+                .onExitCommand { model.treeFilter = ""; focused = false; model.focusTree() }
+                .onKeyPress(.downArrow) { model.focusTree(); return .handled }
+                .onSubmit { model.focusTree() }
             if !model.treeFilter.isEmpty {
                 Button { model.treeFilter = "" } label: {
                     Image(systemName: "xmark.circle.fill").font(.system(size: 10)).foregroundStyle(Palette.muted2)

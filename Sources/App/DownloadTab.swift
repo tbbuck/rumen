@@ -22,6 +22,12 @@ struct DownloadTab: View {
 
     var body: some View {
         DownloadPlanText(layer: layer, assessment: assessment, wgs84: wgs84 || format.forcesWGS84, format: format, whereClause: whereClause)
+            .onAppear {
+                // Start from the preferences; the tab's own choices apply to this run only.
+                format = model.preferences.defaultFormat
+                wgs84 = model.preferences.defaultWGS84 || format.forcesWGS84
+                domainLabels = model.preferences.domainLabels
+            }
         HStack(spacing: 18) {
             Menu {
                 ForEach(ExportFormat.allCases, id: \.self) { choice in

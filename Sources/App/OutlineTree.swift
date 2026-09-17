@@ -10,6 +10,8 @@ struct TreeState: Equatable {
     let expanded: Set<NodeID>
     let loading: Set<NodeID>
     let errors: [NodeID: String]
+    /// Bumped by the model to hand keyboard focus to the tree.
+    let focusRequest: Int
 }
 
 /// The server tree on `NSOutlineView` (M8): cells are reused, so filtering costs only the
@@ -94,6 +96,7 @@ struct TreeOutline: NSViewRepresentable {
         private var appliedSelection: NodeID?
         private var appliedLoading: Set<NodeID> = []
         private var appliedErrors: [NodeID: String] = [:]
+        private var appliedFocusRequest = 0
         /// True while the model's state is being pushed into the outline, so the resulting
         /// notifications are not echoed back to the model.
         private var syncing = false
@@ -102,6 +105,17 @@ struct TreeOutline: NSViewRepresentable {
 
         func apply(_ state: TreeState) {
             guard let outline else { return }
+            if state.focusRequest != appliedFocusRequest {
+                appliedFocusRequest = state.focusRequest
+                // After the current SwiftUI update, so a text field that just resigned is not re-focused.
+                DispatchQueue.main.async { [weak outline] in
+                    guard let outline, let window = outline.window else { return }
+                    window.makeFirstResponder(outline)
+                    if outline.selectedRow < 0, outline.numberOfRows > 0 {
+                        outline.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+                    }
+                }
+            }
             let filtering = !state.filter.trimmingCharacters(in: .whitespaces).isEmpty
             let key = "\(state.version)|\(filtering ? state.filter : "")"
             syncing = true
@@ -241,7 +255,6 @@ struct TreeOutline: NSViewRepresentable {
 
         // MARK: Delegate
 
-        func outlineView(_ outlineView: NSOutlineView, shouldShowOutlineCellForItem item: Any) -> Bool { false }
 
         func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat { 27 }
 
@@ -292,29 +305,55 @@ struct TreeOutline: NSViewRepresentable {
     }
 }
 
-/// Return toggles the selected node, Home and End jump, a click on empty space keeps the
-/// selection; everything else (arrows, type-ahead) is the outline's own.
+/// Keyboard: Up and Down move the selection (the outline's own), Left collapses the selected
+/// node or moves to its parent, Right expands it or moves to its first child, Return and
+/// Space toggle it, Home and End jump. The disclosure triangle is ours, not the outline's, so
+/// the arrow handling is explicit rather than left to the hidden outline cell. A click takes
+/// keyboard focus; a click on empty space keeps the selection.
 final class TreeOutlineView: NSOutlineView {
     var onReturn: ((Any) -> Void)?
 
+    /// The disclosure triangle is drawn by the cell, so the outline's own gets no room. (Telling
+    /// the delegate not to show it made `collapseItem` a no-op; a zero frame does not.)
+    override func frameOfOutlineCell(atRow row: Int) -> NSRect { .zero }
+
     override func keyDown(with event: NSEvent) {
+        let selected = selectedRow >= 0 ? item(atRow: selectedRow) : nil
         switch event.keyCode {
-        case 36, 76:   // Return, Enter
-            if selectedRow >= 0, let item = item(atRow: selectedRow) { onReturn?(item) }
-        case 115:      // Home
-            if numberOfRows > 0 { selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false); scrollRowToVisible(0) }
-        case 119:      // End
-            if numberOfRows > 0 {
-                selectRowIndexes(IndexSet(integer: numberOfRows - 1), byExtendingSelection: false)
-                scrollRowToVisible(numberOfRows - 1)
+        case 36, 76, 49:   // Return, Enter, Space
+            if let selected { onReturn?(selected) }
+        case 123:          // Left
+            guard let selected else { return }
+            if isExpandable(selected), isItemExpanded(selected) {
+                collapseItem(selected)
+            } else if let parent = parent(forItem: selected) {
+                select(row: row(forItem: parent))
             }
+        case 124:          // Right
+            guard let selected, isExpandable(selected) else { return }
+            if isItemExpanded(selected) {
+                if numberOfChildren(ofItem: selected) > 0 { select(row: row(forItem: child(0, ofItem: selected))) }
+            } else {
+                expandItem(selected)
+            }
+        case 115:          // Home
+            select(row: 0)
+        case 119:          // End
+            select(row: numberOfRows - 1)
         default:
             super.keyDown(with: event)
         }
     }
 
+    private func select(row: Int) {
+        guard row >= 0, row < numberOfRows else { return }
+        selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        scrollRowToVisible(row)
+    }
+
     override func mouseDown(with event: NSEvent) {
         if row(at: convert(event.locationInWindow, from: nil)) < 0 { return }
+        window?.makeFirstResponder(self)
         super.mouseDown(with: event)
     }
 }
@@ -609,3 +648,4 @@ enum NSPalette {
     static let warn = NSColor.sheet(0xB8781F, 0xE2A64B)
     static let hover = NSColor.sheet(0xD6DBD2, 0x33404A, alpha: (0.55, 0.55))
 }
+

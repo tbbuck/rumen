@@ -2,9 +2,20 @@ import SwiftUI
 import ArcGISKit
 import SQLiteKit
 
-/// Entry point. The window hides the system title bar so the path bar can be the spine
-/// (UI-SPEC: "the URL is the spine"); `TitleBar` draws the 48px row behind the traffic lights.
+/// Process entry point. Diverts to the headless self-test when asked (see `SelfTest`);
+/// otherwise launches the SwiftUI app.
 @main
+enum AppEntry {
+    static func main() {
+        if CommandLine.arguments.contains("--selftest") {
+            SelfTest.run()   // runs the packaged-engine load path, then exits; never returns
+        }
+        ArcGISExplorerApp.main()
+    }
+}
+
+/// The app. The window hides the system title bar so the path bar can be the spine
+/// (UI-SPEC: "the URL is the spine"); `TitleBar` draws the 48px row behind the traffic lights.
 struct ArcGISExplorerApp: App {
     @State private var model = AppModel()
 
@@ -42,17 +53,26 @@ struct ArcGISExplorerApp: App {
                     if let tab = Self.tabArgument, let chosen = LayerTab(rawValue: tab.capitalizedFirst) { model.layerTab = chosen }
                     if Self.runArgument == "export-geojson" { await model.storedSession?.reexport(.geoJSON, overwrite: true) }
                     if Self.runArgument == "export-csv" { await model.storedSession?.reexport(.csv, overwrite: true) }
+                    if Self.runArgument == "preferences" { NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) }
                     if Self.runArgument == "preview" { await model.querySession?.preview() }
                     if let text = Self.searchArgument { model.columnSearch = text }
                     if let text = Self.filterArgument { model.treeFilter = text }
                     if Self.runArgument == "download", let layer = model.currentLayer {
                         var request = DownloadRequest(layerID: layer.id, outputDirectory: model.downloadDirectory)
+                        request.outWkid = model.preferences.outWkid(for: layer)
+                        request.format = model.preferences.defaultFormat
                         request.overwrite = true
                         await model.startDownload(request)
                     }
                 }
         }
         .windowStyle(.hiddenTitleBar)
+        Settings {
+            PreferencesView()
+                .environment(model)
+                .preferredColorScheme(model.appearanceOverride)
+        }
+        .windowResizability(.contentSize)
         .commands {
             CommandMenu("Go") {
                 Button("Start Page") { model.showStartPage() }

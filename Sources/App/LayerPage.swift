@@ -185,9 +185,9 @@ private struct ExtractionStatement: View {
             }
             HStack(spacing: 18) {
                 if verdict == .extractable {
-                    Button("Download as GeoParquet") { Task { await model.downloadCurrentLayerWithDefaults() } }
+                    Button("Download as \(model.preferences.defaultFormat.label)") { Task { await model.downloadCurrentLayerWithDefaults() } }
                         .buttonStyle(PrimaryButtonStyle())
-                        .help("Every feature, in the native spatial reference, to \(model.downloadDirectory.lastPathComponent)")
+                        .help("Every feature, in \(model.preferences.outWkid(for: layer) == 4326 ? "WGS 84" : "the native spatial reference"), to \(model.downloadDirectory.lastPathComponent). Preferences (⌘,) set the defaults.")
                     Button("Change format or spatial reference") { model.layerTab = .download }.buttonStyle(LinkButtonStyle())
                     Button("Preview a sample on the map") { model.layerTab = .map }.buttonStyle(LinkButtonStyle())
                 } else if verdict == .notExtractable, let twin = layer.siblingLayerID {

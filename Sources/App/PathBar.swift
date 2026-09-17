@@ -126,7 +126,7 @@ struct ColumnSearchField: View {
                 .font(.sheetUI(12.5))
                 .foregroundStyle(Palette.ink)
                 .focused($focused)
-                .onExitCommand { model.columnSearch = ""; focused = false }
+                .onExitCommand { model.columnSearch = ""; focused = false; model.focusTree() }
                 .onChange(of: model.focusColumnSearch) { if model.focusColumnSearch { focused = true; model.focusColumnSearch = false } }
             if !model.columnSearch.isEmpty {
                 Button { model.columnSearch = "" } label: {

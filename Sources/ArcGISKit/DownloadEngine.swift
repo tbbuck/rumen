@@ -45,7 +45,7 @@ public actor DownloadEngine {
     private let db: AppDatabase
     private let crawler: Crawler
     private let stagingDirectory: URL
-    private let concurrency: Int
+    private var concurrency: Int
     private let tokenProvider: @Sendable (ServerRecord) async -> String?
     private var tasks: [Int64: Task<DownloadRecord, Error>] = [:]
 
@@ -60,6 +60,10 @@ public actor DownloadEngine {
     }
 
     public var runningIDs: [Int64] { Array(tasks.keys) }
+
+    /// Chunks fetched in parallel per run, for runs started from now on (M9 preferences); the
+    /// client's per-host cap still bounds the aggregate.
+    public func setConcurrency(_ value: Int) { concurrency = max(1, value) }
 
     // MARK: - Public API
 

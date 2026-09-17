@@ -66,11 +66,15 @@ public final class DuckDB: @unchecked Sendable {
     /// Module-internal so `Appender` can bind to this connection; never exposed publicly.
     var conn: duckdb_connection?
 
-    /// Opens a database. `path` nil (the default) opens an in-memory database, which is what
-    /// we use before `ATTACH`-ing a DuckLake catalog. `config` defaults to empty, which passes
-    /// a nil `duckdb_config` to the engine (the historical open path); a populated config is
-    /// applied at startup — see `DuckDBConfig`.
-    public init(path: String? = nil, config: DuckDBConfig = .init()) throws {
+    /// The configuration every engine opens with unless told otherwise. The packaged app sets
+    /// it once at launch, before any engine opens, to point `extension_directory` at its own
+    /// per-user folder; dev builds and tests leave it empty and use `~/.duckdb`.
+    nonisolated(unsafe) public static var defaultConfig = DuckDBConfig()
+
+    /// Opens a database. `path` nil (the default) opens an in-memory database. `config`
+    /// defaults to `defaultConfig`; an empty one passes a nil `duckdb_config` to the engine
+    /// (the historical open path), a populated one is applied at startup — see `DuckDBConfig`.
+    public init(path: String? = nil, config: DuckDBConfig = DuckDB.defaultConfig) throws {
         var err: UnsafeMutablePointer<CChar>?
 
         // Only allocate a duckdb_config when settings are actually requested, so the default

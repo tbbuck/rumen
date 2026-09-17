@@ -164,3 +164,36 @@ final class ArcGISClientTests: XCTestCase {
         XCTAssertEqual(ArcGISClient.formEncode([:]), "")
     }
 }
+
+// MARK: - Runtime limits (M9 preferences)
+
+/// Stays shut until opened; waiting is cancellable through `Task.sleep`.
+private actor OpenGate {
+    private var isOpen = false
+    func open() { isOpen = true }
+    func waitUntilOpen() async throws {
+        while !isOpen { try await Task.sleep(for: .milliseconds(10)) }
+    }
+}
+
+extension ArcGISClientTests {
+    func testRaisingTheCapWakesWaiters() async throws {
+        let transport = try StubTransport(reply: .fixture("s6-root.json"))
+        let gate = OpenGate()
+        transport.gate = { _ in try await gate.waitUntilOpen() }
+        let client = client(transport, concurrency: 1)
+        let server = self.server
+        let tasks = (0..<3).map { _ in Task { _ = try await client.serviceDirectory(server) } }
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(transport.count, 1, "one in flight, two waiting behind the cap of 1")
+        await client.setLimits(maxConcurrentPerHost: 3, retry: RetryPolicy(maxAttempts: 2, baseDelay: 0))
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(transport.count, 3, "the raised cap let both waiters through")
+        let limits = await client.limits
+        XCTAssertEqual(limits.maxConcurrentPerHost, 3)
+        XCTAssertEqual(limits.retry.maxAttempts, 2)
+        await gate.open()
+        for task in tasks { _ = try await task.value }
+        XCTAssertEqual(transport.maxConcurrent, 3)
+    }
+}

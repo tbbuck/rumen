@@ -82,6 +82,10 @@ final class AppModel {
     private(set) var searchError: String?
     var focusColumnSearch = false
     var treeFilter = ""
+    /// Bumped to hand keyboard focus to the tree (after a server opens, on Escape or Down from a
+    /// text field); the outline view watches it.
+    private(set) var treeFocusRequest = 0
+    func focusTree() { treeFocusRequest += 1 }
     var appearanceOverride: ColorScheme?
     private(set) var errorText: String?
     /// Runs the failed step again, when the banner can offer that.
@@ -101,8 +105,9 @@ final class AppModel {
     var showTransfers = false
     private(set) var runs: [TransferRun] = []
     private(set) var transfersError: String?
-    private(set) var downloadDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("ArcGIS Explorer", isDirectory: true)
+    /// Download defaults and network limits (M9), loaded at start and saved on every change.
+    private(set) var preferences = Preferences(downloadDirectory: Preferences.initialDirectory)
+    var downloadDirectory: URL { preferences.downloadDirectory }
     private var liveProgress: [Int64: DownloadProgress] = [:]
     private var liveChunks: [Int64: [ChunkStatus]] = [:]
     private var runStarted: [Int64: Date] = [:]
@@ -115,6 +120,7 @@ final class AppModel {
     /// do with a broken app database but say so.
     func start() async {
         do {
+            try EngineSupport.install()   // before any DuckDB opens: the packaged build's extension folder
             let db = try AppDatabase(path: AppDatabase.defaultURL().path)
             try await db.migrate()
             try await db.loadSpatial()
@@ -123,7 +129,9 @@ final class AppModel {
             self.crawler = crawler
             engine = DownloadEngine(client: client, database: db, crawler: crawler,
                                     stagingDirectory: AppDatabase.defaultURL().deletingLastPathComponent().appendingPathComponent("staging"))
-            if let dir = try await db.setting("download_dir") { downloadDirectory = URL(fileURLWithPath: dir) }
+            preferences = try await Preferences.load(from: db)
+            await client.setLimits(maxConcurrentPerHost: preferences.concurrency, retry: preferences.retryPolicy)
+            await engine?.setConcurrency(preferences.concurrency)
             switch try await db.setting("appearance") {
             case "light": appearanceOverride = .light
             case "dark": appearanceOverride = .dark
@@ -179,6 +187,7 @@ final class AppModel {
             try await reloadTree()
             if expanded.isEmpty { expanded = [.server(id)] }
             await select(.server(id))
+            focusTree()
         } catch {
             report(error, retry: { [weak self] in await self?.selectServer(id) })
         }
@@ -544,6 +553,7 @@ final class AppModel {
             } else {
                 await select(.server(opened.server.id))
             }
+            focusTree()
             if !opened.problems.isEmpty {
                 let listed = opened.problems.prefix(3).map { "\($0.folderPath): \($0.message)" }.joined(separator: "; ")
                 let more = opened.problems.count > 3 ? " and \(opened.problems.count - 3) more" : ""
@@ -678,12 +688,15 @@ extension AppModel {
         }
     }
 
-    /// The Overview's primary button: a download with the defaults (native spatial reference,
-    /// every feature, GeoParquet). The Download tab is where those change.
+    /// The Overview's primary button: a download with the preferences' defaults (format,
+    /// spatial reference, domain labels) and every feature. The Download tab is where those
+    /// change for one run.
     func downloadCurrentLayerWithDefaults() async {
         guard let layer = currentLayer else { return }
         var request = DownloadRequest(layerID: layer.id, outputDirectory: downloadDirectory)
-        request.outWkid = layer.effectiveWkid ?? 4326
+        request.outWkid = preferences.outWkid(for: layer)
+        request.format = preferences.defaultFormat
+        request.domainLabels = preferences.domainLabels
         await startDownload(request)
     }
 
@@ -769,8 +782,17 @@ extension AppModel {
         panel.directoryURL = downloadDirectory
         panel.prompt = "Use this folder"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        downloadDirectory = url
-        Task { try? await database?.setSetting("download_dir", url.path) }
+        var next = preferences
+        next.downloadDirectory = url
+        Task { await setPreferences(next) }
+    }
+
+    /// Saves the preferences and applies the network limits to the client and the engine.
+    func setPreferences(_ next: Preferences) async {
+        preferences = next
+        await client.setLimits(maxConcurrentPerHost: next.concurrency, retry: next.retryPolicy)
+        await engine?.setConcurrency(next.concurrency)
+        do { try await database?.save(next) } catch { report(error) }
     }
 
     func reveal(_ path: String?) {

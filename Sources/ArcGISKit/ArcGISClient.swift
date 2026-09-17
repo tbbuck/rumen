@@ -181,8 +181,8 @@ public actor ArcGISClient {
     public static let userAgent = "ArcGIS Explorer/0.1 (macOS)"
 
     private let transport: HTTPTransport
-    private let retry: RetryPolicy
-    private let maxConcurrentPerHost: Int
+    private var retry: RetryPolicy
+    private var maxConcurrentPerHost: Int
     private var inFlight: [String: Int] = [:]
     private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
 
@@ -191,6 +191,23 @@ public actor ArcGISClient {
         self.transport = transport
         self.retry = retry
         self.maxConcurrentPerHost = max(1, maxConcurrentPerHost)
+    }
+
+    public var limits: (maxConcurrentPerHost: Int, retry: RetryPolicy) { (maxConcurrentPerHost, retry) }
+
+    /// Preferences changed (M9): new requests use the new retry policy at once; a raised cap
+    /// wakes waiters up to it, a lowered one takes effect as requests in flight finish.
+    public func setLimits(maxConcurrentPerHost: Int, retry: RetryPolicy) {
+        self.maxConcurrentPerHost = max(1, maxConcurrentPerHost)
+        self.retry = retry
+        for host in Array(waiters.keys) {
+            while inFlight[host, default: 0] < self.maxConcurrentPerHost, var queue = waiters[host], !queue.isEmpty {
+                let next = queue.removeFirst()
+                waiters[host] = queue
+                inFlight[host, default: 0] += 1
+                next.resume()
+            }
+        }
     }
 
     // MARK: - Raw requests

@@ -134,6 +134,15 @@ tree (`NSOutlineView`), the results grid (`NSTableView`), and the map (MapLibre 
 `WKWebView`). Network and database access live behind actors; the app database is SQLite,
 and DuckDB is only ever the spatial and data engine.
 
+## Night
+
+The Sheet palette has a night side, following the system appearance or the toggle in the
+title bar: the same paper-and-magenta language on blue slate.
+
+![The layer page in the night palette](docs/layer-page-night.png)
+
+![Column search in the night palette](docs/column-search-night.png)
+
 ## Third-party
 
 - [DuckDB](https://duckdb.org) and its `spatial` extension (MIT).

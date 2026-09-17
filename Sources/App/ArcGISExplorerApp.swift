@@ -29,6 +29,10 @@ struct ArcGISExplorerApp: App {
     static var storedArgument: Int64? { argument("--stored").flatMap(Int64.init) }
     /// `--filter <text>`: type into the tree's filter box after opening.
     static var filterArgument: String? { argument("--filter") }
+    /// `--appearance light|dark`: this launch only; the saved preference is left alone.
+    static var appearanceArgument: ColorScheme? {
+        switch argument("--appearance") { case "light": .light; case "dark": .dark; default: nil }
+    }
 
     private static func argument(_ flag: String) -> String? {
         let args = CommandLine.arguments
@@ -56,6 +60,7 @@ struct ArcGISExplorerApp: App {
                 .preferredColorScheme(model.appearanceOverride)
                 .task {
                     await model.start()
+                    if let scheme = Self.appearanceArgument { model.appearanceOverride = scheme }
                     if let url = Self.openArgument { await model.openFromLaunch(url) }
                     if let id = Self.storedArgument { await model.showStoredDownload(id: id) }
                     if let tab = Self.tabArgument, let chosen = LayerTab(rawValue: tab.capitalizedFirst) { model.layerTab = chosen }

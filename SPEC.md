@@ -288,7 +288,10 @@ Coded-value domains are exported as the raw code; an opt-in option (off by defau
   the page is loaded from a string, data is injected as GeoJSON via
   `evaluateJavaScript`, MapTiler `dataviz` / `dataviz-dark` basemaps follow the
   system appearance, and the MapTiler key comes from `Config/maptiler.local.xcconfig`
-  (untracked) → `Info.plist` → `MapConfig`. **No key is ever committed.**
+  (untracked) → `Info.plist` → `MapConfig`; a release build takes it from the
+  `MAPTILER_API_KEY` environment variable instead (a repository variable or secret in CI),
+  and at run time the app falls back to that variable when the plist has none. **No key is
+  ever committed.**
 - **Live layer preview**: the layer's extent as a rectangle, plus a bounded sample of
   features (`resultRecordCount` ≤ 800, `outSR=4326`, `geometryPrecision=6`), with a
   note that it is a sample.

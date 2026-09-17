@@ -10,10 +10,11 @@ name: Release
 #   APPLE_ID                          Apple ID email used for notarization
 #   APPLE_TEAM_ID                     Developer Team ID
 #   APPLE_APP_SPECIFIC_PASSWORD       an app-specific password for that Apple ID
-# Optional:
-#   MAPTILER_API_KEY                  the basemap key; without it the shipped map has no tiles
-#                                       (the app says so on the map). It flows through the
-#                                       untracked Config/maptiler.local.xcconfig exactly as in dev.
+# Optional, as a repository variable (Settings → Secrets and variables → Actions → Variables)
+# or a secret, either works:
+#   MAPTILER_API_KEY                  the basemap key, handed to scripts/release.sh as an
+#                                       environment variable; without it the shipped map has
+#                                       no tiles (the app says so on the map).
 on:
   push:
     tags: ['v*']
@@ -68,19 +69,9 @@ jobs:
             --team-id "$APPLE_TEAM_ID" \
             --password "$APPLE_APP_SPECIFIC_PASSWORD"
 
-      - name: MapTiler key for the basemap (optional)
-        env:
-          MAPTILER_API_KEY: ${{ secrets.MAPTILER_API_KEY }}
-        run: |
-          set -euo pipefail
-          if [ -n "$MAPTILER_API_KEY" ]; then
-            printf 'MAPTILER_API_KEY = %s\n' "$MAPTILER_API_KEY" > Config/maptiler.local.xcconfig
-            echo "basemap key configured"
-          else
-            echo "no MAPTILER_API_KEY secret: this release will show the map without basemap tiles"
-          fi
-
       - name: Build, sign, notarize, package
+        env:
+          MAPTILER_API_KEY: ${{ vars.MAPTILER_API_KEY || secrets.MAPTILER_API_KEY }}
         run: bash scripts/release.sh
 
       - name: Attach DMG to the GitHub Release

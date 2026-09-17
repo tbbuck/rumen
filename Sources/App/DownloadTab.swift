@@ -16,6 +16,7 @@ struct DownloadTab: View {
     @State private var format: ExportFormat = .geoParquet
     @State private var domainLabels = false
     @State private var manualStrategy: Assessment.Strategy = .offset
+    private static let strategyNames: [Assessment.Strategy: String] = [.offset: "Offset paging", .oidRange: "OID range", .oidList: "OID list"]
     @State private var manualPageSize = 1000
     @State private var useManual = false
     /// A WMS layer with features to give (a GeoJSON GetMap, or a WFS twin) can still be saved
@@ -63,14 +64,10 @@ struct DownloadTab: View {
                 .help("Features through GetMap as GeoJSON or the WFS twin, or one GetMap picture of the extent")
                 .onChange(of: wantsPicture) { format = wantsPicture ? (pictureFormats.first ?? .png) : model.preferences.defaultFormat }
             }
-            // A single choice, so a picker: it reads as a pop-up button with a real action.
-            Picker("Format", selection: $format) {
-                ForEach(isPicture ? pictureFormats : ExportFormat.vector, id: \.self) { choice in
-                    Text("Format: \(choice.label)").tag(choice)
-                }
-            }
-            .pickerStyle(.menu).labelsHidden().fixedSize()
-            .font(.sheetUI(12.5))
+            // One choice among a few: a pull-down whose face names the choice.
+            NativeMenu(title: "Format: \(format.label)",
+                       items: (isPicture ? pictureFormats : ExportFormat.vector).map { choice in .init(choice.label, checked: choice == format) { format = choice } })
+            .inline()
             .onChange(of: format) { if format.forcesWGS84 { wgs84 = true } }
             .help(format.geometryNote.capitalizedFirst)
             if !isPicture {
@@ -99,12 +96,11 @@ struct DownloadTab: View {
         if !isOGC, verdict != .extractable || useManual {
             DisclosureGroup(isExpanded: $useManual) {
                 HStack(spacing: 14) {
-                    Picker("Strategy", selection: $manualStrategy) {
-                        Text("Offset paging").tag(Assessment.Strategy.offset)
-                        Text("OID range").tag(Assessment.Strategy.oidRange)
-                        Text("OID list").tag(Assessment.Strategy.oidList)
-                    }
-                    .font(.sheetUI(12.5)).fixedSize()
+                    NativeMenu(title: "Strategy: \(Self.strategyNames[manualStrategy] ?? "")",
+                               items: [Assessment.Strategy.offset, .oidRange, .oidList].map { choice in
+                                   .init(Self.strategyNames[choice] ?? "", checked: choice == manualStrategy) { manualStrategy = choice }
+                               })
+                    .inline()
                     TextField("Page size", value: $manualPageSize, format: .number).textFieldStyle(SheetFieldStyle(mono: true)).frame(width: 110)
                     Caption("Used instead of the automatic choice.", size: 11.5, color: Palette.muted2)
                 }

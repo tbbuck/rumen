@@ -64,17 +64,10 @@ private struct OutFieldsPicker: View {
     @Bindable var session: QuerySession
 
     var body: some View {
-        Menu {
-            Button(session.outFields == nil ? "✓ All fields" : "All fields") { session.outFields = nil }
-            Divider()
-            ForEach(session.fields) { field in
-                Button(isOn(field.name) ? "✓ \(field.name)" : field.name) { toggle(field.name) }
-            }
-        } label: {
-            Text(label).font(.sheetUI(12.5)).hoverLabel()
-        }
-        .menuStyle(.button).buttonStyle(.borderless)
-        .fixedSize()
+        NativeMenu(title: label, items: [.init("All fields", checked: session.outFields == nil) { session.outFields = nil }, .separator]
+            + session.fields.map { field in .init(field.name, checked: isOn(field.name)) { toggle(field.name) } })
+        .inline()
+        .hoverLabel()
     }
 
     private var label: String {
@@ -96,20 +89,12 @@ private struct OrderByPicker: View {
     @Bindable var session: QuerySession
 
     var body: some View {
-        Menu {
-            Button("No order") { session.orderByField = nil }
-            Divider()
-            ForEach(session.fields) { field in
-                Button(session.orderByField == field.name ? "✓ \(field.name)" : field.name) { session.orderByField = field.name }
-            }
-            Divider()
-            Button(session.orderAscending ? "✓ Ascending" : "Ascending") { session.orderAscending = true }
-            Button(session.orderAscending ? "Descending" : "✓ Descending") { session.orderAscending = false }
-        } label: {
-            Text(label).font(.sheetUI(12.5)).hoverLabel()
-        }
-        .menuStyle(.button).buttonStyle(.borderless)
-        .fixedSize()
+        NativeMenu(title: label, items: [.init("No order", checked: session.orderByField == nil) { session.orderByField = nil }, .separator]
+            + session.fields.map { field in .init(field.name, checked: session.orderByField == field.name) { session.orderByField = field.name } }
+            + [.separator, .init("Ascending", checked: session.orderAscending) { session.orderAscending = true },
+               .init("Descending", checked: !session.orderAscending) { session.orderAscending = false }])
+        .inline()
+        .hoverLabel()
         .disabled(session.canOrderBy != nil)
         .help(session.canOrderBy ?? "Order the results by a field")
     }
@@ -131,14 +116,9 @@ private struct QueryActions: View {
             Button("Count") { Task { await session.count() } }.buttonStyle(LinkButtonStyle())
             Button("Extent") { Task { await session.extent() } }.buttonStyle(LinkButtonStyle())
                 .disabled(session.canExtent != nil).help(session.canExtent ?? "The bounding box of the matching features")
-            Menu {
-                ForEach(session.fields) { field in
-                    Button(field.name) { Task { await session.distinct(field: field.name) } }
-                }
-            } label: {
-                Text("Distinct").font(.sheetUI(13)).foregroundStyle(session.canDistinct == nil ? Palette.accent : Palette.muted2).hoverLabel()
-            }
-            .menuStyle(.button).buttonStyle(.borderless).fixedSize()
+            NativeMenu(title: "Distinct", size: 13, color: session.canDistinct == nil ? NSPalette.accent : NSPalette.muted2,
+                       items: session.fields.map { field in .init(field.name) { Task { await session.distinct(field: field.name) } } })
+            .inline().hoverLabel()
             .disabled(session.canDistinct != nil).help(session.canDistinct ?? "Distinct values of one field")
             Button("Statistics") { Task { await session.statistics() } }.buttonStyle(LinkButtonStyle())
                 .disabled(session.canStatistics != nil).help(session.canStatistics ?? "Min, max, mean, count of every numeric and date field")

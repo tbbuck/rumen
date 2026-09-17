@@ -18,14 +18,14 @@ final class AccessibilityAuditTests: XCTestCase {
     private var home: URL!
     private var app: XCUIApplication!
 
-    override func setUpWithError() throws {
+    override func setUp() async throws {
         continueAfterFailure = true   // report every issue in a state, not just the first
         server = try FixtureServer()
         home = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("arcgis-explorer-uitest-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
     }
 
-    override func tearDownWithError() throws {
+    override func tearDown() async throws {
         app?.terminate()
         app = nil
         server = nil

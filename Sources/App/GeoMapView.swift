@@ -144,7 +144,7 @@ struct GeoMapView: NSViewRepresentable {
         return html
             .replacingOccurrences(of: "__MAPTILER_KEY__", with: MapConfig.maptilerKey)
             .replacingOccurrences(of: "__MAP_STYLE__", with: style)
-            .replacingOccurrences(of: "__ACCENT__", with: dark ? "#EA6AA6" : "#B8236B")
+            .replacingOccurrences(of: "__ACCENT__", with: dark ? "#F476B1" : "#B8236B")
             .replacingOccurrences(of: "__GRAT__", with: dark ? "#34506A" : "#C5D3E2")
             .replacingOccurrences(of: "__BG__", with: dark ? "#1A2128" : "#F2F4F0")
             .replacingOccurrences(of: "__PANEL__", with: dark ? "#212930" : "#FAFBF8")

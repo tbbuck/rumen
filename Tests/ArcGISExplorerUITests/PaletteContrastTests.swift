@@ -3,7 +3,8 @@ import XCTest
 /// WCAG 2 contrast of the Sheet palette, computed from the tokens themselves: every tone used
 /// as text (`ink`, `muted`, `muted2`, `accent`, `yes`, `no`, `warn`) against both grounds
 /// (`bg`, `panel`) in both appearances must reach 4.5:1, the AA floor for text under 18pt;
-/// `on-accent` on `accent` likewise. The values are read from `Sources/App/Theme.swift`, so
+/// `on-accent` on `accent` likewise, and each chip tone on its own tint over both grounds.
+/// The values are read from `Sources/App/Theme.swift`, so
 /// the code, not a copy of it, is what is checked; DESIGN-TOKENS.md must agree with it.
 final class PaletteContrastTests: XCTestCase {
 
@@ -51,6 +52,30 @@ final class PaletteContrastTests: XCTestCase {
         return out
     }
 
+    /// `name: (day, night)` alpha of every `Color.sheet(…, alpha: (day, night))` tint.
+    private func tints() throws -> [String: (day: Double, night: Double)] {
+        let text = try Self.source(bundled: "Theme.txt", at: "Sources/App/Theme.swift")
+        let pattern = #"static let (\w+)\s*=\s*Color\.sheet\(0x[0-9A-Fa-f]{6},\s*0x[0-9A-Fa-f]{6},\s*alpha:\s*\(([0-9.]+),\s*([0-9.]+)\)"#
+        let regex = try NSRegularExpression(pattern: pattern)
+        var out = [String: (day: Double, night: Double)]()
+        for match in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+            let name = String(text[Range(match.range(at: 1), in: text)!])
+            let day = Double(text[Range(match.range(at: 2), in: text)!])!
+            let night = Double(text[Range(match.range(at: 3), in: text)!])!
+            out[name] = (day, night)
+        }
+        return out
+    }
+
+    /// The tint laid over a ground at its alpha, as the eye sees it.
+    static func blend(_ tint: UInt32, _ alpha: Double, over ground: UInt32) -> UInt32 {
+        func channel(_ shift: UInt32) -> UInt32 {
+            let top = Double((tint >> shift) & 0xFF), base = Double((ground >> shift) & 0xFF)
+            return UInt32((top * alpha + base * (1 - alpha)).rounded())
+        }
+        return channel(16) << 16 | channel(8) << 8 | channel(0)
+    }
+
     static func luminance(_ rgb: UInt32) -> Double {
         func channel(_ v: UInt32) -> Double {
             let c = Double(v) / 255
@@ -82,6 +107,33 @@ final class PaletteContrastTests: XCTestCase {
         if let onAccent = tones["onAccent"], let accent = tones["accent"] {
             XCTAssertGreaterThanOrEqual(Self.ratio(onAccent.day, accent.day), 4.5, "on-accent on accent by day")
             XCTAssertGreaterThanOrEqual(Self.ratio(onAccent.night, accent.night), 4.5, "on-accent on accent by night")
+        }
+    }
+
+    /// A chip is its tone as text on its own tint (`Chip` in Primitives.swift): `yes` on `yesSoft`,
+    /// `accent` on `accentSoft`, `warn` on `warnSoft`, `no` on `no` at 14%. The tint is thin,
+    /// so what the text sits on is nearly the ground; still, each must reach 4.5:1 there too.
+    func testEveryChipToneReachesAAOnItsTint() throws {
+        let tones = try palette()
+        let tints = try tints()
+        guard let bg = tones["bg"], let panel = tones["panel"] else { return XCTFail("bg or panel is missing from Theme.swift") }
+        let chips: [(text: String, tint: String?, alpha: (day: Double, night: Double))] = [
+            ("yes", "yesSoft", (0, 0)), ("accent", "accentSoft", (0, 0)), ("warn", "warnSoft", (0, 0)),
+            ("no", nil, (0.14, 0.14)),   // Palette.no.opacity(0.14), no token of its own
+        ]
+        for chip in chips {
+            guard let tone = tones[chip.text] else { XCTFail("\(chip.text) is missing from Theme.swift"); continue }
+            var alpha = chip.alpha
+            if let tint = chip.tint {
+                guard let read = tints[tint] else { XCTFail("\(tint) has no alpha in Theme.swift"); continue }
+                alpha = read
+            }
+            for (ground, values) in [("bg", bg), ("panel", panel)] {
+                let day = Self.ratio(tone.day, Self.blend(tone.day, alpha.day, over: values.day))
+                let night = Self.ratio(tone.night, Self.blend(tone.night, alpha.night, over: values.night))
+                XCTAssertGreaterThanOrEqual(day, 4.5, "\(chip.text) chip over \(ground) by day: \(String(format: "%.2f", day)):1")
+                XCTAssertGreaterThanOrEqual(night, 4.5, "\(chip.text) chip over \(ground) by night: \(String(format: "%.2f", night)):1")
+            }
         }
     }
 

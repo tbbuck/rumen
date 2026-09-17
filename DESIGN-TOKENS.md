@@ -27,14 +27,14 @@ set with `Any` + `Dark` variants; a manual override in Preferences just sets
 | `ink` | `#222A26` | `#E7EAE6` | Primary text |
 | `muted` | `#5E6863` | `#A2ACA6` | Secondary text, fact labels, tab labels |
 | `muted2` | `#646F6B` | `#8C9791` | Captions, ids, kind labels, tick labels, dimmed rows. Darkened (Day) and lightened (Night) from `#8A948E` / `#7B867F` on 2026-09-17 so small text meets 4.5:1 on `bg` and `panel`; the accessibility audit had it at 3.0:1 and 3.9:1 |
-| `accent` | `#B8236B` | `#EA6AA6` | Landranger magenta: selection rail, links, primary button, current path segment, extent, sample points, progress |
-| `accent-soft` | `rgba(184,35,107,.10)` | `rgba(234,106,166,.14)` | Selection fill, current path segment, locator fill, chips |
+| `accent` | `#B8236B` | `#F476B1` | Landranger magenta: selection rail, links, primary button, current path segment, extent, sample points, progress. Night lifted from `#EA6AA6` on 2026-09-18: as chip text on `accent-soft` it sat at 4.1:1; now 4.5:1 |
+| `accent-soft` | `rgba(184,35,107,.10)` | `rgba(244,118,177,.14)` | Selection fill, current path segment, locator fill, chips |
 | `on-accent` | `#FFFFFF` | `#2A0F1D` | Text on an accent fill |
-| `yes` | `#2E7D4F` | `#62B98A` | Extractable, done |
-| `yes-soft` | `rgba(46,125,79,.12)` | `rgba(98,185,138,.16)` | Done chip |
-| `no` | `#B3382D` | `#E07A70` | Not extractable, failed |
-| `warn` | `#8A5A14` | `#E2A64B` | Paused, retrying, stale. Day deepened from `#B8781F` on 2026-09-17: as chip and caption text it sat at 3.3:1 on `bg`; now 5.3:1 |
-| `warn-soft` | `rgba(184,120,31,.14)` | `rgba(226,166,75,.16)` | Paused chip |
+| `yes` | `#297047` | `#62B98A` | Extractable, done. Day deepened from `#2E7D4F` on 2026-09-18: as the Done chip on `yes-soft` it sat at 3.9:1; now 4.6:1 |
+| `yes-soft` | `rgba(41,112,71,.12)` | `rgba(98,185,138,.16)` | Done chip |
+| `no` | `#AF372C` | `#ED8177` | Not extractable, failed. Nudged from `#B3382D` / `#E07A70` on 2026-09-18 so a Failed chip on its 14% tint reaches 4.5:1 |
+| `warn` | `#875814` | `#E2A64B` | Paused, retrying, stale. Day deepened from `#B8781F` on 2026-09-17 (3.3:1 on `bg` as chip and caption text) and again on 2026-09-18 so the Paused chip on `warn-soft` reaches 4.5:1 |
+| `warn-soft` | `rgba(135,88,20,.14)` | `rgba(226,166,75,.16)` | Paused chip |
 
 **Rules**
 - One accent. Magenta means "here" or "yours": the selected node, the current path

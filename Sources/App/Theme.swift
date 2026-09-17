@@ -15,14 +15,14 @@ enum Palette {
     static let ink        = Color.sheet(0x222A26, 0xE7EAE6)
     static let muted      = Color.sheet(0x5E6863, 0xA2ACA6)
     static let muted2     = Color.sheet(0x646F6B, 0x8C9791)
-    static let accent     = Color.sheet(0xB8236B, 0xEA6AA6)
-    static let accentSoft = Color.sheet(0xB8236B, 0xEA6AA6, alpha: (0.10, 0.14))
+    static let accent     = Color.sheet(0xB8236B, 0xF476B1)
+    static let accentSoft = Color.sheet(0xB8236B, 0xF476B1, alpha: (0.10, 0.14))
     static let onAccent   = Color.sheet(0xFFFFFF, 0x2A0F1D)
-    static let yes        = Color.sheet(0x2E7D4F, 0x62B98A)
-    static let yesSoft    = Color.sheet(0x2E7D4F, 0x62B98A, alpha: (0.12, 0.16))
-    static let no         = Color.sheet(0xB3382D, 0xE07A70)
-    static let warn       = Color.sheet(0x8A5A14, 0xE2A64B)
-    static let warnSoft   = Color.sheet(0x8A5A14, 0xE2A64B, alpha: (0.14, 0.16))
+    static let yes        = Color.sheet(0x297047, 0x62B98A)
+    static let yesSoft    = Color.sheet(0x297047, 0x62B98A, alpha: (0.12, 0.16))
+    static let no         = Color.sheet(0xAF372C, 0xED8177)
+    static let warn       = Color.sheet(0x875814, 0xE2A64B)
+    static let warnSoft   = Color.sheet(0x875814, 0xE2A64B, alpha: (0.14, 0.16))
 }
 
 extension Font {

@@ -668,10 +668,10 @@ enum NSPalette {
     static let line2 = NSColor.sheet(0xBEC5BA, 0x445362)
     static let ink = NSColor.sheet(0x222A26, 0xE7EAE6)
     static let muted2 = NSColor.sheet(0x646F6B, 0x8C9791)
-    static let accent = NSColor.sheet(0xB8236B, 0xEA6AA6)
-    static let accentSoft = NSColor.sheet(0xB8236B, 0xEA6AA6, alpha: (0.10, 0.14))
-    static let no = NSColor.sheet(0xB3382D, 0xE07A70)
-    static let warn = NSColor.sheet(0x8A5A14, 0xE2A64B)
+    static let accent = NSColor.sheet(0xB8236B, 0xF476B1)
+    static let accentSoft = NSColor.sheet(0xB8236B, 0xF476B1, alpha: (0.10, 0.14))
+    static let no = NSColor.sheet(0xAF372C, 0xED8177)
+    static let warn = NSColor.sheet(0x875814, 0xE2A64B)
     static let hover = NSColor.sheet(0xD6DBD2, 0x33404A, alpha: (0.55, 0.55))
 }
 

@@ -73,7 +73,7 @@ struct DownloadTab: View {
             } label: {
                 Text("Format: \(format.label)").font(.sheetUI(12.5)).hoverLabel()
             }
-            .menuStyle(.borderlessButton).fixedSize()
+            .menuStyle(.button).buttonStyle(.borderless).fixedSize()
             .help(format.geometryNote.capitalizedFirst)
             if !isPicture {
                 Picker("", selection: $wgs84) {

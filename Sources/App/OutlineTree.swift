@@ -670,7 +670,7 @@ enum NSPalette {
     static let accent = NSColor.sheet(0xB8236B, 0xEA6AA6)
     static let accentSoft = NSColor.sheet(0xB8236B, 0xEA6AA6, alpha: (0.10, 0.14))
     static let no = NSColor.sheet(0xB3382D, 0xE07A70)
-    static let warn = NSColor.sheet(0xB8781F, 0xE2A64B)
+    static let warn = NSColor.sheet(0x8A5A14, 0xE2A64B)
     static let hover = NSColor.sheet(0xD6DBD2, 0x33404A, alpha: (0.55, 0.55))
 }
 

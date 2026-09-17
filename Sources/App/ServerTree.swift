@@ -62,6 +62,9 @@ private struct ServerHeader: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
         .onTapGesture { Task { await model.select(.server(server.id)) } }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Server \(server.friendlyName)")
+        .accessibilityHint("Click to open the server's page")
         .contextMenu {
             Button("Start page") { model.showStartPage() }
             Divider()

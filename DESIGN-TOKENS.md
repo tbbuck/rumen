@@ -33,7 +33,7 @@ set with `Any` + `Dark` variants; a manual override in Preferences just sets
 | `yes` | `#2E7D4F` | `#62B98A` | Extractable, done |
 | `yes-soft` | `rgba(46,125,79,.12)` | `rgba(98,185,138,.16)` | Done chip |
 | `no` | `#B3382D` | `#E07A70` | Not extractable, failed |
-| `warn` | `#B8781F` | `#E2A64B` | Paused, retrying, stale |
+| `warn` | `#8A5A14` | `#E2A64B` | Paused, retrying, stale. Day deepened from `#B8781F` on 2026-09-17: as chip and caption text it sat at 3.3:1 on `bg`; now 5.3:1 |
 | `warn-soft` | `rgba(184,120,31,.14)` | `rgba(226,166,75,.16)` | Paused chip |
 
 **Rules**

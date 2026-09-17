@@ -158,7 +158,7 @@ struct RecentServersPopover: View {
                     } label: {
                         Image(systemName: "ellipsis").foregroundStyle(Palette.muted)
                     }
-                    .menuStyle(.borderlessButton)
+                    .menuStyle(.button).buttonStyle(.borderless)
                     .frame(width: 20)
                 }
                 .padding(.horizontal, 12).padding(.vertical, 8)

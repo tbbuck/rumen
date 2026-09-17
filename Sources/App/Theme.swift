@@ -21,8 +21,8 @@ enum Palette {
     static let yes        = Color.sheet(0x2E7D4F, 0x62B98A)
     static let yesSoft    = Color.sheet(0x2E7D4F, 0x62B98A, alpha: (0.12, 0.16))
     static let no         = Color.sheet(0xB3382D, 0xE07A70)
-    static let warn       = Color.sheet(0xB8781F, 0xE2A64B)
-    static let warnSoft   = Color.sheet(0xB8781F, 0xE2A64B, alpha: (0.14, 0.16))
+    static let warn       = Color.sheet(0x8A5A14, 0xE2A64B)
+    static let warnSoft   = Color.sheet(0x8A5A14, 0xE2A64B, alpha: (0.14, 0.16))
 }
 
 extension Font {

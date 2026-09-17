@@ -169,6 +169,9 @@ struct TransfersDrawer: View {
             .contentShape(Rectangle())
             .hoverTracking($headerHovered, hand: true)
             .onTapGesture { model.showTransfers = false }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Transfers")
+            .accessibilityHint("Click the empty part to collapse")
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(model.runs) { run in

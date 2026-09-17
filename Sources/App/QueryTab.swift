@@ -73,7 +73,7 @@ private struct OutFieldsPicker: View {
         } label: {
             Text(label).font(.sheetUI(12.5)).hoverLabel()
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button).buttonStyle(.borderless)
         .fixedSize()
     }
 
@@ -108,7 +108,7 @@ private struct OrderByPicker: View {
         } label: {
             Text(label).font(.sheetUI(12.5)).hoverLabel()
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button).buttonStyle(.borderless)
         .fixedSize()
         .disabled(session.canOrderBy != nil)
         .help(session.canOrderBy ?? "Order the results by a field")
@@ -138,7 +138,7 @@ private struct QueryActions: View {
             } label: {
                 Text("Distinct").font(.sheetUI(13)).foregroundStyle(session.canDistinct == nil ? Palette.accent : Palette.muted2).hoverLabel()
             }
-            .menuStyle(.borderlessButton).fixedSize()
+            .menuStyle(.button).buttonStyle(.borderless).fixedSize()
             .disabled(session.canDistinct != nil).help(session.canDistinct ?? "Distinct values of one field")
             Button("Statistics") { Task { await session.statistics() } }.buttonStyle(LinkButtonStyle())
                 .disabled(session.canStatistics != nil).help(session.canStatistics ?? "Min, max, mean, count of every numeric and date field")

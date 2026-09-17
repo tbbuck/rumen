@@ -87,7 +87,7 @@ private struct StoredFileHeader: View {
                     } label: {
                         Text("File: \(session.selectedRun.map(label) ?? "")").font(.sheetUI(12.5)).hoverLabel()
                     }
-                    .menuStyle(.borderlessButton).fixedSize()
+                    .menuStyle(.button).buttonStyle(.borderless).fixedSize()
                 }
             }
             Caption(facts).frame(maxWidth: 880, alignment: .leading).lineLimit(2)

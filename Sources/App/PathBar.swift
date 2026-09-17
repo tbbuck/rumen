@@ -62,6 +62,9 @@ struct PathBar: View {
         .overlay(RoundedRectangle(cornerRadius: 7).stroke(model.isEditingURL ? Palette.accent : Palette.line2, lineWidth: 1))
         .contentShape(Rectangle())
         .onTapGesture { if !model.isEditingURL { model.beginURLEdit() } }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Location")
+        .accessibilityHint("Click the empty part to edit the URL")
         .popover(isPresented: $model.showRecents, arrowEdge: .bottom) {
             RecentServersPopover()
         }

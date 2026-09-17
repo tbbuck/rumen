@@ -78,7 +78,7 @@ private struct SourceMenu: View {
             } label: {
                 Text(label).font(.sheetUI(12.5))
             }
-            .menuStyle(.borderlessButton).fixedSize()
+            .menuStyle(.button).buttonStyle(.borderless).fixedSize()
         }
     }
 

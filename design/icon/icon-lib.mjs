@@ -4,14 +4,20 @@
 //
 // Exports
 //   SQUIRCLE, squirclePath()      Apple's macOS icon tile as an SVG path (824pt on 1024)
+//   TILE, BUNDLE_SCALE            the tile's box on the canvas; canvas/tile ratio
 //   svgDoc(name, comment, defs, body)   a 1024px flat master with the tile clip baked in
-//   loadFeature(file)             GeoJSON rows from geography.sql -> one MultiPolygon
+//   loadFeature(file, parts)      GeoJSON rows from geography.sql -> one MultiPolygon
 //   bboxOf, windowFor, project, pathFor, extentRect   lon/lat -> tile px, equal scale
-//   graticulePath(box, step, offset)    grid lines across a box
-//   hexToRgba(hex, alpha)
-//   buildPreview(concepts, previewDir)  writes icon-preview.html (standalone) and
-//                                       arcgis-explorer-icon.html (Artifact fragment)
-//   writeConcepts(concepts, dir)        writes each concept's SVG master
+//   projectedRings, ringsToPath, clipRingToConvex, circlePolygon   clipping without clipPath
+//   graticulePath, graticuleRects, graticuleChords   grid lines across a box or a circle
+//   rectPath, rectRingPath, dashedRectRings, dashedRectPath, circlePath, ringPath,
+//   rectWithHolePath, rotatedRectRing, neatlineTicks   filled shapes, no strokes needed
+//   hexToRgba(hex, alpha), hexToSrgb(hex)
+//   flatMaster(concept), layerSvg(layer), iconJson(concept), writeIconBundle(concept, dir)
+//                                 a layered concept -> flat master and Icon Composer bundle
+//   buildPreview(concepts, previewDir, lede, renders)  writes icon-preview.html (standalone)
+//                                       and arcgis-explorer-icon.html (Artifact fragment)
+//   writeConcepts(concepts, dir)        writes each concept's SVG master(s)
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -33,6 +39,11 @@ export function squirclePath() {
   return 'M ' + pts.join(' L ') + ' Z';
 }
 export const SQUIRCLE = squirclePath();
+
+// The tile's box on the 1024 canvas, and the factor that scales tile coordinates onto
+// the full canvas for an Icon Composer layer (the system masks those itself).
+export const TILE = { x: 100, y: 100, w: 824, h: 824 };
+export const BUNDLE_SCALE = 1024 / 824;
 
 // A 1024px flat master: everything in `body` is clipped to the tile. `defs` may add
 // filters, gradients and clip paths. Keep Icon Composer layers simpler than this
@@ -56,9 +67,10 @@ export function svgDoc(name, comment, defs, body) {
 
 // ---- Geography -------------------------------------------------------------
 
-// Rows written by geography.sql: [{ area, geojson }]. All parts become one feature.
-export async function loadFeature(file) {
-  const geo = JSON.parse(await readFile(file, 'utf8'));
+// Rows written by geography.sql: [{ area, geojson }], largest first. The first `parts`
+// rows become one feature (2 = Great Britain and Ireland, dropping the Outer Hebrides).
+export async function loadFeature(file, parts = Infinity) {
+  const geo = JSON.parse(await readFile(file, 'utf8')).slice(0, parts);
   const feature = { type: 'MultiPolygon', coordinates: geo.flatMap(f => f.geojson.type === 'Polygon' ? [f.geojson.coordinates] : f.geojson.coordinates) };
   if (feature.coordinates.length === 0) throw new Error(`${file} is empty; re-run duckdb -f design/icon/geography.sql`);
   return feature;
@@ -98,7 +110,67 @@ export function project(win) {
 }
 
 export function pathFor(geojson, proj) {
-  return rings(geojson).map(r => 'M' + r.map(pt => { const [x, y] = proj(pt); return `${x.toFixed(1)} ${y.toFixed(1)}`; }).join('L') + 'Z').join('');
+  return ringsToPath(projectedRings(geojson, proj));
+}
+
+// Rings in tile px (closing point dropped), ready for clipping.
+export function projectedRings(geojson, proj) {
+  return rings(geojson).map(r => {
+    const pts = r.map(proj);
+    const [x0, y0] = pts[0], [x1, y1] = pts[pts.length - 1];
+    return x0 === x1 && y0 === y1 ? pts.slice(0, -1) : pts;
+  });
+}
+
+export function ringsToPath(ringList) {
+  return ringList.filter(r => r.length >= 3)
+    .map(r => 'M' + r.map(([x, y]) => `${x.toFixed(1)} ${y.toFixed(1)}`).join('L') + 'Z').join('');
+}
+
+// Sutherland–Hodgman: the part of `ring` inside the convex polygon `clip`. Icon Composer
+// layers must not use clipPath, so shapes are cut geometrically instead.
+export function clipRingToConvex(ring, clip) {
+  const sgn = Math.sign(polygonArea(clip));
+  let out = ring.slice();
+  for (let i = 0; i < clip.length && out.length; i++) {
+    const a = clip[i], b = clip[(i + 1) % clip.length];
+    const inside = p => sgn * ((b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])) >= 0;
+    const input = out;
+    out = [];
+    for (let j = 0; j < input.length; j++) {
+      const cur = input[j], prev = input[(j + input.length - 1) % input.length];
+      const curIn = inside(cur), prevIn = inside(prev);
+      if (curIn) {
+        if (!prevIn) out.push(lineIntersection(prev, cur, a, b));
+        out.push(cur);
+      } else if (prevIn) {
+        out.push(lineIntersection(prev, cur, a, b));
+      }
+    }
+  }
+  return out;
+}
+
+function lineIntersection(p, q, a, b) {
+  const d = (p[0] - q[0]) * (a[1] - b[1]) - (p[1] - q[1]) * (a[0] - b[0]);
+  const t = ((p[0] - a[0]) * (a[1] - b[1]) - (p[1] - a[1]) * (a[0] - b[0])) / d;
+  return [p[0] + t * (q[0] - p[0]), p[1] + t * (q[1] - p[1])];
+}
+
+export function polygonArea(ring) {
+  let s = 0;
+  for (let i = 0; i < ring.length; i++) {
+    const [x0, y0] = ring[i], [x1, y1] = ring[(i + 1) % ring.length];
+    s += x0 * y1 - x1 * y0;
+  }
+  return s / 2;
+}
+
+export function circlePolygon(cx, cy, r, n = 96) {
+  return Array.from({ length: n }, (_, i) => {
+    const t = (i / n) * Math.PI * 2;
+    return [cx + r * Math.cos(t), cy + r * Math.sin(t)];
+  });
 }
 
 // The projected bounding box of any lon/lat polygon, as a rect in tile px.
@@ -117,9 +189,179 @@ export function graticulePath(box, step, offset = step / 2) {
   return d.join('');
 }
 
+// The same grid as filled rects `t` wide, for layers that cannot rely on strokes.
+export function graticuleRects(box, step, offset = step / 2, t = 4) {
+  const d = [];
+  for (let x = box.x + offset; x < box.x + box.w; x += step) d.push(rectPath(x - t / 2, box.y, t, box.h));
+  for (let y = box.y + offset; y < box.y + box.h; y += step) d.push(rectPath(box.x, y - t / 2, box.w, t));
+  return d.join('');
+}
+
+// The grid cut to a circle: every line becomes a chord.
+export function graticuleChords(cx, cy, radius, step, offset = step / 2, t = 4) {
+  const d = [];
+  for (let u = -radius + offset; u < radius; u += step) {
+    const half = Math.sqrt(Math.max(0, radius * radius - u * u));
+    if (half < t) continue;
+    d.push(rectPath(cx + u - t / 2, cy - half, t, half * 2));
+    d.push(rectPath(cx - half, cy + u - t / 2, half * 2, t));
+  }
+  return d.join('');
+}
+
+// ---- Filled shapes -----------------------------------------------------------
+// Everything below is a filled path, so it renders identically in rsvg, a browser and
+// Icon Composer, which cannot be trusted with strokes, dashes, masks or clipPath.
+
+const r1 = n => Math.round(n * 10) / 10;
+
+export function rectPath(x, y, w, h) {
+  return `M${r1(x)} ${r1(y)}h${r1(w)}v${r1(h)}h${r1(-w)}Z`;
+}
+
+// A rectangular frame `t` thick: outer ring clockwise, inner counter-clockwise, so the
+// nonzero rule leaves the middle open.
+export function rectRingPath(x, y, w, h, t) {
+  return `M${x} ${y}H${x + w}V${y + h}H${x}Z` + `M${x + t} ${y + t}V${y + h - t}H${x + w - t}V${y + t}Z`;
+}
+
+// A dashed rectangle as rects (rings of four points). The period is fitted to each side
+// so that every corner carries a dash and the pattern is symmetric.
+export function dashedRectRings(x, y, w, h, t, dash, gap) {
+  const out = [];
+  const rect = (rx, ry, rw, rh) => out.push([[rx, ry], [rx + rw, ry], [rx + rw, ry + rh], [rx, ry + rh]]);
+  const edge = (len, emit) => {
+    const n = Math.max(1, Math.round((len - dash) / (dash + gap)));
+    const period = (len - dash) / n;
+    for (let i = 0; i <= n; i++) emit(i * period, Math.min(dash, len - i * period));
+  };
+  edge(w, (s, l) => rect(x + s, y, l, t));
+  edge(h, (s, l) => rect(x + w - t, y + s, t, l));
+  edge(w, (s, l) => rect(x + w - s - l, y + h - t, l, t));
+  edge(h, (s, l) => rect(x, y + h - s - l, t, l));
+  return out;
+}
+
+export function dashedRectPath(x, y, w, h, t, dash, gap) {
+  return ringsToPath(dashedRectRings(x, y, w, h, t, dash, gap));
+}
+
+// A circle as a path; `ccw` reverses the winding for cutting holes under the nonzero rule.
+export function circlePath(cx, cy, r, ccw = false) {
+  const s = ccw ? 0 : 1;
+  return `M${cx - r} ${cy}A${r} ${r} 0 1 ${s} ${cx + r} ${cy}A${r} ${r} 0 1 ${s} ${cx - r} ${cy}Z`;
+}
+
+export function ringPath(cx, cy, rOuter, rInner) {
+  return circlePath(cx, cy, rOuter) + circlePath(cx, cy, rInner, true);
+}
+
+export function rectWithHolePath(x, y, w, h, cx, cy, r) {
+  return `M${x} ${y}H${x + w}V${y + h}H${x}Z` + circlePath(cx, cy, r, true);
+}
+
+// A w×h rect whose centre-left sits at distance `radius` from (cx, cy), rotated `deg`
+// around (cx, cy); at 0° it points to the right. For ticks around a ring.
+export function rotatedRectRing(cx, cy, radius, w, h, deg) {
+  const a = (deg * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a);
+  return [[radius, -h / 2], [radius + w, -h / 2], [radius + w, h / 2], [radius, h / 2]]
+    .map(([x, y]) => [cx + x * c - y * s, cy + x * s + y * c]);
+}
+
+// Ticks outside a rect's edges: `divisions` per side, corners skipped.
+export function neatlineTicks(rect, divisions, len, t, offset = 0) {
+  const d = [];
+  for (let i = 1; i < divisions; i++) {
+    const x = rect.x + (rect.w * i) / divisions, y = rect.y + (rect.h * i) / divisions;
+    d.push(rectPath(x - t / 2, rect.y - offset - len, t, len));
+    d.push(rectPath(x - t / 2, rect.y + rect.h + offset, t, len));
+    d.push(rectPath(rect.x - offset - len, y - t / 2, len, t));
+    d.push(rectPath(rect.x + rect.w + offset, y - t / 2, len, t));
+  }
+  return d.join('');
+}
+
 export function hexToRgba(hex, alpha) {
   const n = parseInt(hex.slice(1), 16);
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+}
+
+export function hexToSrgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const c = v => (v / 255).toFixed(5);
+  return `srgb:${c((n >> 16) & 255)},${c((n >> 8) & 255)},${c(n & 255)},1.00000`;
+}
+
+// ---- Layered concepts --------------------------------------------------------
+// A concept is { key, file, name, fill, layers, small?, shadow? } with `layers` bottom
+// first, each { name, body, defs?, glass?, opacity?, flatOnly? } drawn in tile
+// coordinates (824pt tile at 100,100 on the 1024 canvas). `fill` is a hex or
+// { top, bottom } for a vertical gradient. The flat master and the Icon Composer
+// bundle are both derived from it, so what the contact sheet shows is what actool
+// compiles. `flatOnly` layers (hard shadows the bundle gets from its group shadow)
+// are left out of the bundle.
+
+function fillSpec(fill) {
+  return typeof fill === 'string' ? { top: fill, bottom: fill } : fill;
+}
+
+export function flatMaster(concept, layers = concept.layers) {
+  const { top, bottom } = fillSpec(concept.fill);
+  const defs = `<linearGradient id="ground" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${top}"/><stop offset="1" stop-color="${bottom}"/></linearGradient>`
+    + layers.map(l => l.defs ?? '').join('');
+  const body = `<rect x="0" y="0" width="1024" height="1024" fill="url(#ground)"/>\n`
+    + layers.map(l => `<g id="layer-${l.name}"${l.opacity != null ? ` opacity="${l.opacity}"` : ''}>${l.body}</g>`).join('\n');
+  return svgDoc(concept.name, concept.comment ?? '', defs, body);
+}
+
+// One Icon Composer layer: the full canvas, tile coordinates scaled up 1024/824.
+export function layerSvg(layer) {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024px" height="1024px" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg">
+  <title>${layer.name}</title>
+  <defs>${layer.defs ?? ''}</defs>
+  <g transform="scale(${BUNDLE_SCALE.toFixed(6)}) translate(-100 -100)"${layer.opacity != null ? ` opacity="${layer.opacity}"` : ''}>
+    ${layer.body}
+  </g>
+</svg>
+`;
+}
+
+// icon.json as Icon Composer writes it. Arrays are top-to-bottom, so the bottom-first
+// layer list is reversed. One group; glass per layer.
+export function iconJson(concept) {
+  const { top, bottom } = fillSpec(concept.fill);
+  const layers = concept.layers.filter(l => !l.flatOnly).reverse().map(l => ({
+    glass: l.glass === true,
+    hidden: false,
+    'image-name': `${l.name}.svg`,
+    name: l.name,
+    opacity: 1,
+  }));
+  return JSON.stringify({
+    fill: { 'linear-gradient': [hexToSrgb(top), hexToSrgb(bottom)] },
+    groups: [{
+      'blend-mode': 'normal',
+      hidden: false,
+      layers,
+      lighting: 'individual',
+      shadow: { kind: 'neutral', opacity: concept.shadow ?? 0.35 },
+      specular: true,
+      translucency: { enabled: false, value: 0.5 },
+    }],
+    'supported-platforms': { circles: ['watchOS'], squares: 'shared' },
+  }, null, 2) + '\n';
+}
+
+// Writes <dir>/<Bundle>.icon/{icon.json, Assets/<layer>.svg} and returns the bundle path.
+export async function writeIconBundle(concept, dir) {
+  const bundle = join(dir, `${concept.bundle ?? concept.key}.icon`);
+  await mkdir(join(bundle, 'Assets'), { recursive: true });
+  await writeFile(join(bundle, 'icon.json'), iconJson(concept));
+  for (const l of concept.layers.filter(l => !l.flatOnly)) {
+    await writeFile(join(bundle, 'Assets', `${l.name}.svg`), layerSvg(l));
+  }
+  return bundle;
 }
 
 // ---- Preview page ----------------------------------------------------------
@@ -136,9 +378,28 @@ function inlineSvg(key, svg) {
 
 const sizes = [128, 64, 32, 16];
 
-function dock(theme, concepts) {
-  const cells = concepts.map(c => `<div class="dock-item">${inlineSvg(c.key + theme, c.svg)}</div>`).join('');
+// Art for a given size: the hand-tuned small master at 32px and below when there is one.
+function artFor(c, size) {
+  return inlineSvg(size <= 32 && c.svgSmall ? `${c.key}-s` : c.key, size <= 32 && c.svgSmall ? c.svgSmall : c.svg);
+}
+
+// A 64px Dock strip. With `renders` (actool PNGs by key and pixel size) the 128px
+// render is shown at 64px, which is what a Retina Dock displays.
+function dock(theme, concepts, renders) {
+  const cells = concepts.map(c => renders?.[c.key]?.[128]
+    ? `<div class="dock-item"><img src="${renders[c.key][128]}" alt="${c.name} as macOS renders it"></div>`
+    : `<div class="dock-item">${inlineSvg(c.key + theme, c.svg)}</div>`).join('');
   return `<div class="dock ${theme}"><div class="dock-item ghost"></div>${cells}<div class="dock-item ghost"></div></div>`;
+}
+
+// The actool renders of one concept, each @2x bitmap shown at half size (Retina).
+function renderRow(c, renders) {
+  const r = renders?.[c.key];
+  if (!r) return '';
+  return `<div class="sizes rendered">${sizes.map(s => r[s * 2]
+    ? `<img src="${r[s * 2]}" alt="" style="width:${s}px;height:${s}px">`
+    : '').join('')}</div>
+    <div class="caption">Compiled by actool from the Icon Composer bundle, Liquid Glass applied</div>`;
 }
 
 const css = `
@@ -154,6 +415,9 @@ const css = `
   .big { width: 260px; max-width: 100%; aspect-ratio: 1; }
   .big svg, .sz svg, .dock-item svg { width: 100%; height: 100%; display: block; filter: drop-shadow(0 1.5px 3px rgba(0,0,0,.22)); }
   .sizes { display: flex; align-items: flex-end; gap: 14px; height: 128px; }
+  .sizes img { display: block; }
+  .caption { font-size: 11px; color: var(--muted); margin-top: -6px; }
+  .dock-item img { width: 100%; height: 100%; display: block; }
   h2 { font-size: 15px; font-weight: 700; margin: 0 0 4px; }
   .text p { margin: 0; font-size: 13px; line-height: 1.45; color: var(--muted); max-width: 320px; }
   .text .trade { margin-top: 4px; }
@@ -168,8 +432,9 @@ const fontLink = `<link rel="stylesheet" href="https://fonts.googleapis.com/css2
 
 // Writes icon-preview.html (a standalone page for a LAN preview server) and
 // arcgis-explorer-icon.html (a fragment for the Artifact tool, theme-aware).
-// `concepts` is [{ key, name, svg, why, tradeoff }]; `lede` is the page's one-line brief.
-export async function buildPreview(concepts, previewDir, lede = '') {
+// `concepts` is [{ key, name, svg, svgSmall?, why, tradeoff }]; `lede` is the page's
+// one-line brief; `renders` is { [key]: { [px]: dataUri } } of actool output, optional.
+export async function buildPreview(concepts, previewDir, lede = '', renders = null) {
   const rows = concepts.map(c => {
     const art = inlineSvg(c.key, c.svg);
     return `<section class="concept">
@@ -179,7 +444,9 @@ export async function buildPreview(concepts, previewDir, lede = '') {
       <p>${c.why ?? ''}</p>
       <p class="trade">${c.tradeoff ?? ''}</p>
     </div>
-    <div class="sizes">${sizes.map(s => `<div class="sz" style="width:${s}px;height:${s}px">${art}</div>`).join('')}</div>
+    <div class="sizes">${sizes.map(s => `<div class="sz" style="width:${s}px;height:${s}px">${artFor(c, s)}</div>`).join('')}</div>
+    ${renders ? `<div class="caption">Flat master, ${c.svgSmall ? 'hand-tuned art at 32 and 16' : 'one master at every size'}</div>` : ''}
+    ${renderRow(c, renders)}
   </section>`;
   }).join('\n');
 
@@ -188,12 +455,12 @@ export async function buildPreview(concepts, previewDir, lede = '') {
   <p class="lede">${lede}</p>
   <div class="strip light">
     <div class="grid">${rows}</div>
-    ${dock('light', concepts)}
-    <div class="label">Light desktop, 64px</div>
+    ${dock('light', concepts, renders)}
+    <div class="label">Light desktop, 64px${renders ? ', actool render' : ''}</div>
   </div>
   <div class="strip dark">
-    ${dock('dark', concepts)}
-    <div class="label">Dark desktop, 64px</div>
+    ${dock('dark', concepts, renders)}
+    <div class="label">Dark desktop, 64px${renders ? ', actool render' : ''}</div>
   </div>
 </div>
 `;
@@ -231,8 +498,30 @@ ${content}`;
   await writeFile(join(previewDir, 'arcgis-explorer-icon.html'), artifactPage);
 }
 
-// Writes each concept's SVG master as <dir>/<file>.
+// Writes each concept's SVG master as <dir>/<file>, and the small master (32px and
+// below) as <dir>/<file stem>-small.svg when the concept has one.
 export async function writeConcepts(concepts, dir) {
   await mkdir(dir, { recursive: true });
-  for (const c of concepts) await writeFile(join(dir, c.file), c.svg);
+  for (const c of concepts) {
+    await writeFile(join(dir, c.file), c.svg);
+    if (c.svgSmall) await writeFile(join(dir, c.file.replace(/\.svg$/, '-small.svg')), c.svgSmall);
+  }
+}
+
+// Reads <rendersDir>/<key>-<px>.png for every concept and size into data URIs.
+export async function loadRenders(concepts, rendersDir) {
+  const out = {};
+  for (const c of concepts) {
+    out[c.key] = {};
+    for (const px of [16, 32, 64, 128, 256, 512]) {
+      try {
+        const png = await readFile(join(rendersDir, `${c.key}-${px}.png`));
+        out[c.key][px] = `data:image/png;base64,${png.toString('base64')}`;
+      } catch (e) {
+        if (e.code !== 'ENOENT') throw e;
+      }
+    }
+    if (Object.keys(out[c.key]).length === 0) throw new Error(`no renders for ${c.key} in ${rendersDir}`);
+  }
+  return out;
 }

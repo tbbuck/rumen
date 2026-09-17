@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024px" height="1024px" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg">
+  <title>shade</title>
+  <defs></defs>
+  <g transform="scale(1.242718) translate(-100 -100)">
+    <path d="M334.0 182.0L512.0 246.0L512.0 842.0L334.0 778.0ZM690.0 182.0L868.0 246.0L868.0 842.0L690.0 778.0Z" fill="#232F3A" fill-opacity="0.1"/><path d="M332 182h4v596h-4ZM510 246h4v596h-4ZM688 182h4v596h-4Z" fill="#232F3A" fill-opacity="0.22"/>
+  </g>
+</svg>

@@ -69,6 +69,11 @@ final class AccessibilityAuditTests: XCTestCase {
         // element of its own; park it over the tree panel's empty foot and let any tooltip go.
         app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.9)).hover()
         Thread.sleep(forTimeInterval: 1.2)
+        // What the audit saw, kept in the result bundle (claude-scripts/vm_attachments.sh brings it back).
+        let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        shot.name = "state: \(state)"
+        shot.lifetime = .keepAlways
+        add(shot)
         var contrastNotes = [String]()
         do {
             try app.performAccessibilityAudit(for: .all) { issue in
@@ -86,7 +91,26 @@ final class AccessibilityAuditTests: XCTestCase {
                    let type = issue.element?.elementType, type == .menuButton || type == .popUpButton {
                     return true
                 }
-                XCTFail("[\(state)] \(issue.auditType.name): \(issue.compactDescription)\(element)\(detail)", file: file, line: line)
+                // SwiftUI hosts each window's content in a group of its own, the size of the window
+                // and nameless; the app's own root group sits inside it, named. The same goes for
+                // a sheet and the Preferences window. Nothing of ours is in that outer element.
+                if issue.compactDescription.hasPrefix("Element has no description"),
+                   let element = issue.element, element.elementType == .group,
+                   Self.windowFrames(of: app).contains(where: { $0.equalTo(element.frame) }) {
+                    return true
+                }
+                // The window's own buttons (close, minimise, zoom, in the top-left 80×48 of a window)
+                // are AppKit's; the element tree shows the mismatch inside the zoom button's group.
+                if issue.auditType == .parentChild, let element = issue.element,
+                   Self.windowFrames(of: app).contains(where: { CGRect(x: $0.minX, y: $0.minY, width: 80, height: 48).contains(element.frame) }) {
+                    return true
+                }
+                // Everything else is reported with the element's own subtree, so a finding names
+                // what it is about rather than being guessed at; a finding with no element gets the
+                // front sheet's tree, the only place such a finding has appeared.
+                let tree = issue.element.map { "\n    " + $0.debugDescription.prefix(800).replacingOccurrences(of: "\n", with: "\n    ") }
+                    ?? (app.sheets.count > 0 ? "\n    sheet: " + app.sheets.firstMatch.debugDescription.prefix(1500).replacingOccurrences(of: "\n", with: "\n    ") : "")
+                XCTFail("[\(state)] \(issue.auditType.name): \(issue.compactDescription)\(element)\(detail)\(tree)", file: file, line: line)
                 return true   // recorded above; let the audit go on to the next issue
             }
         } catch {
@@ -100,6 +124,13 @@ final class AccessibilityAuditTests: XCTestCase {
             print("[\(state)] contrast notes (advisory): \(contrastNotes.count)")
             for note in contrastNotes { print("  \(note)") }
         }
+    }
+
+    /// The frames of every window, sheet and dialog the app shows: a nameless group of exactly
+    /// that size is SwiftUI's hosting container, not a view of the app's.
+    private static func windowFrames(of app: XCUIApplication) -> [CGRect] {
+        app.windows.allElementsBoundByIndex.map(\.frame) + app.sheets.allElementsBoundByIndex.map(\.frame)
+            + app.dialogs.allElementsBoundByIndex.map(\.frame)
     }
 
     // MARK: - States
@@ -170,9 +201,13 @@ final class AccessibilityAuditTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Done"].firstMatch.waitForExistence(timeout: 60), "the download never finished")
         let strip = app.staticTexts["Transfers"].firstMatch
         XCTAssertTrue(strip.waitForExistence(timeout: 10), "the transfers strip was not found")
+        app.activate()
         strip.click()
         let opened = app.descendants(matching: .any).matching(NSPredicate(format: "label == 'Show in Finder'")).firstMatch
-        XCTAssertTrue(opened.waitForExistence(timeout: 10), "the drawer never opened; window: \(app.windows.firstMatch.debugDescription.prefix(3000))")
+        if !opened.waitForExistence(timeout: 5) {
+            app.typeKey("t", modifierFlags: [.command, .shift])   // Go ▸ Transfers, the menu's own way
+        }
+        XCTAssertTrue(opened.waitForExistence(timeout: 10), "the drawer never opened; window: \(app.windows.firstMatch.debugDescription.prefix(6000))")
     }
 
     func testTransfersDrawerWithAFinishedRun() {

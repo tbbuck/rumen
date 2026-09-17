@@ -237,6 +237,8 @@ private struct RunRow: View {
             RemoveRunButton(run: run)
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Run: \(run.layerName) on \(run.serverName), \(run.statusChip?.0 ?? run.status.rawValue)")
     }
 }
 

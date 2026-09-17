@@ -17,28 +17,42 @@ final class FixtureServer: @unchecked Sendable {
     static let pageSize = 50
 
     init() throws {
-        listener = try NWListener(using: .tcp, on: .any)
+        // Loopback only: listening on every interface asks macOS's Local Network permission,
+        // which a test runner on an unattended Mac can never be granted.
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: .any)
+        parameters.allowLocalEndpointReuse = true
+        listener = try NWListener(using: parameters)
         let ready = DispatchSemaphore(value: 0)
         let assigned = PortBox()
         listener.stateUpdateHandler = { [listener] state in
             // The assigned port is only reliable read from within the ready state, on the listener's queue.
-            if case .ready = state { assigned.value = listener.port?.rawValue ?? 0; ready.signal() }
-            if case .failed = state { ready.signal() }
+            switch state {
+            case .ready: assigned.port = listener.port?.rawValue ?? 0; ready.signal()
+            case .failed(let error): assigned.failure = String(describing: error); ready.signal()
+            case .cancelled: assigned.failure = "cancelled"; ready.signal()
+            default: break
+            }
         }
         listener.newConnectionHandler = { [weak self] connection in self?.serve(connection) }
         listener.start(queue: queue)
-        guard ready.wait(timeout: .now() + 5) == .success, assigned.value != 0 else {
-            throw FixtureServerError.notReady
-        }
-        self.port = assigned.value
+        guard ready.wait(timeout: .now() + 5) == .success else { throw FixtureServerError.notReady("no ready state within 5s") }
+        if let failure = assigned.failure { throw FixtureServerError.notReady(failure) }
+        guard assigned.port != 0 else { throw FixtureServerError.notReady("ready, but the assigned port reads as 0") }
+        self.port = assigned.port
     }
 
     private final class PortBox: @unchecked Sendable {
         private let lock = NSLock()
-        private var stored: UInt16 = 0
-        var value: UInt16 {
-            get { lock.withLock { stored } }
-            set { lock.withLock { stored = newValue } }
+        private var storedPort: UInt16 = 0
+        private var storedFailure: String?
+        var port: UInt16 {
+            get { lock.withLock { storedPort } }
+            set { lock.withLock { storedPort = newValue } }
+        }
+        var failure: String? {
+            get { lock.withLock { storedFailure } }
+            set { lock.withLock { storedFailure = newValue } }
         }
     }
 
@@ -173,7 +187,12 @@ final class FixtureServer: @unchecked Sendable {
     }
 }
 
-enum FixtureServerError: Error { case notReady }
+enum FixtureServerError: Error, CustomStringConvertible {
+    case notReady(String)
+    var description: String {
+        switch self { case .notReady(let why): return "the fixture server could not listen: \(why)" }
+    }
+}
 
 /// The parts of an HTTP/1.1 request the fixture server needs: the path, and the parameters
 /// from the query string and a form body combined.

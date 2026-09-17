@@ -287,3 +287,41 @@ margins.
   returned an error: …") and offers the probe. *Unknown is a state, not a blank.*
 - Transfer failed: the run row keeps the chunk grid with the failed cells in `no`
   and the last error verbatim. *Resume from where it broke.*
+
+## OGC sources (M10)
+
+The same shell, with less in it. An OGC endpoint (WMS, WFS, WMTS; SPEC §5.11) is a
+server whose tree has no folders: one service per protocol that answered, its layers
+beneath. What differs from an ArcGIS server:
+
+- **`AddServerSheet`** leads with "This looks like an OGC endpoint on *host*: it will be
+  asked for WMS, WFS and WMTS capabilities", naming the service or layer the URL pointed
+  at; the root shown keeps the vendor parameters (`map=`). *Say what will happen before it does.*
+- **`ServerHeader`** caption: "OGC endpoint: WFS, WMS, cached 14 minutes ago". The
+  directory page subtitle says the same. *No version to quote; the protocols instead.*
+- **`ServicePage`** facts: title, version, operations, formats, and one protocol-specific
+  row (paging for a WFS, the largest picture for a WMS, the tile matrix sets for a WMTS).
+- **`LayerPage`** offers only the tabs the protocol answers: a WFS type Overview · Fields ·
+  Download · Stored · Map · Raw; a WMS layer Overview · Download · Map · Raw; a WMTS layer
+  Overview · Map · Raw. The header reads "Feature type ms:towns in Planning WFS (WFS
+  2.0.0)". Overview facts come from the capabilities: name, title, default and other CRS,
+  extent, keywords, then formats, styles or tile matrix sets by protocol; the Fields table
+  only where there are fields. Raw shows the layer's capabilities fragment. *Never a tab
+  that cannot answer.*
+- **`ExtractionStatement`**: a WFS type reads as an ArcGIS layer does ("WFS GetFeature for
+  ms:towns as GeoJSON, paged 1,000 at a time."); a WMS layer with features (a GeoJSON
+  GetMap, or a WFS twin of the same name) adds "Save a picture instead"; a WMS layer without
+  them leads with **Save as PNG image** and offers the map; a WMTS layer leads with
+  **Preview on the map**. *Every layer's next step, in its own protocol's terms.*
+- **`DownloadTab`**: no where clause, no manual strategy, no domain labels. A WFS type has
+  the vector formats and Native / WGS 84, the latter enabled only when the server offers
+  the type in it (the help says why). A WMS layer with features has a Features / Picture
+  choice; Picture offers PNG and, when the server lists it, GeoTIFF, and the plan reads "One
+  GetMap picture of the layer's extent in Web Mercator, at most 2,048 pixels on its long
+  side, written as PNG image with a world file beside it." *Only choices the server can honour.*
+- **`MapTab`**: chip "WMS" or "WMTS" instead of "Sample"; no "Draw a fresh sample" for a
+  raster; captions say what was drawn ("WMS layer drawn as 256px tiles in Web Mercator",
+  "WMTS tiles from the webmercator matrix set"). The raster sits under the graticule and
+  the extent box at 85% opacity. *The sheet stays a sheet.*
+- **Transfers**: a picture run shows "A picture, 1.2 MB, finished 3 minutes ago" with Show
+  in Finder only; no Re-export, no Map, and it never appears on the Stored tab.

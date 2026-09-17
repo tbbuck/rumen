@@ -313,6 +313,59 @@ Coded-value domains are exported as the raw code; an opt-in option (off by defau
   (decision 17): a first cut kept it in the Keychain, which prompted on every rebuild for
   what is a low-value session cookie. Tokens and passwords still go in the Keychain.
 
+### 5.11 OGC sources (M10)
+ArcGIS is the full-fledged source; WMS, WFS and WMTS endpoints are supported at a
+minimum: what the endpoint serves, what each layer looks like, and a download where the
+protocol has one. No filtering, no querying.
+- **Intake.** A pasted URL that is not ArcGIS is taken for an OGC endpoint. Its OGC
+  request parameters (`service`, `request`, `typeNames`, `layers`, `bbox`, …) are
+  stripped; whatever remains (a UMN MapServer's `map=`, any vendor parameter) is the
+  endpoint's identity and rides along on every request. The endpoint is probed for
+  WMS, WFS and WMTS `GetCapabilities`; each answer becomes a service with its layers; a
+  WFS's feature types are described in one `DescribeFeatureType` (per type when the
+  server refuses the all-types form). A static `WMTSCapabilities.xml` URL is fetched as
+  is. An endpoint that answers none of the three is not kept, and the error names what
+  each attempt said. A `service=` or a layer name in the pasted URL picks the landing
+  node.
+- **Parsing.** Capabilities are parsed namespace-blind (every element by local name):
+  WMS 1.1.1 and 1.3.0 with CRS and geographic boxes inherited from enclosing layers,
+  WFS 1.0 to 2.0 (output formats, `ImplementsResultPaging`, `CountDefault`), WMTS 1.0
+  (tile matrix sets, `ResourceURL` templates, styles). An OGC exception report in a
+  200 body is a typed error with its text verbatim.
+- **Features.** A WFS type is extractable through `GetFeature`: GeoJSON when offered,
+  GML otherwise; paged with `startIndex`/`count` when the server pages (the count from
+  `resultType=hits`), in one request when it does not. WGS 84 is asked of the server
+  (`srsName`) only when the type is offered in it; otherwise the native reference is
+  fetched and written. Pages are staged through GDAL (`ST_Read`) into the same per-run
+  DuckDB as ArcGIS features, matched to the described fields by name and cast to their
+  types, or to a schema taken from the first page when the server would not describe
+  one; resume, the chunk grid, and every export format apply unchanged. A WMS layer
+  gives features when its `GetMap` offers a GeoJSON output (GeoServer's
+  `application/json;type=geojson`, one request over the extent), or through the WFS
+  type of the same name at the same endpoint, its **twin**, resolved and recorded as a
+  FeatureServer twin is. A WMTS layer yields no features.
+- **Pictures.** A WMS layer can always be saved as one `GetMap` of its extent, in Web
+  Mercator when offered (no axis-order trouble) else WGS 84, capped by the server's
+  `MaxWidth`/`MaxHeight` and 4,096 px on the long side: PNG with a world file beside it,
+  or GeoTIFF when the server offers it. A picture is a run in the transfers list but
+  not a stored file. A picture never follows the twin.
+- **Map.** A WFS type draws as a sample of up to 800 features in WGS 84, converted by
+  the spatial engine when the server speaks GML or a projected reference it will not
+  translate. A WMS draws as 256 px Web Mercator tiles (`{bbox-epsg-3857}`), or as one
+  picture of its extent when it offers no Web Mercator; a WMTS from a Web Mercator
+  matrix set, through its `ResourceURL` template or KVP `GetTile`. Tile requests go
+  through a custom URL scheme answered by the app's own client, so the server's headers
+  and cookie apply and the page may read the bytes without the server's CORS consent.
+- **Pages.** An OGC layer offers only the tabs its protocol can answer: a WFS type has
+  Overview, Fields, Download, Stored, Map, Raw; a WMS layer Overview, Download, Map,
+  Raw; a WMTS layer Overview, Map, Raw. Raw shows the layer's capabilities fragment.
+- **Storage.** `server.kind` (`arcgis` | `ogc`); services and layers share the ArcGIS
+  tables with `ogc_name` (the request identifier) and `ogc_json` (the normalised
+  detail); a layer is matched across crawls by `ogc_name`, so its id and its downloads
+  survive a reorder (migration 0007).
+- **Not in scope:** OGC API Features, GetFeatureInfo, filters (`CQL_FILTER`, Filter
+  XML), tile extraction, and vendor-specific sign-in.
+
 ## 6. Non-functional requirements
 
 ### 6.1 Performance
@@ -505,6 +558,14 @@ owned by `AppDatabase`). DuckDB never holds app state.
     (curl `-b`) is a low-value session credential; a first cut in the Keychain prompted on
     every rebuild and got in the way of resuming downloads. Tokens and passwords (M8) still
     go in the Keychain.
+18. **OGC endpoints share the ArcGIS tables and pipeline** — accepted 2026-09-17. A WMS,
+    WFS or WMTS endpoint is a server of kind `ogc`; its services and layers are rows in
+    the same tables, so the tree, the transfers, the column search and the exporter need
+    no second code path, and WFS pages are staged through GDAL into the same per-run
+    DuckDB. The endpoint keeps its vendor parameters as part of its identity, so a UMN
+    MapServer's `map=` is never lost. Features are the download where the protocol has
+    them (WFS, a GeoJSON-capable WMS, or a WMS layer's WFS twin); a picture is the WMS
+    layer's other download; a WMTS layer is drawn, not downloaded. See §5.11.
 
 ## 10. Open questions
 1. ~~**Design direction**: reuse DuckLake Explorer's Stratum system or give this app

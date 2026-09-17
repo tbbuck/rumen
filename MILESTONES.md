@@ -169,6 +169,22 @@ commit per logical unit.
   and the 20 MB DMG is attached to the GitHub Release. Nothing is baked into it: the app
   reads `MAPTILER_API_KEY` from its environment at run time (`launchctl setenv` for Dock
   launches), falling back to a plist value only dev builds have.
+- **M10 complete** (2026-09-17). **OGC sources** (SPEC §5.11): a pasted URL that is not
+  ArcGIS is taken for an OGC endpoint, its vendor parameters (a UMN MapServer's `map=`)
+  kept as its identity, and probed for WMS, WFS and WMTS capabilities; each answer is a
+  service with its layers in the same tables as ArcGIS, and a WFS's types are described
+  in one request. A WFS type downloads through GetFeature (GeoJSON or GML, paged when the
+  server pages) staged through GDAL into the usual per-run DuckDB, so resume, the chunk
+  grid and every format apply; a WMS layer downloads features when its GetMap offers
+  GeoJSON or through its WFS twin of the same name, and a picture of its extent (PNG with
+  a world file, or GeoTIFF) otherwise or as well; a WMTS layer is drawn, not downloaded.
+  The map draws WFS samples, WMS tiles or one picture, and WMTS tiles, with tile requests
+  routed through the app's client under a custom scheme. Pages offer only the tabs the
+  protocol can answer. Fifteen tests over synthetic capabilities (WMS 1.1.1 and 1.3.0,
+  WFS 1.0 and 2.0, WMTS 1.0), the probe, assessment, and the download shapes; 203 tests.
+  **Also:** Apple's accessibility audit as a UI test target against a scratch home
+  (`--home`) and a loopback ArcGIS server synthesised in the test process, and a launch
+  metric (see `Tests/ArcGISExplorerUITests`, `claude-scripts/ui_test.sh`).
 
 ---
 
@@ -343,7 +359,28 @@ commit per logical unit.
 
 ---
 
+## M10 — OGC sources — ✅ done 2026-09-17
+**Goal:** WMS, WFS and WMTS endpoints (UMN MapServer's `map=` shape included) at a
+minimum: what is there, what it looks like, a download where the protocol has one. No
+querying.
+- **Deliverables**
+  - Intake: any non-ArcGIS URL is an OGC endpoint; vendor parameters kept; the three
+    services probed; an endpoint that answers nothing is not kept.
+  - Capabilities parsed for WMS 1.1.1/1.3.0, WFS 1.0–2.0, WMTS 1.0; DescribeFeatureType
+    into the field table; exception reports as errors.
+  - WFS download (GeoJSON or GML, paged or single) through the staging pipeline; WMS
+    features through a GeoJSON GetMap or the WFS twin; WMS picture (PNG + world file,
+    GeoTIFF); WMTS listed and drawn only.
+  - Map: WFS sample, WMS tiles or one picture, WMTS tiles, through the tile proxy.
+  - Pages offer only the tabs the protocol answers; overview facts from the capabilities.
+- **Acceptance:** the synthetic endpoint round-trips through open, assess, download and
+  export in tests; a real endpoint opens, lists its layers, previews and downloads.
+
+---
+
 ### Backlog / post-v1 (explicitly out of scope now)
+- OGC API Features (the JSON successor to WFS), WMS GetFeatureInfo, OGC filters
+  (`CQL_FILTER`, Filter XML), WMTS tile extraction.
 - ArcGIS token sign-in (`generateToken`, username and password in the Keychain, refresh
   on 498/499): the crawler and the engine take a token provider, nothing supplies one
   yet. A 498/499 mid-run pauses the run with Resume and a link to the server's Cookie.

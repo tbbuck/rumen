@@ -4,8 +4,10 @@
 
 Paste a URL, see what the server really holds, get a straight answer to "can I extract
 this layer?", poke at it with read-only queries, and pull it down in full as GeoParquet
-(or GeoJSON, or CSV) through the fastest transport the server offers. A native macOS app in
-Swift and SwiftUI, with DuckDB as its spatial engine.
+(or GeoJSON, or CSV) through the fastest transport the server offers. WMS, WFS and WMTS
+endpoints open too, at a minimum: what is there, what it looks like, and a download where
+the protocol has one. A native macOS app in Swift and SwiftUI, with DuckDB as its spatial
+engine.
 
 ![The layer page: the server tree on the left, a layer's extractability verdict, facts and fields on the right](docs/layer-page.png)
 
@@ -38,6 +40,12 @@ Swift and SwiftUI, with DuckDB as its spatial engine.
   bounded server sample, a stored file (with a DuckDB `where` box), or a query preview.
 - **Remembers.** Every server you have opened, every crawl it has done, every download and
   export, all in a local SQLite database, so browsing and searching are instant and offline.
+- **Opens OGC endpoints as well.** Paste a WMS, WFS or WMTS URL, vendor parameters and all
+  (a UMN MapServer's `map=` stays put), and the endpoint is asked for all three. A WFS type
+  downloads through GetFeature, GeoJSON or GML, paged when the server pages, into the same
+  formats. A WMS layer downloads features when its GetMap speaks GeoJSON or through the WFS
+  type of the same name, and can always be saved as a picture of its extent. A WMTS layer is
+  listed and drawn. No querying: that is what the ArcGIS side is for.
 
 ![Column search across a 3,900-service server, with the uncrawled count and the crawl offer](docs/column-search.png)
 

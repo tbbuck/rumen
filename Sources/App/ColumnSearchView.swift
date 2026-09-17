@@ -26,8 +26,8 @@ struct ColumnSearchResults: View {
                 Spacer()
                 Button("Clear") { model.columnSearch = "" }.buttonStyle(LinkButtonStyle(size: 12.5))
             }
-            if model.searchUncrawled > 0 {
-                DeepCrawlPrompt(count: model.searchUncrawled, allServers: model.searchAllServers)
+            if model.searchUncrawled > 0 || model.searchFailedFolders > 0 {
+                DeepCrawlPrompt(services: model.searchUncrawled, folders: model.searchFailedFolders, allServers: model.searchAllServers)
             }
             if let error = model.searchError {
                 ErrorText(message: error)
@@ -100,16 +100,25 @@ private struct SearchHitRow: View {
     }
 }
 
-/// "12 services on this server have not been crawled, crawl them now."
+/// "12 services on this server have not been crawled and 2 folders could not be listed, so
+/// their columns cannot appear here, crawl them now."
 private struct DeepCrawlPrompt: View {
     @Environment(AppModel.self) private var model
-    let count: Int
+    let services: Int
+    let folders: Int
     let allServers: Bool
+
+    private var sentence: String {
+        var parts = [String]()
+        if services > 0 { parts.append("\(services.grouped) service\(services == 1 ? " has" : "s have") not been crawled") }
+        if folders > 0 { parts.append("\(folders.grouped) folder\(folders == 1 ? "" : "s") could not be listed") }
+        return parts.joined(separator: " and ") + (allServers ? " across your servers" : " on this server") + ", so their columns cannot appear here,"
+    }
 
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: "exclamationmark.circle").foregroundStyle(Palette.warn)
-            Text("\(count.grouped) service\(count == 1 ? "" : "s") \(allServers ? "across your servers have" : "on this server \(count == 1 ? "has" : "have")") not been crawled, so their columns cannot appear here,")
+            Text(sentence)
                 .font(.sheetUI(12.5)).foregroundStyle(Palette.ink)
             if !allServers {
                 Button("crawl them now") { Task { await model.deepCrawlCurrentServer(); await model.runColumnSearch() } }

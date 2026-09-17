@@ -3,13 +3,27 @@ import Foundation
 import ArcGISKit
 import SQLiteKit
 
+/// Knobs a test can turn while the stub is live.
+private final class StubFlags: @unchecked Sendable {
+    private let lock = NSLock()
+    private var failing: String?
+    /// A root-level folder whose listing answers with a 500 envelope.
+    var failingFolder: String? {
+        get { lock.withLock { failing } }
+        set { lock.withLock { failing = newValue } }
+    }
+}
+
 /// A stub "sampleserver6" routed by URL path: recorded fixtures where we have them, minimal
 /// synthetic JSON elsewhere, and a few deliberate failures to exercise fallbacks.
-private func stubServer() -> StubTransport {
+private func stubServer(flags: StubFlags = StubFlags()) -> StubTransport {
     StubTransport { request, _ in
         let path = request.url!.path
         let s6 = "/arcgis/rest/services"
         func fixture(_ name: String) throws -> StubTransport.Reply { try .fixture(name) }
+        if let folder = flags.failingFolder, path == "\(s6)/\(folder)" {
+            return .json(#"{"error":{"code":500,"message":"Folder is on fire","details":[]}}"#)
+        }
         switch path {
         case s6: return try fixture("s6-root.json")
         case "\(s6)/Utilities": return try fixture("s6-folder-utilities.json")
@@ -40,6 +54,7 @@ final class CrawlerTests: XCTestCase {
     private var scratch: URL!
     private var db: AppDatabase!
     private var transport: StubTransport!
+    private var flags: StubFlags!
     private var crawler: Crawler!
     private let root = "https://sampleserver6.arcgisonline.com/arcgis/rest/services"
 
@@ -48,7 +63,8 @@ final class CrawlerTests: XCTestCase {
         db = try AppDatabase(path: scratch.appendingPathComponent("explorer.sqlite").path)
         try await db.migrate()
         try await db.loadSpatial()
-        transport = stubServer()
+        flags = StubFlags()
+        transport = stubServer(flags: flags)
         let client = ArcGISClient(transport: transport, retry: RetryPolicy(maxAttempts: 2, baseDelay: 0))
         crawler = Crawler(client: client, database: db)
     }
@@ -190,5 +206,75 @@ extension CrawlerTests {
         XCTAssertEqual(second, 15, "the directory re-listing (root + 13 folders) plus one retry of the service that failed; nothing crawled successfully is fetched again")
         _ = try await crawler.deepCrawl(serverID: opened.server.id, skipFresh: 0)
         XCTAssertGreaterThan(transport.count - after - second, 14, "with no freshness window everything is re-crawled")
+    }
+}
+
+// MARK: - Folder listings (M8)
+
+extension CrawlerTests {
+    /// A folder the shallow crawl cannot read still has a row: its error is recorded, the tree
+    /// shows it, and listing it again clears the error.
+    func testFolderThatFailsToListIsRecordedAndRetried() async throws {
+        flags.failingFolder = "Elevation"
+        let opened = try await crawler.open(root)
+        XCTAssertEqual(opened.problems.map(\.folderPath), ["Elevation"])
+        XCTAssertTrue(opened.problems[0].message.contains("Folder is on fire"), opened.problems[0].message)
+
+        let folders = try await db.folders(serverID: opened.server.id)
+        XCTAssertEqual(folders.count, 13, "every folder the root lists has a row")
+        let elevation = try XCTUnwrap(folders.first { $0.path == "Elevation" })
+        XCTAssertNil(elevation.fetchedAt)
+        XCTAssertEqual(elevation.parentPath, "")
+        XCTAssertEqual(elevation.name, "Elevation")
+        XCTAssertTrue(elevation.lastError?.contains("Folder is on fire") == true, elevation.lastError ?? "")
+        let utilities = try XCTUnwrap(folders.first { $0.path == "Utilities" })
+        XCTAssertTrue(utilities.isListed)
+        XCTAssertNil(utilities.lastError)
+        let failed = try await db.failedFolders(serverID: opened.server.id)
+        XCTAssertEqual(failed.map(\.path), ["Elevation"])
+
+        let services = try await db.services(serverID: opened.server.id)
+        let tree = TreeBuilder.build(server: opened.server, services: services, layersByService: [:], folders: folders)
+        let node = try XCTUnwrap(tree.find(.folder(serverID: opened.server.id, path: "Elevation")))
+        XCTAssertEqual(node.lastError, elevation.lastError)
+        XCTAssertEqual(node.children, [])
+        XCTAssertEqual(TreeBuilder.failedFolders(in: tree).map(\.name), ["Elevation"])
+        XCTAssertNotNil(tree.find(.folder(serverID: opened.server.id, path: "Utilities"))?.fetchedAt)
+
+        // Retry: the server recovers, the folder page's Retry lists it again.
+        flags.failingFolder = nil
+        try await crawler.crawlFolder(serverID: opened.server.id, path: "Elevation")
+        let after = try await db.folders(serverID: opened.server.id)
+        let recovered = try XCTUnwrap(after.first { $0.path == "Elevation" })
+        XCTAssertNil(recovered.lastError)
+        XCTAssertNotNil(recovered.fetchedAt)
+        let none = try await db.failedFolders(serverID: opened.server.id)
+        XCTAssertEqual(none.count, 0)
+
+        // And a retry that fails again writes the new message.
+        flags.failingFolder = "Elevation"
+        await XCTAssertThrowsErrorAsync(try await self.crawler.crawlFolder(serverID: opened.server.id, path: "Elevation"))
+        let again = try await db.failedFolders(serverID: opened.server.id)
+        XCTAssertEqual(again.map(\.path), ["Elevation"])
+        XCTAssertNotNil(again.first?.fetchedAt, "the earlier successful listing's time is kept")
+    }
+
+    /// A folder that vanishes from its parent's listing goes, with its sub-folders and services.
+    func testPrunedFoldersTakeTheirServicesWithThem() async throws {
+        let server = try await db.addServer(rootURL: URL(string: root)!, friendlyName: "s6")
+        try await db.upsertFolders(serverID: server.id, parentPath: "", paths: ["A", "B"])
+        try await db.upsertFolders(serverID: server.id, parentPath: "A", paths: ["A/C"])
+        try await db.upsertServices(serverID: server.id, rootURL: URL(string: root)!, folderPath: "A/C",
+                                    entries: [ServiceDirectory.Entry(name: "A/C/Deep", type: "MapServer")])
+        try await db.upsertServices(serverID: server.id, rootURL: URL(string: root)!, folderPath: "B",
+                                    entries: [ServiceDirectory.Entry(name: "B/Kept", type: "MapServer")])
+        try await db.pruneFolders(serverID: server.id, parentPath: "", keeping: ["B"])
+        let folders = try await db.folders(serverID: server.id)
+        XCTAssertEqual(folders.map(\.path), ["B"])
+        let services = try await db.services(serverID: server.id)
+        XCTAssertEqual(services.map(\.name), ["B/Kept"])
+        try await db.forgetServer(id: server.id)
+        let gone = try await db.folders(serverID: server.id)
+        XCTAssertEqual(gone.count, 0)
     }
 }

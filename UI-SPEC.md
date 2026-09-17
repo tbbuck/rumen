@@ -76,7 +76,9 @@ margins.
 - **`TreeRow`** — chevron, layer id (mono, right-aligned), name, `KindLabel` for
   services, `ExtentLocator` at the right. Non-extractable layers are dimmed; an
   uncrawled service shows a chevron and crawls on expand; a stale node gets a `warn`
-  caption. *One node, its kind, its extent, its verdict, in one row.*
+  caption; a folder whose listing failed, or a service whose crawl failed, shows the
+  error glyph in place of the locator with the message as its tooltip, and its page
+  offers Retry. *One node, its kind, its extent, its verdict, in one row.*
 - **`KindLabel`** — `MapServer` / `FeatureServer` / `ImageServer` in 9.5 `muted2`
   after a service name. *Kind without a glyph.*
 - **`ExtentLocator`** — 22 × 15 `Canvas`: frame = the server's union extent, filled
@@ -223,8 +225,9 @@ margins.
   servers) + results table Field · Layer · Service · Server · Type · Verdict;
   double-click navigates and clears. *SPEC §5.8, without a mode.*
 - **`DeepCrawlPrompt`** — banner above results when the scope has uncrawled
-  services: "12 services on this server have not been crawled, crawl them now".
-  *Say what the results cannot see.*
+  services or folders that could not be listed: "12 services on this server have not
+  been crawled and 2 folders could not be listed, crawl them now". *Say what the
+  results cannot see.*
 
 ## Servers, auth, sheets
 
@@ -260,6 +263,10 @@ margins.
 
 ## Empty and error states
 
+- Errors that are not a transfer's: a banner across the top of the page, under the title
+  bar and beside the tree, with the message verbatim, Dismiss, and Retry when the step can
+  run again; it slides in unless Reduce Motion is on. *A failed open never reads as
+  "nothing happened".*
 - No servers yet: the layer page shows "Paste an ArcGIS URL into the bar above, or
   press ⌘L" with two example shapes of URL. *An empty screen is an invitation.*
 - Uncrawled service selected: "Loading 7 layers from the server…" then the tree

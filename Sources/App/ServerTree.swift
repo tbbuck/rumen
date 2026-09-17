@@ -100,6 +100,8 @@ private struct TreeRow: View {
     private var isSelected: Bool { model.selection == node.id }
     private var isLoading: Bool { model.loadingNodes.contains(node.id) }
     private var isDimmed: Bool { node.extractable == false }
+    /// A crawl that failed on this node, or a folder listing that failed (recorded on its row).
+    private var rowError: String? { model.nodeErrors[node.id] ?? node.lastError }
     @State private var hovered = false
 
     var body: some View {
@@ -115,7 +117,7 @@ private struct TreeRow: View {
                     Task { await model.select(node.id) }
                 }
             }
-            .help(model.nodeErrors[node.id] ?? "")
+            .help(rowError ?? "")
     }
 
     private var content: some View {
@@ -143,7 +145,7 @@ private struct TreeRow: View {
                 Caption("stale", size: 10.5, color: Palette.warn)
             }
             Spacer(minLength: 4)
-            if model.nodeErrors[node.id] != nil {
+            if rowError != nil {
                 Image(systemName: "exclamationmark.circle").font(.system(size: 11)).foregroundStyle(Palette.no)
                     .frame(width: 22, height: 15)
             } else {

@@ -53,6 +53,35 @@ public struct ServerRecord: Sendable, Equatable, Identifiable {
     public var host: String { rootURL.host ?? rootURL.absoluteString }
 }
 
+/// A folder a directory listed, with the outcome of listing it (M8): a folder that could not
+/// be read still has a row, so the tree can show it with its error and offer Retry.
+public struct FolderRecord: Sendable, Equatable, Identifiable {
+    public let id: Int64
+    public let serverID: Int64
+    /// `"A"` at the root, `"A/B"` nested.
+    public let path: String
+    /// `""` for a folder at the root.
+    public let parentPath: String
+    public let name: String
+    /// The listing's error, verbatim; nil when the last listing succeeded.
+    public var lastError: String?
+    /// When the folder was last listed successfully; nil if never.
+    public var fetchedAt: Date?
+
+    public init(id: Int64, serverID: Int64, path: String, parentPath: String, name: String,
+                lastError: String? = nil, fetchedAt: Date? = nil) {
+        self.id = id
+        self.serverID = serverID
+        self.path = path
+        self.parentPath = parentPath
+        self.name = name
+        self.lastError = lastError
+        self.fetchedAt = fetchedAt
+    }
+
+    public var isListed: Bool { fetchedAt != nil }
+}
+
 public struct ServiceRecord: Sendable, Equatable, Identifiable {
     public let id: Int64
     public let serverID: Int64

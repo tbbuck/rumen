@@ -92,6 +92,7 @@ extension AppDatabase {
             try query("DELETE FROM field WHERE layer_id IN (\(layersOf));", [.int(id)])
             try query("DELETE FROM layer WHERE service_id IN (SELECT id FROM service WHERE server_id = ?);", [.int(id)])
             try query("DELETE FROM service WHERE server_id = ?;", [.int(id)])
+            try query("DELETE FROM folder WHERE server_id = ?;", [.int(id)])
             try query("DELETE FROM server WHERE id = ?;", [.int(id)])
             try execScript("COMMIT;")
         } catch {
@@ -116,6 +117,104 @@ extension AppDatabase {
         let trimmed = cookie?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let bind: SQLBind = trimmed.isEmpty ? .null : .string(trimmed)
         try query("UPDATE server SET cookie = ? WHERE id = ?;", [bind, .int(serverID)])
+    }
+
+    // MARK: - Folders
+
+    private static let folderColumns = "id, server_id, path, parent_path, name, last_error, fetched_at"
+
+    /// Records the folders a directory lists, by full path. Existing rows keep their outcome.
+    @discardableResult
+    public func upsertFolders(serverID: Int64, parentPath: String, paths: [String]) throws -> [FolderRecord] {
+        var records = [FolderRecord]()
+        for path in paths {
+            let id = try query("""
+                INSERT INTO folder (server_id, path, parent_path, name) VALUES (?, ?, ?, ?)
+                ON CONFLICT (server_id, path) DO UPDATE SET parent_path = excluded.parent_path, name = excluded.name
+                RETURNING id;
+                """, [.int(serverID), .string(path), .string(parentPath), .string(Self.folderName(path))]).rows.first?.first?.int64
+            guard let id else { throw MetadataStoreError.unexpectedRow("folder insert") }
+            records.append(try folder(id: id))
+        }
+        return records
+    }
+
+    /// Drops folders directly under `parentPath` that are not in `keeping`, with their
+    /// sub-folders and the services beneath them: the reconcile step after a fresh listing.
+    public func pruneFolders(serverID: Int64, parentPath: String, keeping paths: [String]) throws {
+        let keep = Set(paths)
+        let current = try query("SELECT path FROM folder WHERE server_id = ? AND parent_path = ?;",
+                                [.int(serverID), .string(parentPath)]).rows
+        for row in current {
+            guard let path = row[0].stringValue, !keep.contains(path) else { continue }
+            try deleteFolder(serverID: serverID, path: path)
+        }
+    }
+
+    /// Removes a folder, its sub-folders, and every service under them.
+    public func deleteFolder(serverID: Int64, path: String) throws {
+        let below = Self.likePrefix(path) + "/%"
+        let services = try query("SELECT id FROM service WHERE server_id = ? AND (folder_path = ? OR folder_path LIKE ? ESCAPE '\\');",
+                                 [.int(serverID), .string(path), .string(below)]).rows
+        for row in services { if let id = row[0].int64 { try deleteService(id: id) } }
+        try query("DELETE FROM folder WHERE server_id = ? AND (path = ? OR path LIKE ? ESCAPE '\\');",
+                  [.int(serverID), .string(path), .string(below)])
+    }
+
+    /// The folder was listed: clears its error and stamps the time. Makes the row if the folder
+    /// was reached directly (a pasted URL) rather than through its parent's listing.
+    public func markFolderListed(serverID: Int64, path: String, at date: Date = Date()) throws {
+        guard !path.isEmpty else { return }
+        try query("""
+            INSERT INTO folder (server_id, path, parent_path, name, last_error, fetched_at) VALUES (?, ?, ?, ?, NULL, ?)
+            ON CONFLICT (server_id, path) DO UPDATE SET last_error = NULL, fetched_at = excluded.fetched_at;
+            """, [.int(serverID), .string(path), .string(Self.parentPath(path)), .string(Self.folderName(path)), date.bindValue])
+    }
+
+    /// The folder could not be listed: keeps whatever was cached beneath it and records why.
+    public func markFolderFailed(serverID: Int64, path: String, error: String) throws {
+        guard !path.isEmpty else { return }
+        try query("""
+            INSERT INTO folder (server_id, path, parent_path, name, last_error) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT (server_id, path) DO UPDATE SET last_error = excluded.last_error;
+            """, [.int(serverID), .string(path), .string(Self.parentPath(path)), .string(Self.folderName(path)), .string(error)])
+    }
+
+    /// Every recorded folder of a server, by path.
+    public func folders(serverID: Int64) throws -> [FolderRecord] {
+        try query("SELECT \(Self.folderColumns) FROM folder WHERE server_id = ? ORDER BY path;", [.int(serverID)])
+            .rows.compactMap(Self.folderRecord)
+    }
+
+    public func folder(id: Int64) throws -> FolderRecord {
+        guard let row = try query("SELECT \(Self.folderColumns) FROM folder WHERE id = ?;", [.int(id)]).rows.first,
+              let record = Self.folderRecord(row) else { throw MetadataStoreError.notFound("folder \(id)") }
+        return record
+    }
+
+    /// Folders in scope whose last listing failed: what the tree, the deep crawl, and column
+    /// search cannot see. nil = every server.
+    public func failedFolders(serverID: Int64? = nil) throws -> [FolderRecord] {
+        let scope = serverID.map { " AND server_id = \($0)" } ?? ""
+        return try query("SELECT \(Self.folderColumns) FROM folder WHERE last_error IS NOT NULL\(scope) ORDER BY server_id, path;")
+            .rows.compactMap(Self.folderRecord)
+    }
+
+    private static func folderRecord(_ r: [SQLValue]) -> FolderRecord? {
+        guard r.count == 7, let id = r[0].int64, let serverID = r[1].int64, let path = r[2].stringValue,
+              let parent = r[3].stringValue, let name = r[4].stringValue else { return nil }
+        return FolderRecord(id: id, serverID: serverID, path: path, parentPath: parent, name: name,
+                            lastError: r[5].stringValue, fetchedAt: r[6].dateFromMicros)
+    }
+
+    static func folderName(_ path: String) -> String { path.split(separator: "/").last.map(String.init) ?? path }
+
+    static func parentPath(_ path: String) -> String {
+        path.split(separator: "/").dropLast().joined(separator: "/")
+    }
+
+    static func likePrefix(_ s: String) -> String {
+        s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "%", with: "\\%").replacingOccurrences(of: "_", with: "\\_")
     }
 
     // MARK: - Services

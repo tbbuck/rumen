@@ -106,7 +106,9 @@ and into DuckDB, Parquet, and friends, without ArcGIS tooling.
   navigates to the target node rather than creating a duplicate.
 
 ### 5.2 Crawl & cache
-- **Shallow crawl on add**: root → folders → service lists. Cheap, always done.
+- **Shallow crawl on add**: root → folders → service lists. Cheap, always done. Every folder
+  listed is recorded with the outcome of listing it; a folder that fails keeps whatever was
+  cached beneath it, shows its error in the tree and on its page, and offers Retry there.
 - **Service crawl on select**: a service's `?f=json` (layers, tables, capabilities,
   `maxRecordCount`, `supportedQueryFormats`), then its layer definitions. Prefer the
   bulk `…/MapServer/layers?f=json` (also on FeatureServer) — one request per service —
@@ -367,6 +369,11 @@ Tables (initial):
 - `server` — id, root_url, friendly_name, origin_override, referer_override,
   auth_kind, username, token_service_url, arcgis_version, created_at,
   last_visited_at, last_deep_crawl_at.
+- `folder` — id, server_id, path, parent_path, name, last_error, fetched_at: every folder a
+  directory listed, with the outcome of listing it, so a folder that could not be read (a
+  500, a timeout, a permission wall) still has a place in the tree, with its error and a
+  Retry (M8). Servers cached before this table existed still get their folders from the
+  paths of the services under them.
 - `service` — id, server_id, folder_path, name, type, url, capabilities,
   max_record_count, supported_query_formats, is_tile_cache, raw JSON, fetched_at.
 - `layer` — id, service_id, layer_id, name, type, geometry_type, parent_layer_id,

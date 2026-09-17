@@ -30,7 +30,11 @@ struct DetailPane: View {
                 if let tree = model.tree { DirectoryPage(title: tree.name, subtitle: serverSubtitle, nodes: tree.children) }
             case .folder(_, let path)?:
                 if let node = model.tree?.find(.folder(serverID: model.currentServer?.id ?? 0, path: path)) {
-                    DirectoryPage(title: node.name, subtitle: "Folder on \(model.currentServer?.friendlyName ?? "")", nodes: node.children)
+                    let listed = node.fetchedAt.map { ", listed \(Age.text($0))" } ?? ""
+                    DirectoryPage(title: node.name, subtitle: "Folder on \(model.currentServer?.friendlyName ?? "")\(listed).",
+                                  nodes: node.children, error: node.lastError,
+                                  isRetrying: model.loadingNodes.contains(node.id),
+                                  retry: { Task { await model.retryFolder(path) } })
                 }
             case .service(let id)?:
                 if let service = model.currentService, let node = model.tree?.find(.service(id)) {
@@ -82,6 +86,10 @@ private struct DirectoryPage: View {
     let title: String
     let subtitle: String
     let nodes: [TreeNode]
+    /// A folder whose listing failed: the server's message, and Retry (M8).
+    var error: String? = nil
+    var isRetrying = false
+    var retry: (() -> Void)? = nil
 
     var body: some View {
         ScrollView {
@@ -89,6 +97,18 @@ private struct DirectoryPage: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title).font(.sheetDisplay(24)).foregroundStyle(Palette.ink).tracking(-0.24)
                 Caption(subtitle)
+            }
+            if let error {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("This folder could not be listed. What follows is what was cached before, if anything.")
+                        .font(.sheetUI(13)).foregroundStyle(Palette.ink).frame(maxWidth: 720, alignment: .leading)
+                    ErrorText(message: error)
+                    if isRetrying {
+                        HStack(spacing: 8) { ProgressView().controlSize(.small); Caption("Listing again…") }
+                    } else if let retry {
+                        Button("Retry", action: retry).buttonStyle(LinkButtonStyle())
+                    }
+                }
             }
             let folders = nodes.filter { $0.kind == .folder }
             let services = nodes.filter { if case .service = $0.kind { return true } else { return false } }
@@ -147,7 +167,12 @@ private struct ChildRow: View {
                     }
                 }
                 Spacer(minLength: 12)
-                ExtentLocator(extent: node.extent, frame: model.tree?.extent, style: locatorStyle, trusted: node.kind == .folder)
+                if node.lastError != nil {
+                    Image(systemName: "exclamationmark.circle").font(.system(size: 11)).foregroundStyle(Palette.no)
+                        .frame(width: 22, height: 15)
+                } else {
+                    ExtentLocator(extent: node.extent, frame: model.tree?.extent, style: locatorStyle, trusted: node.kind == .folder)
+                }
                 Image(systemName: "chevron.right")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(hovered ? Palette.accent : Palette.muted2)
@@ -161,6 +186,7 @@ private struct ChildRow: View {
         }
         .buttonStyle(.plain)
         .hoverTracking($hovered, hand: true)
+        .help(node.lastError ?? "")
     }
 
     /// The layer id in mono, as in the tree; a glyph for folders and services.
@@ -199,6 +225,7 @@ private struct ChildRow: View {
             let folders = node.children.filter { $0.kind == .folder }.count
             let services = node.children.count - folders
             var parts = [String]()
+            if node.lastError != nil { parts.append("Could not be listed") }
             if folders > 0 { parts.append(folders == 1 ? "1 folder" : "\(folders) folders") }
             if services > 0 { parts.append(services == 1 ? "1 service" : "\(services) services") }
             return parts.isEmpty ? nil : parts.joined(separator: ", ")

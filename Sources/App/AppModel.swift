@@ -78,6 +78,7 @@ final class AppModel {
     var searchAllServers = false
     private(set) var searchHits: [FieldSearchHit] = []
     private(set) var searchUncrawled = 0
+    private(set) var searchFailedFolders = 0
     private(set) var searchError: String?
     var focusColumnSearch = false
     var treeFilter = ""
@@ -186,11 +187,32 @@ final class AppModel {
         guard let database, let server = currentServer else { tree = nil; return }
         services = try await database.services(serverID: server.id)
         let byService = try await database.layersByService(serverID: server.id)
+        let folders = try await database.folders(serverID: server.id)
         layersByService = byService
         openingStatus?.step = "Building the tree…"
         let built = services
-        tree = await Task.detached(priority: .userInitiated) { TreeBuilder.build(server: server, services: built, layersByService: byService) }.value
+        tree = await Task.detached(priority: .userInitiated) {
+            TreeBuilder.build(server: server, services: built, layersByService: byService, folders: folders)
+        }.value
         treeVersion += 1
+    }
+
+    /// Lists a folder again after it failed (M8): the folder page's Retry.
+    func retryFolder(_ path: String) async {
+        guard let crawler, let server = currentServer else { return }
+        clearError()
+        let id = NodeID.folder(serverID: server.id, path: path)
+        loadingNodes.insert(id)
+        defer { loadingNodes.remove(id) }
+        do {
+            try await crawler.crawlFolder(serverID: server.id, path: path)
+            try await reloadServers()
+            try await reloadTree()
+            await select(selection)
+        } catch {
+            try? await reloadTree()
+            report(error, retry: { [weak self] in await self?.retryFolder(path) })
+        }
     }
 
     /// The flattened, currently visible rows (server header is drawn separately).
@@ -788,6 +810,7 @@ extension AppModel {
         do {
             searchHits = try await database.searchFields(options)
             searchUncrawled = try await database.uncrawledServiceCount(serverID: options.serverID)
+            searchFailedFolders = try await database.failedFolders(serverID: options.serverID).count
             searchError = nil
         } catch {
             searchHits = []

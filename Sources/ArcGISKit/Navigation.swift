@@ -39,10 +39,13 @@ public struct TreeNode: Identifiable, Sendable, Equatable {
     /// are cached yet — an uncrawled service is expandable and crawls on expand.
     public let isExpandable: Bool
     public let children: [TreeNode]
+    /// For a folder: why its last listing failed, verbatim; the tree shows the glyph and the
+    /// page offers Retry.
+    public let lastError: String?
 
     public init(id: NodeID, name: String, kind: Kind, folderDepth: Int = 0, layerID: Int? = nil,
                 extent: BoundingBox? = nil, extractable: Bool? = nil, fetchedAt: Date? = nil,
-                isExpandable: Bool = false, children: [TreeNode] = []) {
+                isExpandable: Bool = false, children: [TreeNode] = [], lastError: String? = nil) {
         self.id = id
         self.name = name
         self.kind = kind
@@ -53,6 +56,7 @@ public struct TreeNode: Identifiable, Sendable, Equatable {
         self.fetchedAt = fetchedAt
         self.isExpandable = isExpandable
         self.children = children
+        self.lastError = lastError
     }
 
     /// Depth-first search.
@@ -63,13 +67,24 @@ public struct TreeNode: Identifiable, Sendable, Equatable {
     }
 }
 
-/// Builds the tree for one server from its cached services and layers.
+/// Builds the tree for one server from its cached services, layers, and folder listings.
 public enum TreeBuilder {
+    /// `folders` are the recorded listings (M8); a server cached before they were recorded
+    /// still gets its folders from the paths of the services under them.
     public static func build(server: ServerRecord, services: [ServiceRecord],
-                             layersByService: [Int64: [LayerRecord]]) -> TreeNode {
+                             layersByService: [Int64: [LayerRecord]], folders: [FolderRecord] = []) -> TreeNode {
         let byFolder = Dictionary(grouping: services, by: \.folderPath)
-        let children = folderChildren(serverID: server.id, path: "", depth: 0,
-                                      byFolder: byFolder, layersByService: layersByService)
+        var paths = Set<String>()
+        for path in folders.map(\.path) + byFolder.keys.filter({ !$0.isEmpty }) {
+            var accumulated = ""
+            for part in path.split(separator: "/") {
+                accumulated = accumulated.isEmpty ? String(part) : accumulated + "/" + part
+                paths.insert(accumulated)
+            }
+        }
+        let records = Dictionary(folders.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
+        let children = folderChildren(serverID: server.id, path: "", depth: 0, byFolder: byFolder,
+                                      layersByService: layersByService, paths: paths, records: records)
         return TreeNode(id: .server(server.id), name: server.friendlyName, kind: .server,
                         extent: BoundingBox.union(of: children.compactMap(\.extent)),
                         fetchedAt: server.lastVisitedAt, isExpandable: true, children: children)
@@ -79,21 +94,19 @@ public enum TreeBuilder {
     /// services, both alphabetically.
     private static func folderChildren(serverID: Int64, path: String, depth: Int,
                                        byFolder: [String: [ServiceRecord]],
-                                       layersByService: [Int64: [LayerRecord]]) -> [TreeNode] {
+                                       layersByService: [Int64: [LayerRecord]],
+                                       paths: Set<String>, records: [String: FolderRecord]) -> [TreeNode] {
         let prefix = path.isEmpty ? "" : path + "/"
-        // Immediate sub-folder names: the next path segment of every deeper folder path.
-        var subfolders = Set<String>()
-        for folderPath in byFolder.keys where folderPath != path && folderPath.hasPrefix(prefix) {
-            let rest = folderPath.dropFirst(prefix.count)
-            subfolders.insert(String(rest.split(separator: "/", maxSplits: 1)[0]))
-        }
-        let folderNodes = subfolders.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }.map { name -> TreeNode in
-            let childPath = prefix + name
-            let kids = folderChildren(serverID: serverID, path: childPath, depth: depth + 1,
-                                      byFolder: byFolder, layersByService: layersByService)
-            return TreeNode(id: .folder(serverID: serverID, path: childPath), name: name, kind: .folder,
+        // Immediate sub-folders: one more segment than this path.
+        let subfolders = paths.filter { $0.hasPrefix(prefix) && !$0.dropFirst(prefix.count).isEmpty && !$0.dropFirst(prefix.count).contains("/") }
+        let folderNodes = subfolders.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }.map { childPath -> TreeNode in
+            let record = records[childPath]
+            let kids = folderChildren(serverID: serverID, path: childPath, depth: depth + 1, byFolder: byFolder,
+                                      layersByService: layersByService, paths: paths, records: records)
+            return TreeNode(id: .folder(serverID: serverID, path: childPath),
+                            name: record?.name ?? String(childPath.dropFirst(prefix.count)), kind: .folder,
                             folderDepth: depth, extent: BoundingBox.union(of: kids.compactMap(\.extent)),
-                            isExpandable: true, children: kids)
+                            fetchedAt: record?.fetchedAt, isExpandable: true, children: kids, lastError: record?.lastError)
         }
         let serviceNodes = (byFolder[path] ?? [])
             .sorted {
@@ -108,6 +121,17 @@ public enum TreeBuilder {
                                 fetchedAt: service.fetchedAt, isExpandable: service.type.hasLayers, children: layers)
             }
         return folderNodes + serviceNodes
+    }
+
+    /// Every folder node with a listing error, depth first.
+    public static func failedFolders(in tree: TreeNode) -> [TreeNode] {
+        var out = [TreeNode]()
+        func walk(_ node: TreeNode) {
+            if node.kind == .folder, node.lastError != nil { out.append(node) }
+            node.children.forEach(walk)
+        }
+        walk(tree)
+        return out
     }
 
     private static func layerNode(_ layer: LayerRecord, depth: Int) -> TreeNode {

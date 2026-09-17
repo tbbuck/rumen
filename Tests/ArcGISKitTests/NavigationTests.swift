@@ -65,6 +65,35 @@ final class NavigationTests: XCTestCase {
         XCTAssertNil(tree.find(.layer(99)))
     }
 
+    /// Recorded folder listings (M8): a folder with nothing under it still appears, one that
+    /// failed to list carries its error, and folders implied by service paths remain.
+    func testTreeUsesRecordedFoldersAndKeepsImpliedOnes() {
+        let listed = Date(timeIntervalSince1970: 1_700_000_000)
+        let folders = [
+            FolderRecord(id: 1, serverID: 1, path: "Empty", parentPath: "", name: "Empty", fetchedAt: listed),
+            FolderRecord(id: 2, serverID: 1, path: "Broken", parentPath: "", name: "Broken", lastError: "HTTP 500 from …/Broken"),
+            FolderRecord(id: 3, serverID: 1, path: "Utilities", parentPath: "", name: "Utilities", fetchedAt: listed),
+            FolderRecord(id: 4, serverID: 1, path: "Utilities/Nested", parentPath: "Utilities", name: "Nested", fetchedAt: listed),
+        ]
+        let services = [
+            service(5, "Deep", .mapServer, folder: "Utilities/Nested"),
+            service(6, "Roads", .featureServer, folder: "Transport"),
+        ]
+        let tree = TreeBuilder.build(server: server, services: services, layersByService: [:], folders: folders)
+        XCTAssertEqual(tree.children.map(\.name), ["Broken", "Empty", "Transport", "Utilities"])
+        XCTAssertEqual(tree.children.map(\.kind), [.folder, .folder, .folder, .folder])
+        let broken = tree.children[0]
+        XCTAssertEqual(broken.lastError, "HTTP 500 from …/Broken")
+        XCTAssertNil(broken.fetchedAt)
+        XCTAssertEqual(broken.children, [])
+        XCTAssertEqual(tree.children[1].fetchedAt, listed)
+        XCTAssertNil(tree.children[2].fetchedAt, "an implied folder has no listing record")
+        XCTAssertNil(tree.children[2].lastError)
+        XCTAssertEqual(tree.children[3].children.map(\.name), ["Nested"])
+        XCTAssertEqual(tree.children[3].children[0].children.map(\.name), ["Deep"])
+        XCTAssertEqual(TreeBuilder.failedFolders(in: tree).map(\.name), ["Broken"])
+    }
+
     func testPathBarContent() {
         let svc = service(7, "LLPG", .mapServer, folder: "Property")
         let layer = LayerRecord(id: 70, serviceID: 7, layerID: 3, name: "BLPU Addresses")

@@ -128,15 +128,22 @@ public actor Crawler {
         let records = try await db.upsertServices(serverID: serverID, rootURL: server.rootURL,
                                                   folderPath: folderPath, entries: listing.services)
         try await db.pruneServices(serverID: serverID, folderPath: folderPath, keeping: records.map(\.url))
+        // Folder names in a listing are bare at the root but may be "Parent/Child" deeper. Every
+        // folder listed gets a row now, so one that fails to list below still has a place in
+        // the tree, with its error.
+        let folderPaths = listing.folders.map { folder in
+            folder.contains("/") ? folder : (folderPath.isEmpty ? folder : folderPath + "/" + folder)
+        }
+        try await db.upsertFolders(serverID: serverID, parentPath: folderPath, paths: folderPaths)
+        try await db.pruneFolders(serverID: serverID, parentPath: folderPath, keeping: folderPaths)
+        try await db.markFolderListed(serverID: serverID, path: folderPath)
         progress?(.directory(folderPath: folderPath, services: records.count))
         guard recursive else { return [] }
         var problems = [CrawlProblem]()
-        for folder in listing.folders {
+        for path in folderPaths {
             try Task.checkCancellation()
-            // Folder names in a listing are bare at the root but may be "Parent/Child" deeper.
-            let path = folder.contains("/") ? folder : (folderPath.isEmpty ? folder : folderPath + "/" + folder)
             do {
-                problems += try await crawlDirectory(serverID: serverID, folderPath: path, recursive: true, progress: progress)
+                problems += try await crawlFolder(serverID: serverID, path: path, progress: progress)
             } catch {
                 if error is CancellationError { throw error }
                 if let client = error as? ArcGISClientError, case .cancelled = client { throw error }
@@ -146,6 +153,22 @@ public actor Crawler {
             }
         }
         return problems
+    }
+
+    /// Lists one folder and everything under it, recording the outcome on the folder's row:
+    /// the shallow crawl's per-folder step and the folder page's Retry. A failure is written
+    /// to the row, then rethrown.
+    @discardableResult
+    public func crawlFolder(serverID: Int64, path: String,
+                            progress: (@Sendable (CrawlEvent) -> Void)? = nil) async throws -> [CrawlProblem] {
+        do {
+            return try await crawlDirectory(serverID: serverID, folderPath: path, recursive: true, progress: progress)
+        } catch {
+            if error is CancellationError { throw error }
+            if let client = error as? ArcGISClientError, case .cancelled = client { throw error }
+            try await db.markFolderFailed(serverID: serverID, path: path, error: String(describing: error))
+            throw error
+        }
     }
 
     // MARK: - Service crawl

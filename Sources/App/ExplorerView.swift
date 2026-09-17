@@ -12,12 +12,19 @@ struct ExplorerView: View {
         VStack(spacing: 0) {
             TitleBar()
             Rectangle().fill(Palette.line).frame(height: 1)
-            HStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 0) {
                 ServerTree()
                     .frame(width: model.treeWidth)
                 PanelDivider()
-                DetailPane()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // The page gets exactly the space left and never more: a tab whose content wants
+                // more height than the window has with the drawer open (a grid with a minimum
+                // height under a query box) would otherwise grow the whole stack, which SwiftUI
+                // then centres, pushing the title bar off the top and the tree down. Now such a
+                // page is cut at the bottom instead, under the drawer, and the chrome stays put.
+                GeometryReader { space in
+                    DetailPane()
+                        .frame(width: space.size.width, height: space.size.height, alignment: .top)
+                }
                     // Errors sit at the top of the page, under the title bar, where a failed open
                     // is seen; run failures stay in the transfers drawer.
                     .overlay(alignment: .top) {
@@ -36,7 +43,7 @@ struct ExplorerView: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("ArcGIS Explorer")
         .ignoresSafeArea(.container, edges: .top)
-        .onAppear { FieldFocus.install(); TitleBarZoom.install(model: model); FieldFocus.clearInitialFocus() }
+        .onAppear { FieldFocus.install(); TitleBarZoom.install(model: model); HostingViews.install(); FieldFocus.clearInitialFocus() }
         .sheet(item: $model.pendingAdd) { pending in
             AddServerSheet(pending: pending)
         }
@@ -262,6 +269,38 @@ enum FieldFocus {
             let inField = field.convert(field.bounds, to: nil).contains(event.locationInWindow)
             if !inField { window.makeFirstResponder(nil) }
             return event
+        }
+    }
+}
+
+/// The AppKit view that hosts a window's SwiftUI content sits in the accessibility tree as a
+/// nameless group between the window and the app's own named root, and the audit reported
+/// each one as an element without a description. It carries nothing of the app's, so it
+/// steps out of the tree and its children become the window's; where AppKit keeps it as an
+/// element regardless, it takes the window's name. Every window that becomes key is covered:
+/// the main window, each sheet, and Preferences.
+@MainActor
+final class HostingViews: NSObject {
+    private static var shared: HostingViews?
+
+    static func install() {
+        guard shared == nil else { return }
+        let observer = HostingViews()
+        shared = observer
+        // Window notifications post on the main thread; the selector form keeps that plain.
+        NotificationCenter.default.addObserver(observer, selector: #selector(windowBecameKey(_:)), name: NSWindow.didBecomeKeyNotification, object: nil)
+        for window in NSApp.windows { name(window) }
+    }
+
+    @objc private func windowBecameKey(_ note: Notification) {
+        Self.name(note.object as? NSWindow)
+    }
+
+    private static func name(_ window: NSWindow?) {
+        guard let window, let content = window.contentView, content.isAccessibilityElement() else { return }
+        content.setAccessibilityElement(false)
+        if content.isAccessibilityElement() {
+            content.setAccessibilityLabel(window.title.isEmpty ? "ArcGIS Explorer" : window.title)
         }
     }
 }

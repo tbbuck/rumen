@@ -14,7 +14,7 @@ struct LayerPage: View {
         @Bindable var model = model
         VStack(alignment: .leading, spacing: 18) {
             LayerHeader(layer: layer, service: service)
-            LayerTabs(selection: $model.layerTab)
+            LayerTabs(selection: $model.layerTab, tabs: model.availableTabs)
             if model.layerTab == .query, let session = model.querySession {
                 QueryTab(session: session)
                     .padding(.bottom, 18)
@@ -73,20 +73,26 @@ private struct LayerHeader: View {
     }
 
     private var subtitle: String {
+        if layer.isOGC {
+            let version = service.ogcDetail.map { " \($0.version)" } ?? ""
+            return "\(layer.type ?? "Layer") \(layer.ogcName ?? "") in \(service.shortName) (\(service.type.name)\(version)). Cached \(Age.text(layer.fetchedAt)),"
+        }
         let what = layer.isTable ? "Table" : "Layer"
         let folder = service.folderPath.isEmpty ? "" : ", \(service.folderPath) folder"
         return "\(what) \(layer.layerID) in \(service.shortName) (\(service.type.name))\(folder). Cached \(Age.text(layer.fetchedAt)),"
     }
 }
 
-/// Overview · Fields · Query · Download · Stored · Map · Raw as underlined text tabs.
+/// Overview · Fields · Query · Download · Stored · Map · Raw as underlined text tabs; an OGC
+/// layer offers only the ones its protocol can answer (M10).
 private struct LayerTabs: View {
     @Binding var selection: LayerTab
+    let tabs: [LayerTab]
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 24) {
-                ForEach(LayerTab.allCases) { tab in
+                ForEach(tabs) { tab in
                     TabButton(tab: tab, isOn: selection == tab) { selection = tab }
                 }
                 Spacer()
@@ -104,13 +110,49 @@ private struct OverviewTab: View {
     let fields: [FieldRecord]
 
     var body: some View {
-        ExtractionStatement(layer: layer)
-        FactGrid(rows: facts)
-        SectionHeading("Fields")
-        FieldsTable(fields: fields)
+        ExtractionStatement(layer: layer, service: service)
+        FactGrid(rows: layer.isOGC ? ogcFacts : arcgisFacts)
+        if !layer.isOGC || !fields.isEmpty {   // a WMS or WMTS layer has no fields to list
+            SectionHeading("Fields")
+            FieldsTable(fields: fields)
+        }
     }
 
-    private var facts: [(String, String, Bool)] {
+    /// What the capabilities said about an OGC layer (M10).
+    private var ogcFacts: [(String, String, Bool)] {
+        let d = layer.ogcDetail
+        func list(_ items: [String]?, empty: String) -> String { (items ?? []).isEmpty ? empty : items!.joined(separator: ", ") }
+        let wgs = layer.extentWGS84.map { "\(fmt($0.minX, 3)) \(fmt($0.minY, 3)) to \(fmt($0.maxX, 3)) \(fmt($0.maxY, 3))" } ?? "—"
+        let defaultCRS = d?.defaultCRS.map { crs in "\(crs)\(OGCURL.epsgCode(crs).map { " (\(srName($0)) \($0))" } ?? "")" } ?? "—"
+        var rows: [(String, String, Bool)] = [
+            ("Name", layer.ogcName ?? "—", true),
+            ("Title", d?.title ?? layer.name, false),
+            ("Default CRS", defaultCRS, true),
+            ("Extent, WGS 84", wgs, true),
+            ("Other CRS", list(d.map { Array($0.crs.dropFirst()) }, empty: "None listed"), true),
+            ("Keywords", list(d?.keywords, empty: "—"), false),
+        ]
+        switch service.type {
+        case .wfs:
+            rows.append(("Geometry", layer.geometryType.map { geometryName($0) } ?? "Not described yet", false))
+            rows.append(("Feature count", layer.featureCount.map { "\($0.grouped), counted \(Age.text(layer.featureCountAt))" } ?? "Not counted yet", false))
+            rows.append(("Output formats", list(service.ogcDetail?.formats, empty: "—"), false))
+        case .wms:
+            rows.append(("Queryable", d?.queryable == true ? "Yes, GetFeatureInfo" : "No", false))
+            rows.append(("Styles", list(d?.styles, empty: "Default only"), false))
+            rows.append(("Picture formats", list(service.ogcDetail?.formats, empty: "—"), false))
+        case .wmts:
+            rows.append(("Tile matrix sets", list(d?.tileMatrixSetLinks, empty: "—"), false))
+            rows.append(("Tile formats", list(d?.formats, empty: "—"), false))
+            rows.append(("Styles", list(d?.styles, empty: "Default only"), false))
+        default: break
+        }
+        rows.append(("Abstract", d?.abstract ?? "—", false))
+        rows.append(("Layer type", layer.type ?? "—", false))
+        return rows
+    }
+
+    private var arcgisFacts: [(String, String, Bool)] {
         let sr = layer.effectiveWkid.map { "\(srName($0)) (\($0))" } ?? "unknown spatial reference"
         let geometry = layer.isTable ? "None, a table" : "\(geometryName(layer.geometryType)), \(sr)"
         let native = layer.nativeExtent.map { e -> String in
@@ -160,6 +202,7 @@ private struct OverviewTab: View {
 private struct ExtractionStatement: View {
     @Environment(AppModel.self) private var model
     let layer: LayerRecord
+    let service: ServiceRecord
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -184,12 +227,25 @@ private struct ExtractionStatement: View {
                 ErrorText(message: error)
             }
             HStack(spacing: 18) {
-                if verdict == .extractable {
+                if service.type == .wms, verdict != .extractable {
+                    // A picture is the WMS layer's one download when it has no features to give (M10).
+                    Button("Save as PNG image") { Task { await model.savePictureOfCurrentLayer(as: .png) } }
+                        .buttonStyle(PrimaryButtonStyle())
+                        .help("One GetMap of the layer's extent, with a world file beside it, to \(model.downloadDirectory.lastPathComponent)")
+                    Button("Choose the picture format") { model.layerTab = .download }.buttonStyle(LinkButtonStyle())
+                    Button("Preview on the map") { model.layerTab = .map }.buttonStyle(LinkButtonStyle())
+                } else if service.type == .wmts {
+                    Button("Preview on the map") { model.layerTab = .map }.buttonStyle(PrimaryButtonStyle())
+                } else if verdict == .extractable {
                     Button("Download as \(model.preferences.defaultFormat.label)") { Task { await model.downloadCurrentLayerWithDefaults() } }
                         .buttonStyle(PrimaryButtonStyle())
                         .help("Every feature, in \(model.preferences.outWkid(for: layer) == 4326 ? "WGS 84" : "the native spatial reference"), to \(model.downloadDirectory.lastPathComponent). Preferences (⌘,) set the defaults.")
                     Button("Change format or spatial reference") { model.layerTab = .download }.buttonStyle(LinkButtonStyle())
                     Button("Preview a sample on the map") { model.layerTab = .map }.buttonStyle(LinkButtonStyle())
+                    if service.type == .wms {
+                        Button("Save a picture instead") { Task { await model.savePictureOfCurrentLayer(as: .png) } }.buttonStyle(LinkButtonStyle())
+                            .help("One GetMap of the layer's extent as PNG, with a world file beside it")
+                    }
                 } else if verdict == .notExtractable, let twin = layer.siblingLayerID {
                     Button("Use the FeatureServer twin") { Task { await model.select(.layer(twin)) } }.buttonStyle(LinkButtonStyle())
                 }

@@ -175,6 +175,16 @@ extension Crawler {
         }
     }
 
+    /// The WFS feature type with a WMS layer's name at the same endpoint: the features behind
+    /// the picture, as a FeatureServer twin is to a MapServer layer. Names are matched by their
+    /// local part, so the WMS `towns` finds the WFS `ms:towns`.
+    public func ogcTwin(of layer: LayerRecord, in service: ServiceRecord) async throws -> (LayerRecord, ServiceRecord)? {
+        guard service.type == .wms, let name = layer.ogcName else { return nil }
+        guard let wfs = try await db.services(serverID: service.serverID).first(where: { $0.type == .wfs }) else { return nil }
+        guard let twin = try await db.layer(serviceID: wfs.id, ogcName: name) else { return nil }
+        return (twin, wfs)
+    }
+
     /// `resultType=hits`: the feature count of a WFS type without the features (WFS 1.1 and 2.0).
     func probeOGCCount(layer: LayerRecord, service: ServiceRecord, server: ServerRecord) async throws -> Int64 {
         guard service.type == .wfs, let detail = service.ogcDetail, let name = layer.ogcName else {

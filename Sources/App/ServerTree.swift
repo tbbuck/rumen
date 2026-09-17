@@ -80,7 +80,13 @@ private struct ServerHeader: View {
     }
 
     private var caption: String {
-        let version = server.arcgisVersion.map { "ArcGIS Server \($0.formatted(.number.precision(.fractionLength(0...2))))" } ?? server.host
+        let version: String
+        if server.kind == .ogc {
+            let types = model.services.map(\.type.name).sorted().joined(separator: ", ")
+            version = types.isEmpty ? "OGC endpoint" : "OGC endpoint: \(types)"
+        } else {
+            version = server.arcgisVersion.map { "ArcGIS Server \($0.formatted(.number.precision(.fractionLength(0...2))))" } ?? server.host
+        }
         return "\(version), cached \(Age.text(server.lastVisitedAt))"
     }
 }

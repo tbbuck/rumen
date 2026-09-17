@@ -10,11 +10,14 @@ private final class StubEndpoint: @unchecked Sendable {
     private var _offersWMTS = false
     private var _geoJSON = true
     private var _version100 = false
+    private var _vectorWMS = false
     private var _log: [[String: String]] = []
 
     var offersWMTS: Bool { get { lock.withLock { _offersWMTS } } set { lock.withLock { _offersWMTS = newValue } } }
     var geoJSON: Bool { get { lock.withLock { _geoJSON } } set { lock.withLock { _geoJSON = newValue } } }
     var version100: Bool { get { lock.withLock { _version100 } } set { lock.withLock { _version100 = newValue } } }
+    /// The WMS offers a GeoJSON GetMap output, as GeoServer does.
+    var vectorWMS: Bool { get { lock.withLock { _vectorWMS } } set { lock.withLock { _vectorWMS = newValue } } }
     var log: [[String: String]] { lock.withLock { _log } }
 
     func reply(_ request: URLRequest) throws -> StubTransport.Reply {
@@ -39,8 +42,11 @@ private final class StubEndpoint: @unchecked Sendable {
             }
             return xml(OGCFixtures.gmlPage(start..<(start + count)))
         case ("WMS", "GetCapabilities"):
-            return xml(OGCFixtures.wms130)
+            return xml(vectorWMS ? OGCFixtures.wms130Vector : OGCFixtures.wms130)
         case ("WMS", "GetMap"):
+            if (params["format"] ?? "").lowercased().contains("json") {
+                return .json(OGCFixtures.geoJSONPage(0..<5, wgs84: false))
+            }
             return StubTransport.Reply(status: 200, body: OGCFixtures.png)
         case ("WMTS", "GetCapabilities"):
             return xml(offersWMTS ? OGCFixtures.wmts100 : OGCFixtures.exceptionReport)
@@ -256,7 +262,8 @@ final class OGCTests: XCTestCase {
         let raw = try await db.layerRawJSON(id: layer.id)
         XCTAssertTrue(raw?.contains("<wfs:Name>ms:towns</wfs:Name>") == true)
 
-        // The WFS type is extractable as paged GeoJSON; the WMS layer is a picture.
+        // The WFS type is extractable as paged GeoJSON; the WMS layer of the same name gets its
+        // features through that WFS twin; a WMS layer with no twin is a picture.
         let wfs = try await crawler.assess(layerID: layer.id)
         XCTAssertEqual(wfs.verdict, true)
         XCTAssertEqual(wfs.transport, .geojson)
@@ -266,9 +273,18 @@ final class OGCTests: XCTestCase {
         let wmsTownsFound = try await db.layer(serviceID: wmsService.id, ogcName: "towns")
         let wmsTowns = try XCTUnwrap(wmsTownsFound)
         let wms = try await crawler.assess(layerID: wmsTowns.id)
-        XCTAssertEqual(wms.verdict, false)
-        XCTAssertEqual(wms.transport, .image)
-        XCTAssertTrue(wms.reason.contains("picture"))
+        XCTAssertEqual(wms.verdict, true)
+        XCTAssertTrue(wms.viaTwin)
+        XCTAssertEqual(wms.sourceLayerID, layer.id)
+        XCTAssertTrue(wms.reason.contains("WFS twin ms:towns"), wms.reason)
+        let storedTwin = try await db.layer(id: wmsTowns.id)
+        XCTAssertEqual(storedTwin.siblingLayerID, layer.id)
+        let roadsFound = try await db.layer(serviceID: wmsService.id, ogcName: "roads")
+        let roads = try XCTUnwrap(roadsFound)
+        let picture = try await crawler.assess(layerID: roads.id)
+        XCTAssertEqual(picture.verdict, false)
+        XCTAssertEqual(picture.transport, .image)
+        XCTAssertTrue(picture.reason.contains("picture"))
         let count = try await crawler.probeCount(layerID: layer.id)
         XCTAssertEqual(count, 5)
 
@@ -396,20 +412,69 @@ final class OGCTests: XCTestCase {
         XCTAssertNil(page["startIndex"])
     }
 
-    func testWMSPictureIsSavedWithAWorldFile() async throws {
+    private func wmsLayer(_ name: String) async throws -> LayerRecord {
         _ = try await crawler.open(pasted)
         let servers = try await db.servers()
         let server = try XCTUnwrap(servers.first)
         let services = try await db.services(serverID: server.id)
         let wms = try XCTUnwrap(services.first { $0.type == .wms })
-        let found = try await db.layer(serviceID: wms.id, ogcName: "towns")
-        let layer = try XCTUnwrap(found)
+        let found = try await db.layer(serviceID: wms.id, ogcName: name)
+        return try XCTUnwrap(found)
+    }
+
+    func testWMSLayerDownloadsFeaturesThroughItsWFSTwin() async throws {
+        let layer = try await wmsLayer("towns")
+        var request = DownloadRequest(layerID: layer.id, outputDirectory: scratch.appendingPathComponent("out"))
+        request.outWkid = 27700
+        let planned = try await engine.start(request)
+        XCTAssertEqual(planned.layerID, layer.id, "the run belongs to the layer the user chose")
+        XCTAssertEqual(planned.transport, .geojson)
+        XCTAssertEqual(planned.strategy, .offset)
+        let record = try await engine.wait(downloadID: planned.id)
+        XCTAssertEqual(record.status, .complete, record.error ?? "")
+        XCTAssertEqual(record.featureCount, 5)
+        let path = try XCTUnwrap(record.outputPath)
+        XCTAssertTrue(path.hasSuffix("/Planning WMS/Towns.parquet"), "named for the WMS layer: \(path)")
+        XCTAssertEqual(try readBack(path).count, 5)
+        let pages = endpoint.log.filter { $0["request"] == "GetFeature" && $0["resultType"] == nil }
+        XCTAssertEqual(pages.count, 3, "the twin's WFS pages did the work")
+        XCTAssertTrue(endpoint.log.allSatisfy { $0["request"] != "GetMap" })
+    }
+
+    func testWMSGetMapAsGeoJSONDownloadsFeatures() async throws {
+        endpoint.vectorWMS = true
+        let layer = try await wmsLayer("roads")   // no WFS twin; the GetMap itself gives GeoJSON
+        let assessment = try await crawler.assess(layerID: layer.id)
+        XCTAssertEqual(assessment.verdict, true)
+        XCTAssertEqual(assessment.transport, .geojson)
+        XCTAssertEqual(assessment.strategy, .single)
+        XCTAssertFalse(assessment.viaTwin)
+        XCTAssertTrue(assessment.reason.contains("application/json;type=geojson"), assessment.reason)
+
+        let request = DownloadRequest(layerID: layer.id, outputDirectory: scratch.appendingPathComponent("out"))
+        let planned = try await engine.start(request)
+        XCTAssertEqual(planned.transport, .geojson)
+        XCTAssertEqual(planned.outWkid, 3857, "Web Mercator, inherited from the enclosing layer, is preferred")
+        let record = try await engine.wait(downloadID: planned.id)
+        XCTAssertEqual(record.status, .complete, record.error ?? "")
+        XCTAssertEqual(record.featureCount, 5)
+        XCTAssertTrue(try XCTUnwrap(record.outputPath).hasSuffix("/Planning WMS/Roads.parquet"))
+        let getMap = try XCTUnwrap(endpoint.log.last { $0["request"] == "GetMap" })
+        XCTAssertEqual(getMap["format"], "application/json;type=geojson")
+        XCTAssertEqual(getMap["layers"], "roads")
+        XCTAssertEqual(getMap["crs"], "EPSG:3857")
+        let fields = try await db.fields(layerID: layer.id)
+        XCTAssertEqual(fields.map(\.name), ["id", "OBJECTID", "NAME", "POP", "WHEN", "geom"], "the schema came from the page itself")
+    }
+
+    func testWMSPictureIsSavedWithAWorldFile() async throws {
+        let layer = try await wmsLayer("roads")   // no WFS twin, no GeoJSON GetMap: a picture only
 
         var features = DownloadRequest(layerID: layer.id, outputDirectory: scratch.appendingPathComponent("out"))
         features.format = .geoParquet
         do {
             _ = try await engine.start(features)
-            XCTFail("a WMS layer has no features to write")
+            XCTFail("a WMS layer without features cannot be written as features")
         } catch DownloadError.notExtractable(let reason) {
             XCTAssertTrue(reason.contains("picture"))
         }
@@ -422,23 +487,32 @@ final class OGCTests: XCTestCase {
         let record = try await engine.wait(downloadID: planned.id)
         XCTAssertEqual(record.status, .complete, record.error ?? "")
         let path = try XCTUnwrap(record.outputPath)
-        XCTAssertTrue(path.hasSuffix("/Planning WMS/Towns.png"), path)
+        XCTAssertTrue(path.hasSuffix("/Planning WMS/Roads.png"), path)
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), OGCFixtures.png)
         let world = try String(contentsOfFile: String(path.dropLast(3)) + "pgw", encoding: .utf8)
         XCTAssertEqual(world.split(separator: "\n").count, 6)
         let getMap = try XCTUnwrap(endpoint.log.last { $0["request"] == "GetMap" })
-        XCTAssertEqual(getMap["crs"], "EPSG:3857")
-        XCTAssertEqual(getMap["layers"], "towns")
-        XCTAssertEqual(getMap["styles"], "default")
+        XCTAssertEqual(getMap["crs"], "EPSG:3857", "inherited from the enclosing layer")
+        XCTAssertEqual(planned.outWkid, 3857)
+        XCTAssertEqual(getMap["layers"], "roads")
         XCTAssertEqual(getMap["format"], "image/png")
         XCTAssertEqual(getMap["transparent"], "TRUE")
-        XCTAssertEqual(getMap["width"], "2048", "the server's MaxWidth caps the long side")
+        XCTAssertNotNil(getMap["width"].flatMap(Int.init))
         XCTAssertNotNil(getMap["height"].flatMap(Int.init))
 
-        var tiff = DownloadRequest(layerID: layer.id, outputDirectory: scratch.appendingPathComponent("out"))
+        // A layer with features can still be saved as a picture, in Web Mercator when offered.
+        let towns = try await wmsLayer("towns")
+        var tiff = DownloadRequest(layerID: towns.id, outputDirectory: scratch.appendingPathComponent("out"))
         tiff.format = .geoTIFF
-        let tiffRecord = try await engine.wait(downloadID: try await engine.start(tiff).id)
+        let tiffPlanned = try await engine.start(tiff)
+        XCTAssertEqual(tiffPlanned.transport, .image)
+        XCTAssertEqual(tiffPlanned.outWkid, 3857, "Web Mercator is preferred when the layer offers it")
+        let tiffRecord = try await engine.wait(downloadID: tiffPlanned.id)
         XCTAssertEqual(tiffRecord.status, .complete, tiffRecord.error ?? "")
         XCTAssertTrue(try XCTUnwrap(tiffRecord.outputPath).hasSuffix("Towns.tif"))
+        let tiffMap = try XCTUnwrap(endpoint.log.last { $0["request"] == "GetMap" })
+        XCTAssertEqual(tiffMap["crs"], "EPSG:3857")
+        XCTAssertEqual(tiffMap["styles"], "default")
+        XCTAssertEqual(tiffMap["width"], "2048", "the server's MaxWidth caps the long side")
     }
 }

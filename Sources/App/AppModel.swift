@@ -21,7 +21,9 @@ enum LayerTab: String, CaseIterable, Identifiable {
 /// A pasted URL whose server is not known yet, awaiting the Add-server sheet.
 struct PendingAdd: Identifiable, Equatable {
     let text: String
-    let location: ArcGISLocation
+    let rootURL: URL
+    /// What the URL points at, in a sentence, for the sheet.
+    let preview: String
     var id: String { text }
 }
 
@@ -140,14 +142,13 @@ final class AppModel {
     func start() async {
         do {
             try EngineSupport.install()   // before any DuckDB opens: the packaged build's extension folder
-            let db = try AppDatabase(path: AppDatabase.defaultURL().path)
+            let db = try AppDatabase(path: AppPaths.database.path)
             try await db.migrate()
             try await db.loadSpatial()
             database = db
             let crawler = Crawler(client: client, database: db)
             self.crawler = crawler
-            engine = DownloadEngine(client: client, database: db, crawler: crawler,
-                                    stagingDirectory: AppDatabase.defaultURL().deletingLastPathComponent().appendingPathComponent("staging"))
+            engine = DownloadEngine(client: client, database: db, crawler: crawler, stagingDirectory: AppPaths.staging)
             preferences = try await Preferences.load(from: db)
             await client.setLimits(maxConcurrentPerHost: preferences.concurrency, retry: preferences.retryPolicy)
             await engine?.setConcurrency(preferences.concurrency)
@@ -309,12 +310,16 @@ final class AppModel {
                 currentFields = fields
                 currentLayerInfo = info
                 pathContent = PathBarContent.build(server: server, service: service, layer: layer)
-                querySession = QuerySession(layer: layer, service: service, fields: fields, info: info,
-                                            client: client, database: database, connection: server.connection())
+                // An OGC layer has no query endpoint (M10): no Query tab, and the tabs it cannot
+                // answer are not offered.
+                querySession = service.type.isOGC ? nil
+                    : QuerySession(layer: layer, service: service, fields: fields, info: info,
+                                   client: client, database: database, connection: server.connection())
                 let stored = storedRuns(for: layer.id)
                 mapSession = MapSession(layer: layer, service: service, client: client, database: database,
                                         connection: server.connection(), storedRuns: stored, querySet: nil, queryWkid: nil)
                 storedSession = StoredSession(layer: layer, database: database, runs: stored)
+                if !availableTabs.contains(layerTab) { layerTab = .overview }
                 await assessCurrentLayer()
             }
         } catch {
@@ -335,9 +340,21 @@ final class AppModel {
         storedSession = nil
     }
 
-    /// Finished downloads of a layer whose file is recorded, newest first.
+    /// Finished downloads of a layer whose file is recorded, newest first. A saved picture is
+    /// a run but not a stored file: there are no rows in it to open.
     func storedRuns(for layerID: Int64) -> [DownloadRecord] {
-        runs.filter { $0.record.layerID == layerID && $0.status == .complete && $0.record.outputPath != nil }.map(\.record)
+        runs.filter { $0.record.layerID == layerID && $0.status == .complete && $0.record.outputPath != nil && !$0.record.format.isRaster }.map(\.record)
+    }
+
+    /// The tabs the current layer's page offers: every one for ArcGIS; for an OGC layer, the
+    /// ones its protocol can answer (M10).
+    var availableTabs: [LayerTab] {
+        guard let service = currentService, service.type.isOGC else { return LayerTab.allCases }
+        switch service.type {
+        case .wfs: return [.overview, .fields, .download, .stored, .map, .raw]
+        case .wms: return [.overview, .download, .map, .raw]
+        default: return [.overview, .map, .raw]
+        }
     }
 
     /// Loads the pretty-printed raw JSON for the Raw tab on demand.
@@ -503,18 +520,61 @@ final class AppModel {
         guard !text.isEmpty else { isEditingURL = false; return }
         clearError()
         do {
-            let location = try ArcGISURL.parse(text)
             guard let database else { return }
-            if try await database.server(rootURL: location.rootURL) != nil {
+            let rootURL: URL
+            let preview: String
+            do {
+                let location = try ArcGISURL.parse(text)
+                rootURL = location.rootURL
+                preview = Self.preview(of: location)
+            } catch ArcGISURLError.notArcGIS {
+                // Not ArcGIS: an OGC endpoint, probed for WMS, WFS and WMTS once added (M10).
+                let location = try OGCURL.parse(text)
+                rootURL = location.rootURL
+                preview = Self.preview(of: location)
+            }
+            if try await database.server(rootURL: rootURL) != nil {
                 isEditingURL = false
                 await open(text, friendlyName: nil)
             } else {
                 isEditingURL = false
-                pendingAdd = PendingAdd(text: text, location: location)
+                pendingAdd = PendingAdd(text: text, rootURL: rootURL, preview: preview)
             }
         } catch {
             report(error)
         }
+    }
+
+    /// The sentence the Add-server sheet leads with, for an ArcGIS URL.
+    static func preview(of location: ArcGISLocation) -> String {
+        let host = location.rootURL.host ?? "this server"
+        if let layer = location.layerID, let service = location.servicePath, let type = location.serviceType {
+            return "This is layer \(layer) of \(service) (\(type.name)) on \(host)."
+        }
+        if let service = location.servicePath, let type = location.serviceType {
+            return "This is the \(type.name) service \(service) on \(host)."
+        }
+        if let folder = location.folderPath {
+            return "This is the \(folder) folder on \(host)."
+        }
+        return "This is the services root of \(host)."
+    }
+
+    /// The same, for an OGC endpoint: what will be asked of it, and what the URL named.
+    static func preview(of location: OGCLocation) -> String {
+        let host = location.rootURL.host ?? "this server"
+        var text = "This looks like an OGC endpoint on \(host): it will be asked for WMS, WFS and WMTS capabilities."
+        if let name = location.layerName {
+            text += " The URL names \(location.serviceHint.map { "the \($0.name) layer " } ?? "")\(name)."
+        } else if let hint = location.serviceHint {
+            text += " The URL names its \(hint.name)."
+        }
+        return text
+    }
+
+    /// The root a pasted URL belongs to, ArcGIS or OGC; nil when it is neither.
+    static func rootURL(of text: String) -> URL? {
+        (try? ArcGISURL.parse(text))?.rootURL ?? (try? OGCURL.parse(text))?.rootURL
     }
 
     /// A URL given at launch (`--open`): known servers navigate, unknown ones are added with
@@ -536,7 +596,7 @@ final class AppModel {
     private func open(_ text: String, friendlyName: String?,
                       headerOverrides: (origin: String?, referer: String?)? = nil, cookie: String? = nil) async {
         guard let crawler else { return }
-        let root = (try? ArcGISURL.parse(text))?.rootURL.absoluteString ?? text
+        let root = Self.rootURL(of: text)?.absoluteString ?? text
         openingStatus = OpeningStatus(url: root, step: "Opening…")
         defer { openingStatus = nil }
         do {
@@ -587,7 +647,7 @@ final class AppModel {
             })
             // The server may have been registered before the failure: go there rather than
             // leaving the user on whatever was open before.
-            if let database, let root = (try? ArcGISURL.parse(text))?.rootURL,
+            if let database, let root = Self.rootURL(of: text),
                let server = try? await database.server(rootURL: root), currentServer?.id != server.id {
                 await selectServer(server.id)
             }
@@ -719,6 +779,15 @@ extension AppModel {
         request.outWkid = preferences.outWkid(for: layer)
         request.format = preferences.defaultFormat
         request.domainLabels = preferences.domainLabels
+        await startDownload(request)
+    }
+
+    /// A WMS layer's one download (M10): a picture of its extent, PNG unless the server offers
+    /// GeoTIFF and the caller asks for it.
+    func savePictureOfCurrentLayer(as format: ExportFormat = .png) async {
+        guard let layer = currentLayer else { return }
+        var request = DownloadRequest(layerID: layer.id, outputDirectory: downloadDirectory)
+        request.format = format
         await startDownload(request)
     }
 

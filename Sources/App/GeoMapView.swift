@@ -13,6 +13,79 @@ struct MapContent: Equatable {
     var fit: BoundingBox?
     var fitToken = 0
     var clearToken = 0
+    /// A WMS or WMTS layer drawn as tiles (M10): a URL template with MapLibre's placeholders,
+    /// already routed through the tile proxy.
+    var rasterTiles: String?
+    /// A WMS layer drawn as one picture of its extent, when it offers no Web Mercator.
+    var rasterImage: RasterImage?
+
+    struct RasterImage: Equatable {
+        let url: String
+        /// Top-left, top-right, bottom-right, bottom-left, in lon/lat.
+        let coordinates: [[Double]]
+    }
+}
+
+/// The page's tile and picture requests, answered through the app's own client (headers,
+/// cookie, per-host cap) under a custom scheme, with the permissive CORS header WebKit needs
+/// before MapLibre may read the bytes. Public WMS and WMTS servers rarely send one themselves.
+final class TileProxy: NSObject, WKURLSchemeHandler {
+    static let scheme = "ogcproxy"
+    /// Fetches a real URL, returning the bytes and a media type when known.
+    var fetcher: (@Sendable (URL) async throws -> (Data, String?))?
+    private var tasks: [ObjectIdentifier: Task<Void, Never>] = [:]
+
+    /// `https://host/path?query` → `ogcproxy://https/host/path?query`, leaving MapLibre's
+    /// `{z}`-style placeholders untouched for it to fill in.
+    static func proxied(_ url: String) -> String {
+        if url.hasPrefix("https://") { return "\(scheme)://https/" + url.dropFirst("https://".count) }
+        if url.hasPrefix("http://") { return "\(scheme)://http/" + url.dropFirst("http://".count) }
+        return url
+    }
+
+    static func real(_ proxied: URL) -> URL? {
+        let text = proxied.absoluteString
+        for realScheme in ["https", "http"] {
+            let prefix = "\(scheme)://\(realScheme)/"
+            if text.hasPrefix(prefix) { return URL(string: "\(realScheme)://" + text.dropFirst(prefix.count)) }
+        }
+        return nil
+    }
+
+    func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
+        let id = ObjectIdentifier(task)
+        guard let fetcher, let requested = task.request.url, let real = Self.real(requested) else {
+            task.didFailWithError(URLError(.unsupportedURL))
+            return
+        }
+        tasks[id] = Task { [weak self] in
+            do {
+                let (data, type) = try await fetcher(real)
+                try Task.checkCancellation()
+                await MainActor.run {
+                    guard let self, self.tasks[id] != nil else { return }
+                    let headers = ["Content-Type": type ?? "image/png", "Content-Length": String(data.count),
+                                   "Access-Control-Allow-Origin": "*", "Cache-Control": "max-age=300"]
+                    task.didReceive(HTTPURLResponse(url: requested, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!)
+                    task.didReceive(data)
+                    task.didFinish()
+                    self.tasks[id] = nil
+                }
+            } catch {
+                await MainActor.run {
+                    guard let self, self.tasks[id] != nil else { return }
+                    task.didFailWithError(error)
+                    self.tasks[id] = nil
+                }
+            }
+        }
+    }
+
+    func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {
+        let id = ObjectIdentifier(task)
+        tasks[id]?.cancel()
+        tasks[id] = nil
+    }
 }
 
 /// MapLibre GL (MapTiler basemaps by appearance) in a `WKWebView`, fed GeoJSON and reporting
@@ -25,6 +98,8 @@ struct GeoMapView: NSViewRepresentable {
     let content: MapContent
     let onViewport: (MapViewport) -> Void
     var onFeature: ([String: String]?) -> Void = { _ in }
+    /// Answers the page's tile requests (M10); nil for a layer that draws no raster.
+    var tileFetcher: (@Sendable (URL) async throws -> (Data, String?))? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(onViewport: onViewport, onFeature: onFeature) }
 
@@ -33,6 +108,8 @@ struct GeoMapView: NSViewRepresentable {
         configuration.userContentController.add(context.coordinator, name: "viewport")
         configuration.userContentController.add(context.coordinator, name: "feature")
         configuration.userContentController.add(context.coordinator, name: "log")
+        configuration.setURLSchemeHandler(context.coordinator.proxy, forURLScheme: TileProxy.scheme)
+        context.coordinator.proxy.fetcher = tileFetcher
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
         webView.setValue(false, forKey: "drawsBackground")
@@ -44,6 +121,7 @@ struct GeoMapView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
+        context.coordinator.proxy.fetcher = tileFetcher
         let style = Self.styleName(for: context.environment.colorScheme)
         if style != context.coordinator.style {
             context.coordinator.style = style
@@ -78,6 +156,7 @@ struct GeoMapView: NSViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         weak var webView: WKWebView?
         var style = "dataviz"
+        let proxy = TileProxy()
         private let onViewport: (MapViewport) -> Void
         private let onFeature: ([String: String]?) -> Void
         private var loaded = false
@@ -135,7 +214,20 @@ struct GeoMapView: NSViewRepresentable {
             if content.clearToken != applied.clearToken {
                 webView.evaluateJavaScript("window.clearSelection();")
             }
+            if force || content.rasterTiles != applied.rasterTiles || content.rasterImage != applied.rasterImage {
+                webView.evaluateJavaScript("window.setRaster(\(Self.rasterSpec(content)));")
+            }
             applied = content
+        }
+
+        /// The raster source spec for the page, as a JSON literal, or `null`.
+        static func rasterSpec(_ content: MapContent) -> String {
+            var spec: [String: Any] = [:]
+            if let tiles = content.rasterTiles { spec = ["tiles": [tiles], "tileSize": 256] }
+            else if let image = content.rasterImage { spec = ["image": image.url, "coordinates": image.coordinates] }
+            else { return "null" }
+            guard let data = try? JSONSerialization.data(withJSONObject: spec) else { return "null" }
+            return String(decoding: data, as: UTF8.self)
         }
 
         private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "ArcGISExplorer", category: "map")
@@ -344,6 +436,16 @@ struct GeoMapView: NSViewRepresentable {
     window.setGraticule = fc => whenReady(() => map.getSource('grat').setData(fc));
     window.setFeatures = fc => whenReady(() => { window.clearSelection(); resetHover(); map.getSource('features').setData(fc); });
     window.setExtent = fc => whenReady(() => map.getSource('extent').setData(fc));
+    // A WMS or WMTS layer: raster tiles or one picture, drawn under the graticule and features.
+    window.setRaster = spec => whenReady(() => {
+      if (map.getLayer('raster-layer')) map.removeLayer('raster-layer');
+      if (map.getSource('raster')) map.removeSource('raster');
+      if (!spec) return;
+      if (spec.tiles) map.addSource('raster', { type: 'raster', tiles: spec.tiles, tileSize: spec.tileSize || 256 });
+      else if (spec.image) map.addSource('raster', { type: 'image', url: spec.image, coordinates: spec.coordinates });
+      else return;
+      map.addLayer({ id: 'raster-layer', type: 'raster', source: 'raster', paint: { 'raster-opacity': 0.85 } }, 'grat-line');
+    });
     window.fitTo = b => whenReady(() => { try { map.fitBounds(b, { padding: 40, maxZoom: 14, duration: 0 }); } catch (e) {} });
     window.setReduceMotion = on => { reduceMotion = !!on; whenReady(applyMotion); };
     </script></body></html>

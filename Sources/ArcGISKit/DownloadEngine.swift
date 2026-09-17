@@ -194,15 +194,16 @@ public actor DownloadEngine {
     private func run(_ id: Int64, progress: @escaping @Sendable (DownloadProgress) -> Void) async throws -> DownloadRecord {
         var record = try await db.download(id: id)
         let target = try await db.layer(id: record.layerID)
-        let sourceID = target.siblingLayerID ?? target.id
+        // Features may come from a twin (a FeatureServer's, a WFS's); a picture is always the layer's own.
+        let sourceID = record.transport == .image ? target.id : (target.siblingLayerID ?? target.id)
         let source = try await db.layer(id: sourceID)
         let service = try await db.service(id: source.serviceID)
         let server = try await db.server(id: service.serverID)
-        if service.type == .wms {
+        if service.type == .wms, record.transport == .image {
             return try await runImage(id, record: record, layer: source, service: service, server: server, progress: progress)
         }
-        if service.type.isOGC {
-            return try await runWFS(id, record: record, layer: source, service: service, server: server, progress: progress)
+        if service.type.isOGC {   // WFS pages, or a WMS GetMap answered in GeoJSON
+            return try await runOGCFeatures(id, record: record, layer: source, service: service, server: server, progress: progress)
         }
         let connection = server.connection(token: await tokenProvider(server))
         let url = service.url.appendingPathComponent(String(source.layerID))

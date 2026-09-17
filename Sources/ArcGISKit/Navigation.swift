@@ -176,8 +176,14 @@ public struct PathBarContent: Sendable, Equatable {
             segments.append(PathSegment(id: .service(service.id), label: service.type.name))
             url = service.url
             if let layer {
-                segments.append(PathSegment(id: .layer(layer.id), label: "\(layer.layerID) \(layer.name)"))
-                url = service.url.appendingPathComponent(String(layer.layerID))
+                if layer.isOGC, let name = layer.ogcName {
+                    // An OGC layer's URL is a request that names it (M10): the spine stays a real URL.
+                    segments.append(PathSegment(id: .layer(layer.id), label: layer.name))
+                    url = OGCURL.url(root: server.rootURL, params: OGCRequests.layerParams(type: service.type, name: name, version: service.ogcDetail?.version))
+                } else {
+                    segments.append(PathSegment(id: .layer(layer.id), label: "\(layer.layerID) \(layer.name)"))
+                    url = service.url.appendingPathComponent(String(layer.layerID))
+                }
             }
         }
         // Tail: the root path without its leading slash (e.g. "arcgis/rest/services").

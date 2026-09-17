@@ -332,10 +332,14 @@ extension Crawler {
     public func assess(layerID: Int64) async throws -> Assessment {
         let layer = try await db.layer(id: layerID)
         let service = try await db.service(id: layer.serviceID)
-        let twin = try await twin(of: layer, in: service)
-        let assessment = service.type.isOGC
-            ? Extractability.assessOGC(layer: layer, service: service)
-            : Extractability.assess(layer: layer, service: service, twin: twin?.0, twinService: twin?.1)
+        let assessment: Assessment
+        if service.type.isOGC {
+            let twin = try await ogcTwin(of: layer, in: service)
+            assessment = Extractability.assessOGC(layer: layer, service: service, twin: twin?.0, twinService: twin?.1)
+        } else {
+            let twin = try await twin(of: layer, in: service)
+            assessment = Extractability.assess(layer: layer, service: service, twin: twin?.0, twinService: twin?.1)
+        }
         try await db.setExtractability(layerID: layerID, extractable: assessment.verdict, reason: assessment.reason,
                                        transport: assessment.transport?.rawValue,
                                        siblingLayerID: assessment.viaTwin ? assessment.sourceLayerID : nil)

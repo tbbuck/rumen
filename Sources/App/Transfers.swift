@@ -68,8 +68,9 @@ struct TransferRun: Identifiable, Equatable {
             }
             return parts.joined(separator: ", ")
         case .complete:
-            let n = record.featureCount ?? 0
             let size = ByteCountFormatter.string(fromByteCount: record.bytes ?? 0, countStyle: .file)
+            if record.format.isRaster { return "A picture, \(size), finished \(Age.text(record.finishedAt))." }
+            let n = record.featureCount ?? 0
             return "\(n.grouped) features, \(size) fetched, finished \(Age.text(record.finishedAt))."
         case .paused, .failed:
             let kept = chunksPlanned > 0 ? "\(chunksDone.grouped) of \(chunksPlanned.grouped) requests kept. " : ""
@@ -298,9 +299,11 @@ private struct RunActions: View {
                     .help("Stops after the requests in flight; the run can be resumed")
             case .complete:
                 Button("Show in Finder") { model.reveal(run.record.outputPath) }.buttonStyle(LinkButtonStyle())
-                Button("Re-export") { Task { await model.showStored(run.record) } }.buttonStyle(LinkButtonStyle())
-                    .help("Open the stored file: its rows, a SQL scratch box, and export as GeoJSON or CSV without the server")
-                Button("Map") { Task { await model.showStoredMap(run.record) } }.buttonStyle(LinkButtonStyle())
+                if !run.record.format.isRaster {   // a picture has no rows to open and nothing to re-export
+                    Button("Re-export") { Task { await model.showStored(run.record) } }.buttonStyle(LinkButtonStyle())
+                        .help("Open the stored file: its rows, a SQL scratch box, and export as GeoJSON or CSV without the server")
+                    Button("Map") { Task { await model.showStoredMap(run.record) } }.buttonStyle(LinkButtonStyle())
+                }
             case .paused:
                 // A run pauses when the server answers a request with 498 or 499 mid-run. Token
                 // sign-in is not built (backlog), so the way through is to try again, or to set

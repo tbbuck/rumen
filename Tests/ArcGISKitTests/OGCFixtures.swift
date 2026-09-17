@@ -89,6 +89,11 @@ enum OGCFixtures {
     </WMS_Capabilities>
     """
 
+    /// The same WMS with a GeoJSON GetMap output, as GeoServer offers.
+    static let wms130Vector = wms130.replacingOccurrences(
+        of: "<Format>image/geotiff</Format>",
+        with: "<Format>image/geotiff</Format><Format>application/json;type=utfgrid</Format><Format>application/json;type=geojson</Format>")
+
     static let wms111 = """
     <?xml version="1.0" encoding="UTF-8"?>
     <!DOCTYPE WMT_MS_Capabilities SYSTEM "http://schemas.opengis.net/wms/1.1.1/WMS_MS_Capabilities.dtd">

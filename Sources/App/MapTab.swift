@@ -22,7 +22,7 @@ struct MapTab: View {
                 }
                 Spacer()
                 SourceMenu(session: session)
-                if session.source == .sample {
+                if session.source == .sample, !session.isRaster {
                     Button("Draw a fresh sample") { Task { await session.load() } }.buttonStyle(LinkButtonStyle(size: 12.5))
                 }
             }
@@ -56,7 +56,11 @@ struct MapTab: View {
     }
 
     private var chipText: String {
-        switch session.source { case .sample: "Sample"; case .stored: "Stored"; case .query: "Query preview" }
+        switch session.source {
+        case .sample: session.isRaster ? session.service.type.name : "Sample"
+        case .stored: "Stored"
+        case .query: "Query preview"
+        }
     }
 }
 
@@ -105,7 +109,7 @@ private struct SheetMap: View {
                     session.viewportChanged(viewport)
                 }, onFeature: { properties in
                     session.featureClicked(properties)
-                })
+                }, tileFetcher: session.isRaster ? session.tileFetcher : nil)
                 .frame(width: mapRect.width, height: mapRect.height)
                 .offset(x: mapRect.minX, y: mapRect.minY)
                 .clipped()

@@ -146,9 +146,17 @@ public struct OGCServiceDetail: Codable, Sendable, Equatable {
         self.abstract = abstract
     }
 
-    /// The WFS output format to ask for: GeoJSON when offered, else GML.
+    /// The GeoJSON output format to ask for, when one is offered: a WFS GetFeature's, or a WMS
+    /// GetMap's vector output (GeoServer's `application/json;type=geojson`). UTFGrid, TopoJSON
+    /// and JSONP are JSON without being features.
     public var geoJSONFormat: String? {
-        formats.first { $0.lowercased().contains("json") && !$0.lowercased().contains("jsonp") }
+        let candidates = formats.map { ($0, $0.lowercased()) }
+        if let geo = candidates.first(where: { $0.1.contains("geojson") || $0.1.contains("geo+json") }) { return geo.0 }
+        return candidates.first { pair in
+            let f = pair.1
+            let plainJSON = f == "json" || f.hasPrefix("application/json")
+            return plainJSON && !f.contains("utfgrid") && !f.contains("topojson") && !f.contains("jsonp")
+        }?.0
     }
     public var gmlFormat: String? {
         formats.first { $0.lowercased().contains("gml") } ?? (formats.isEmpty ? nil : nil)
@@ -321,6 +329,23 @@ public enum OGCRequests {
         if let srsName { params["srsName"] = srsName }
         if hits { params["resultType"] = "hits" }
         return params
+    }
+
+    /// A request that names one layer, for the path bar: a small GetFeature for a WFS type,
+    /// the capabilities with the layer named for WMS and WMTS (which need a box and a size
+    /// before they can draw anything).
+    public static func layerParams(type: ServiceType, name: String, version: String?) -> [String: String] {
+        switch type {
+        case .wfs:
+            let v = version ?? "2.0.0"
+            return getFeature(version: v, typeName: name, format: nil, startIndex: nil, count: 10)
+        case .wms:
+            return ["service": "WMS", "request": "GetCapabilities", "layers": name]
+        case .wmts:
+            return ["service": "WMTS", "request": "GetCapabilities", "version": "1.0.0", "layer": name]
+        default:
+            return [:]
+        }
     }
 
     public static func describeFeatureType(version: String, typeName: String? = nil) -> [String: String] {

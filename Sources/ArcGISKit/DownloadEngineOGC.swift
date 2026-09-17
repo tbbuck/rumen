@@ -8,52 +8,63 @@ extension DownloadEngine {
 
     // MARK: - Planning
 
-    func planOGC(_ request: DownloadRequest, layer: LayerRecord, service: ServiceRecord, assessment: Assessment) async throws -> DownloadRecord {
-        guard let detail = service.ogcDetail, layer.ogcName != nil else {
+    /// The plan for an OGC layer. The download is recorded against the layer the user chose
+    /// (`target`); the features may come from another (`source`): the WFS twin of a WMS layer.
+    func planOGC(_ request: DownloadRequest, layer target: LayerRecord, service targetService: ServiceRecord,
+                 assessment: Assessment) async throws -> DownloadRecord {
+        let source = assessment.sourceLayerID == target.id ? target : try await db.layer(id: assessment.sourceLayerID)
+        let service = source.id == target.id ? targetService : try await db.service(id: source.serviceID)
+        guard let detail = service.ogcDetail, source.ogcName != nil else {
             throw DownloadError.notExtractable("the service's capabilities have not been fetched yet")
         }
-        switch service.type {
-        case .wms:
-            guard request.format.isRaster else {
-                throw DownloadError.notExtractable("a WMS layer is a picture; choose PNG or GeoTIFF")
-            }
-            let plan = try imagePlan(layer: layer, service: service, format: request.format)
-            let record = try await db.createDownload(layerID: layer.id, transport: .image, strategy: .single, whereClause: "1=1",
+        // A picture: the WMS layer's only download when it has no features to give, and the
+        // other one when it has.
+        if targetService.type == .wms, request.format.isRaster {
+            let plan = try imagePlan(layer: target, service: targetService, format: request.format)
+            let record = try await db.createDownload(layerID: target.id, transport: .image, strategy: .single, whereClause: "1=1",
                                                      outWkid: plan.wkid, format: request.format, domainLabels: false)
             requests[record.id] = request
             return record
+        }
+        guard assessment.verdict == true, let transport = assessment.transport else {
+            throw DownloadError.notExtractable(assessment.reason)
+        }
+        guard !request.format.isRaster else { throw DownloadError.notExtractable("features cannot be written as a picture") }
+        let record: DownloadRecord
+        let chunks: [DownloadChunk]
+        switch service.type {
         case .wfs:
-            guard assessment.verdict == true, let transport = assessment.transport else {
-                throw DownloadError.notExtractable(assessment.reason)
-            }
-            guard !request.format.isRaster else { throw DownloadError.notExtractable("features cannot be written as a picture") }
             let pageSize = request.manualPageSize ?? assessment.pageSize ?? detail.countDefault ?? 1000
             let strategy: Assessment.Strategy = detail.paging && request.manualStrategy != .single ? .offset : .single
             // WGS 84 is asked of the server only when the type is offered in it; otherwise the
             // native reference is fetched and written, and the record says which.
-            let ogc = layer.ogcDetail
-            let native = layer.effectiveWkid ?? 4326
-            let outWkid = request.outWkid == 4326 && (native == 4326 || ogc?.wgs84CRS != nil) ? 4326 : native
-            let record = try await db.createDownload(layerID: layer.id, transport: transport, strategy: strategy, whereClause: "1=1",
-                                                     outWkid: outWkid, format: request.format, domainLabels: request.domainLabels)
-            let chunks: [DownloadChunk]
+            let native = source.effectiveWkid ?? 4326
+            let outWkid = request.outWkid == 4326 && (native == 4326 || source.ogcDetail?.wgs84CRS != nil) ? 4326 : native
+            record = try await db.createDownload(layerID: target.id, transport: transport, strategy: strategy, whereClause: "1=1",
+                                                 outWkid: outWkid, format: request.format, domainLabels: request.domainLabels)
             if strategy == .offset {
-                let count = try await crawler.probeCount(layerID: layer.id)
+                let count = try await crawler.probeCount(layerID: source.id)
                 chunks = DownloadPlanner.offsetChunks(downloadID: record.id, count: count, pageSize: pageSize)
             } else {
                 chunks = [DownloadChunk(downloadID: record.id, seq: 0, kind: .offset, offset: nil, limit: nil)]
             }
-            try await db.insertChunks(chunks)
-            let staging = stagingDirectory.appendingPathComponent("download-\(record.id).duckdb").path
-            try await db.setDownloadStaging(id: record.id, path: staging)
-            requests[record.id] = request
-            return try await db.download(id: record.id)
+        case .wms:
+            // GetMap answered in GeoJSON: one request over the extent, in the frame's CRS.
+            let frame = try frame(layer: source, service: service)
+            record = try await db.createDownload(layerID: target.id, transport: .geojson, strategy: .single, whereClause: "1=1",
+                                                 outWkid: frame.wkid, format: request.format, domainLabels: false)
+            chunks = [DownloadChunk(downloadID: record.id, seq: 0, kind: .offset, offset: nil, limit: nil)]
         default:
             throw DownloadError.notExtractable(assessment.reason)
         }
+        try await db.insertChunks(chunks)
+        let staging = stagingDirectory.appendingPathComponent("download-\(record.id).duckdb").path
+        try await db.setDownloadStaging(id: record.id, path: staging)
+        requests[record.id] = request
+        return try await db.download(id: record.id)
     }
 
-    /// The CRS, box and pixel size of a WMS picture: Web Mercator when the layer offers it (no
+    /// The CRS, box and pixel size of a WMS GetMap: Web Mercator when the layer offers it (no
     /// axis-order trouble, and it matches the map), else WGS 84; the longest side capped by the
     /// server's limits and 4,096 pixels.
     struct ImagePlan: Sendable {
@@ -63,15 +74,21 @@ extension DownloadEngine {
         let width: Int, height: Int
     }
 
+    /// The frame plus a check that the server offers the picture format asked for.
     func imagePlan(layer: LayerRecord, service: ServiceRecord, format: ExportFormat) throws -> ImagePlan {
+        guard let detail = service.ogcDetail else { throw DownloadError.notExtractable("the service's capabilities have not been fetched yet") }
+        guard format.mediaType.map({ media in detail.formats.contains { $0.lowercased().hasPrefix(media) } || detail.formats.isEmpty }) == true else {
+            throw DownloadError.notExtractable("the server does not offer \(format.label) for GetMap; it offers \(detail.formats.joined(separator: ", "))")
+        }
+        return try frame(layer: layer, service: service)
+    }
+
+    func frame(layer: LayerRecord, service: ServiceRecord) throws -> ImagePlan {
         guard let detail = service.ogcDetail, let ogc = layer.ogcDetail else {
             throw DownloadError.notExtractable("the service's capabilities have not been fetched yet")
         }
         guard let box = layer.extentWGS84, !box.isDegenerate else {
             throw DownloadError.notExtractable("the layer advertises no extent to draw")
-        }
-        guard format.mediaType.map({ media in detail.formats.contains { $0.lowercased().hasPrefix(media) } || detail.formats.isEmpty }) == true else {
-            throw DownloadError.notExtractable("the server does not offer \(format.label) for GetMap; it offers \(detail.formats.joined(separator: ", "))")
         }
         let crs: String
         let wkid: Int
@@ -112,8 +129,11 @@ extension DownloadEngine {
         let error: ArcGISClientError?
     }
 
-    func runWFS(_ id: Int64, record initial: DownloadRecord, layer: LayerRecord, service: ServiceRecord, server: ServerRecord,
-                progress: @escaping @Sendable (DownloadProgress) -> Void) async throws -> DownloadRecord {
+    /// Features from an OGC service into the staging database and out to the chosen format:
+    /// WFS GetFeature pages, or one WMS GetMap answered in GeoJSON. `layer` is the source (a
+    /// WMS layer's WFS twin when it has one); the record belongs to the layer the user chose.
+    func runOGCFeatures(_ id: Int64, record initial: DownloadRecord, layer: LayerRecord, service: ServiceRecord, server: ServerRecord,
+                        progress: @escaping @Sendable (DownloadProgress) -> Void) async throws -> DownloadRecord {
         var record = initial
         guard let detail = service.ogcDetail, let typeName = layer.ogcName else {
             throw DownloadError.notExtractable("the service's capabilities have not been fetched yet")
@@ -126,9 +146,27 @@ extension DownloadEngine {
         var chunks = try await db.chunks(downloadID: id)
         let stagingPath = record.stagingPath ?? stagingDirectory.appendingPathComponent("download-\(id).duckdb").path
         let wantsGeoJSON = record.transport == .geojson
-        let format = wantsGeoJSON ? detail.geoJSONFormat : detail.gmlFormat
         let fileExtension = wantsGeoJSON ? "json" : "gml"
-        let srsName = record.outWkid == 4326 && (layer.effectiveWkid ?? 4326) != 4326 ? layer.ogcDetail?.wgs84CRS : nil
+        let pageParams: @Sendable (DownloadChunk) -> [String: String]
+        switch service.type {
+        case .wfs:
+            let format = wantsGeoJSON ? detail.geoJSONFormat : detail.gmlFormat
+            let srsName = record.outWkid == 4326 && (layer.effectiveWkid ?? 4326) != 4326 ? layer.ogcDetail?.wgs84CRS : nil
+            let version = detail.version
+            pageParams = { chunk in
+                OGCRequests.getFeature(version: version, typeName: typeName, format: format,
+                                       startIndex: chunk.offset.map(Int.init), count: chunk.limit, srsName: srsName)
+            }
+        case .wms:
+            let frame = try frame(layer: layer, service: service)
+            let vector = detail.geoJSONFormat ?? "application/json"
+            let bbox = OGCRequests.getMapBBox(version: detail.version, crs: frame.crs, minX: frame.minX, minY: frame.minY, maxX: frame.maxX, maxY: frame.maxY)
+            let params = OGCRequests.getMap(version: detail.version, layer: typeName, style: layer.ogcDetail?.styles.first ?? "", crs: frame.crs,
+                                            bbox: bbox, width: frame.width, height: frame.height, format: vector, transparent: false)
+            pageParams = { _ in params }
+        default:
+            throw DownloadError.notExtractable("not a service this app takes features from")
+        }
         try FileManager.default.createDirectory(at: URL(fileURLWithPath: stagingPath).deletingLastPathComponent(), withIntermediateDirectories: true)
         var staging: StagingDatabase? = fields.isEmpty ? nil
             : try StagingDatabase(path: stagingPath, fields: fields, oidField: nil, hasZ: false, hasM: false)
@@ -152,8 +190,7 @@ extension DownloadEngine {
                 var inFlight = 0
                 var attempts = Dictionary(uniqueKeysWithValues: chunks.map { ($0.seq, $0.attempts) })
                 func enqueue(_ chunk: DownloadChunk) {
-                    let params = OGCRequests.getFeature(version: detail.version, typeName: typeName, format: format,
-                                                        startIndex: chunk.offset.map(Int.init), count: chunk.limit, srsName: srsName)
+                    let params = pageParams(chunk)
                     let path = "\(stagingPath)-\(chunk.seq).\(fileExtension)"
                     let client = self.client
                     let root = server.rootURL
@@ -248,7 +285,10 @@ extension DownloadEngine {
             throw DownloadError.notExtractable("no page arrived to take the schema from")
         }
         do {
-            let outputURL = Exporter.outputPath(directory: outputDirectory, server: server, service: service, layer: layer, format: record.format)
+            // The file is named for the layer the user chose, under its own service.
+            let target = try await db.layer(id: record.layerID)
+            let targetService = try await db.service(id: target.serviceID)
+            let outputURL = Exporter.outputPath(directory: outputDirectory, server: server, service: targetService, layer: target, format: record.format)
             let result = try Exporter.export(staging, to: outputURL, format: record.format, outWkid: record.outWkid,
                                              domainLabels: record.domainLabels, overwrite: overwrite)
             let db = self.db

@@ -53,6 +53,21 @@ final class MapSession {
     var layerURL: URL { service.url.appendingPathComponent(String(layer.layerID)) }
     var sampleSize: Int { min(layer.maxRecordCount ?? 1000, 800) }
     var hasQueryPreview: Bool { querySet?.hasGeometry == true }
+    /// A WMS or WMTS layer draws as raster (M10): no features, no sample to redraw.
+    var isRaster: Bool { service.type == .wms || service.type == .wmts }
+
+    /// Answers the page's tile requests through the app's client, with this server's headers
+    /// and cookie (M10). The media type is the request's own `format` when it names one.
+    var tileFetcher: @Sendable (URL) async throws -> (Data, String?) {
+        let client = client
+        let connection = connection
+        return { url in
+            let (endpoint, params) = OGCURL.split(url)
+            let data = try await client.fetch(root: endpoint, params: params, server: connection, maxAttempts: 2)
+            let type = params.first { $0.key.lowercased() == "format" }?.value
+            return (data, type.flatMap { $0.hasPrefix("image/") ? $0 : nil } ?? "image/png")
+        }
+    }
 
     /// True when the native spatial reference is projected (metres), so the sheet margins carry
     /// eastings and northings rather than degrees.
@@ -76,6 +91,12 @@ final class MapSession {
         transfer = nil
         defer { isLoading = false; transfer = nil }
         do {
+            if service.type.isOGC, source == .sample {
+                try await loadOGCSample()
+                return
+            }
+            content.rasterTiles = nil
+            content.rasterImage = nil
             switch source {
             case .sample:
                 var options = QueryOptions(outFields: nil, returnGeometry: true, outWkid: 4326, count: sampleSize)
@@ -119,6 +140,107 @@ final class MapSession {
         } catch {
             self.error = String(describing: error)
         }
+    }
+
+    // MARK: - OGC layers (M10)
+
+    /// What the map can show of an OGC layer: a WFS type as a sample of its features in WGS 84;
+    /// a WMS layer as tiles in Web Mercator, or as one picture of its extent when it offers no
+    /// Web Mercator; a WMTS layer as tiles from a Web Mercator matrix set.
+    private func loadOGCSample() async throws {
+        guard let detail = service.ogcDetail, let ogc = layer.ogcDetail, let name = layer.ogcName else {
+            throw MapError.noCapabilities
+        }
+        content.rasterTiles = nil
+        content.rasterImage = nil
+        let extent = layer.extentWGS84.flatMap { $0.isDefaultLike ? nil : $0 }
+        switch service.type {
+        case .wfs:
+            let native = layer.effectiveWkid ?? 4326
+            let askWGS84 = native != 4326 && ogc.wgs84CRS != nil
+            let format = detail.geoJSONFormat
+            let params = OGCRequests.getFeature(version: detail.version, typeName: name, format: format, startIndex: nil,
+                                                count: sampleSize, srsName: askWGS84 ? ogc.wgs84CRS : nil)
+            let data = try await client.fetch(root: connection.rootURL, params: params, server: connection, progress: { progress in
+                Task { @MainActor in self.transfer = progress }
+            })
+            let geoJSON: String
+            if format != nil, askWGS84 || native == 4326 {
+                geoJSON = String(decoding: data, as: UTF8.self)
+            } else {
+                // GML, or a projected reference the server would not translate: the spatial engine does.
+                geoJSON = try await database.geoJSONInWGS84(data: data, fileExtension: format != nil ? "json" : "gml", sourceWkid: native)
+            }
+            content.featuresGeoJSON = geoJSON
+            content.fit = extent ?? layer.extentWGS84
+            content.fitToken += 1
+            let drawn = Self.featureCount(in: geoJSON)
+            let total = layer.featureCount.map { $0.grouped } ?? "an unknown number of"
+            caption = "\(drawn.grouped) of \(total) features, drawn in WGS 84 from a \(format != nil ? "GeoJSON" : "GML") GetFeature. Dashed box is the layer extent."
+        case .wms:
+            let style = ogc.styles.first ?? ""
+            let picture = detail.formats.first { $0.lowercased().hasPrefix("image/png") } ?? detail.formats.first ?? "image/png"
+            if let mercator = ogc.webMercatorCRS {
+                let params = OGCRequests.getMap(version: detail.version, layer: name, style: style, crs: mercator, bbox: "{bbox-epsg-3857}",
+                                                width: 256, height: 256, format: picture, transparent: true)
+                content.rasterTiles = TileProxy.proxied(Self.withPlaceholders(OGCURL.url(root: connection.rootURL, params: params).absoluteString))
+                caption = "WMS layer drawn as 256px tiles in Web Mercator. Dashed box is the layer extent."
+            } else if let wgs = ogc.wgs84CRS ?? (ogc.crs.isEmpty ? "EPSG:4326" : nil), let box = layer.extentWGS84, !box.isDegenerate {
+                let width = 1024
+                let height = max(1, Int((Double(width) * box.height / box.width).rounded()))
+                let bbox = OGCRequests.getMapBBox(version: detail.version, crs: wgs, minX: box.minX, minY: box.minY, maxX: box.maxX, maxY: box.maxY)
+                let params = OGCRequests.getMap(version: detail.version, layer: name, style: style, crs: wgs, bbox: bbox,
+                                                width: width, height: min(height, 4096), format: picture, transparent: true)
+                let url = TileProxy.proxied(OGCURL.url(root: connection.rootURL, params: params).absoluteString)
+                content.rasterImage = MapContent.RasterImage(url: url, coordinates: [[box.minX, box.maxY], [box.maxX, box.maxY], [box.maxX, box.minY], [box.minX, box.minY]])
+                caption = "WMS layer drawn as one picture of its extent in WGS 84 (it offers no Web Mercator). Dashed box is the layer extent."
+            } else {
+                throw MapError.noDrawableCRS(ogc.crs)
+            }
+            content.fit = extent ?? layer.extentWGS84
+            content.fitToken += 1
+        case .wmts:
+            guard let setID = ogc.tileMatrixSetLinks.first(where: { link in detail.tileMatrixSets.first { $0.identifier == link }?.isWebMercator == true }),
+                  let set = detail.tileMatrixSets.first(where: { $0.identifier == setID }),
+                  let matrix = OGCRequests.matrixTemplate(set) else {
+                throw MapError.noWebMercatorTiles(ogc.tileMatrixSetLinks)
+            }
+            let style = ogc.styles.first ?? "default"
+            let template: String
+            if let resource = ogc.resourceURLTemplates.first {
+                template = resource
+                    .replacingOccurrences(of: "{TileMatrixSet}", with: setID)
+                    .replacingOccurrences(of: "{TileMatrix}", with: matrix)
+                    .replacingOccurrences(of: "{TileRow}", with: "{y}")
+                    .replacingOccurrences(of: "{TileCol}", with: "{x}")
+                    .replacingOccurrences(of: "{Style}", with: style)
+            } else {
+                let params = OGCRequests.getTile(layer: name, style: style, tileMatrixSet: setID, matrixTemplate: matrix,
+                                                 format: ogc.formats.first ?? "image/png")
+                template = Self.withPlaceholders(OGCURL.url(root: connection.rootURL, params: params).absoluteString)
+            }
+            content.rasterTiles = TileProxy.proxied(template)
+            content.fit = extent ?? layer.extentWGS84
+            content.fitToken += 1
+            caption = "WMTS tiles from the \(setID) matrix set, \(set.tileWidth ?? 256)px, Web Mercator. Dashed box is the layer extent."
+        default:
+            throw MapError.noCapabilities
+        }
+    }
+
+    /// The client percent-encodes every parameter; MapLibre's placeholders must come back.
+    private static func withPlaceholders(_ url: String) -> String {
+        url.replacingOccurrences(of: "%7Bbbox-epsg-3857%7D", with: "{bbox-epsg-3857}")
+            .replacingOccurrences(of: "%7Bz%7D", with: "{z}")
+            .replacingOccurrences(of: "%7Bx%7D", with: "{x}")
+            .replacingOccurrences(of: "%7By%7D", with: "{y}")
+    }
+
+    private static func featureCount(in geoJSON: String) -> Int {
+        guard let data = geoJSON.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let features = object["features"] as? [Any] else { return 0 }
+        return features.count
     }
 
     /// GeoJSON features with every attribute as a display string (dates ISO, NULLs named), so
@@ -212,7 +334,19 @@ final class MapSession {
 
 enum MapError: Error, CustomStringConvertible {
     case previewNotGeographic
+    case noCapabilities
+    case noDrawableCRS([String])
+    case noWebMercatorTiles([String])
     var description: String {
-        "The query preview was fetched in the native spatial reference; choose WGS 84 in the Query tab and preview again to map it."
+        switch self {
+        case .previewNotGeographic:
+            return "The query preview was fetched in the native spatial reference; choose WGS 84 in the Query tab and preview again to map it."
+        case .noCapabilities:
+            return "The service's capabilities have not been fetched yet; refresh the service."
+        case .noDrawableCRS(let crs):
+            return "The layer is offered in neither Web Mercator nor WGS 84, so the map cannot draw it; it offers \(crs.joined(separator: ", "))."
+        case .noWebMercatorTiles(let sets):
+            return "None of the layer's tile matrix sets is Web Mercator, so the map cannot draw it; it links \(sets.joined(separator: ", "))."
+        }
     }
 }

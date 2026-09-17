@@ -14,10 +14,7 @@ struct Preferences: Equatable {
     /// Attempts per request before a transient failure is given up on.
     var retryAttempts = 5
 
-    static var initialDirectory: URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("ArcGIS Explorer", isDirectory: true)
-    }
+    static var initialDirectory: URL { AppPaths.defaultDownloads }
 
     /// The download's spatial reference for a layer: WGS 84 when preferred or when the format
     /// requires it, else the layer's own.
@@ -88,7 +85,7 @@ struct PreferencesView: View {
                 }
                 row("Format") {
                     Picker("", selection: binding(\.defaultFormat)) {
-                        ForEach(ExportFormat.allCases, id: \.self) { Text($0.label).tag($0) }
+                        ForEach(ExportFormat.vector, id: \.self) { Text($0.label).tag($0) }
                     }
                     .pickerStyle(.segmented).labelsHidden().fixedSize().tint(Palette.accent)
                 }

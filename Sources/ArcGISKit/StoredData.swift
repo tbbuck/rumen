@@ -35,6 +35,35 @@ extension AppDatabase {
 
     /// Reprojects lon/lat pairs to an EPSG code, or back, in one query. Non-finite results
     /// come back as NaN. Throws if the spatial engine is not loaded.
+    /// A GeoJSON or GML body rewritten as RFC 7946 GeoJSON in WGS 84 by the spatial engine
+    /// (M10): what the map draws when a WFS answers in GML or in a projected reference it
+    /// would not translate. `sourceWkid` is the coordinates' reference; nil means WGS 84.
+    public func geoJSONInWGS84(data: Data, fileExtension: String, sourceWkid: Int?) throws -> String {
+        guard let spatial else { throw SpatialError.notLoaded }
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("arcgis-explorer-map-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let input = directory.appendingPathComponent("sample.\(fileExtension)")
+        let output = directory.appendingPathComponent("sample-wgs84.geojson")
+        try data.write(to: input)
+        let source = "ST_Read('\(input.path.replacingOccurrences(of: "'", with: "''"))')"
+        var geometry: String?
+        var attributes = [String]()
+        for row in try spatial.run("DESCRIBE SELECT * FROM \(source);").rows {
+            guard let name = row[0].stringValue, let type = row[1].stringValue else { continue }
+            let quoted = "\"" + name.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+            if type.uppercased().hasPrefix("GEOMETRY"), geometry == nil { geometry = quoted }
+            else if name != "OGC_FID", name != "lowerCorner", name != "upperCorner" { attributes.append(quoted) }
+        }
+        guard let geometry else { throw SpatialError.notLoaded }
+        let wkid = sourceWkid ?? 4326
+        let projected = wkid == 4326 ? geometry : "ST_Transform(\(geometry), 'EPSG:\(wkid)', 'EPSG:4326', always_xy := true)"
+        let select = (attributes + ["\(projected) AS geometry"]).joined(separator: ", ")
+        try spatial.run("SET geometry_always_xy = true;")
+        try spatial.run("COPY (SELECT \(select) FROM \(source)) TO '\(output.path.replacingOccurrences(of: "'", with: "''"))' WITH (FORMAT gdal, DRIVER 'GeoJSON', LAYER_CREATION_OPTIONS 'RFC7946=YES', SRS 'EPSG:4326');")
+        return try String(contentsOf: output, encoding: .utf8)
+    }
+
     public func transform(_ points: [(Double, Double)], from source: Int, to target: Int) throws -> [(Double, Double)] {
         guard let spatial else { throw SpatialError.notLoaded }
         guard !points.isEmpty else { return [] }

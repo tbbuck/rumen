@@ -135,9 +135,12 @@ public enum Extractability {
     // MARK: - OGC (M10)
 
     /// A WFS feature type is extractable through GetFeature (GeoJSON when the server offers it,
-    /// GML otherwise; paged when the server pages). A WMS layer is a picture and a WMTS layer a
-    /// tile cache: neither yields features, and the statement says what can be had instead.
-    public static func assessOGC(layer: LayerRecord, service: ServiceRecord) -> Assessment {
+    /// GML otherwise; paged when the server pages). A WMS layer gives features when its GetMap
+    /// offers a GeoJSON output, or through the WFS type of the same name at the same endpoint
+    /// (its twin); otherwise it is a picture. A WMTS layer is a tile cache and yields nothing;
+    /// the statement says what can be had instead.
+    public static func assessOGC(layer: LayerRecord, service: ServiceRecord, twin: LayerRecord? = nil,
+                                 twinService: ServiceRecord? = nil) -> Assessment {
         let id = layer.id
         guard let detail = service.ogcDetail, let name = layer.ogcName else {
             return Assessment(verdict: nil, reason: "The service's capabilities have not been fetched yet.", layerID: id)
@@ -155,7 +158,23 @@ public enum Extractability {
             return Assessment(verdict: true, reason: "WFS GetFeature for \(name) as \(how), \(paged).",
                               transport: transport, strategy: strategy, pageSize: detail.paging ? pageSize : nil, layerID: id)
         case .wms:
-            return Assessment(verdict: false, reason: "A WMS layer is a picture, not features. Save it as an image from the Download tab, or preview it on the map.",
+            if let vector = detail.geoJSONFormat {
+                return Assessment(verdict: true,
+                                  reason: "WMS GetMap for \(name) as GeoJSON (\(vector)), one request over the layer's extent. Scale-dependent styling can hide features from a GetMap; a WFS is the surer source when there is one.",
+                                  transport: .geojson, strategy: .single, layerID: id)
+            }
+            if let twin, let twinService, twinService.type == .wfs {
+                let viaTwin = assessOGC(layer: twin, service: twinService)
+                if viaTwin.verdict == true, let transport = viaTwin.transport, let strategy = viaTwin.strategy {
+                    let how = transport == .geojson ? "GeoJSON" : "GML"
+                    let paged = viaTwin.pageSize.map { "paged \($0.formatted(.number.grouping(.automatic))) at a time" } ?? "in one request"
+                    return Assessment(verdict: true,
+                                      reason: "WFS GetFeature through the WFS twin \(twin.ogcName ?? twin.name) as \(how), \(paged). A picture of the WMS layer is the other download.",
+                                      transport: transport, strategy: strategy, pageSize: viaTwin.pageSize, layerID: id, sourceLayerID: twin.id)
+                }
+            }
+            return Assessment(verdict: false,
+                              reason: "A WMS layer is a picture, not features, and this endpoint has no WFS twin for it. Save it as an image from the Download tab, or preview it on the map.",
                               transport: .image, strategy: .single, layerID: id)
         case .wmts:
             return Assessment(verdict: false, reason: "A WMTS layer is a tile cache; tile extraction is out of scope. Preview it on the map.",

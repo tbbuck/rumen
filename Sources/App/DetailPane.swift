@@ -54,6 +54,10 @@ struct DetailPane: View {
 
     private var serverSubtitle: String {
         guard let server = model.currentServer else { return "" }
+        if server.kind == .ogc {
+            let types = model.services.map(\.type.name).sorted().joined(separator: ", ")
+            return "OGC endpoint at \(server.host)\(types.isEmpty ? "" : ": \(types)"). Cached \(Age.text(server.lastVisitedAt))."
+        }
         let version = server.arcgisVersion.map { "ArcGIS Server \($0.formatted(.number.precision(.fractionLength(0...2))))" } ?? "ArcGIS Server"
         return "\(version) at \(server.host). Cached \(Age.text(server.lastVisitedAt))."
     }
@@ -65,13 +69,14 @@ private struct EmptyState: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Paste an ArcGIS URL into the bar above, or press ⌘L")
+            Text("Paste an ArcGIS or OGC URL into the bar above, or press ⌘L")
                 .font(.sheetDisplay(24))
                 .foregroundStyle(Palette.ink)
-            Caption("Any URL in the hierarchy works: a services root, a folder, a service, a layer, even a query someone sent you.")
+            Caption("Any URL in an ArcGIS hierarchy works: a services root, a folder, a service, a layer, even a query someone sent you. So does a WMS, WFS or WMTS endpoint, vendor parameters and all.")
             VStack(alignment: .leading, spacing: 6) {
                 Text("https://gis.example.gov.uk/arcgis/rest/services").font(.sheetMono(12)).foregroundStyle(Palette.muted)
                 Text("https://services3.arcgis.com/…/arcgis/rest/services/Trailheads/FeatureServer/0").font(.sheetMono(12)).foregroundStyle(Palette.muted)
+                Text("https://maps.example.gov.uk/cgi-bin/mapserv?map=planning&service=WFS&request=GetCapabilities").font(.sheetMono(12)).foregroundStyle(Palette.muted)
             }
             Button("Open a URL") { model.beginURLEdit() }.buttonStyle(PrimaryButtonStyle())
         }
@@ -287,12 +292,17 @@ private struct ServicePage: View {
     }
 
     private var subtitle: String {
+        if service.type.isOGC {
+            let version = service.ogcDetail.map { " \($0.version)" } ?? ""
+            return "\(service.type.name)\(version) at \(model.currentServer?.host ?? "the endpoint"). Cached \(Age.text(service.fetchedAt)),"
+        }
         let folder = service.folderPath.isEmpty ? "at the root" : "in the \(service.folderPath) folder"
         return "\(service.type.name) \(folder). Cached \(Age.text(service.fetchedAt)),"
     }
 
     private var facts: [(String, String, Bool)] {
-        [
+        if let detail = service.ogcDetail { return ogcFacts(detail) }
+        return [
             ("Capabilities", service.capabilities.map { Capabilities.parse($0).sorted().joined(separator: ", ") } ?? "—", false),
             ("Query formats", service.supportedQueryFormats ?? "—", false),
             ("Max record count", service.maxRecordCount?.grouped ?? "—", false),
@@ -301,6 +311,30 @@ private struct ServicePage: View {
             ("Tables", String(node.children.filter { $0.kind == .table }.count), false),
             ("URL", service.url.absoluteString, true),
         ]
+    }
+
+    /// What an OGC service said about itself (M10).
+    private func ogcFacts(_ d: OGCServiceDetail) -> [(String, String, Bool)] {
+        func list(_ items: [String], empty: String = "—") -> String { items.isEmpty ? empty : items.joined(separator: ", ") }
+        var rows: [(String, String, Bool)] = [
+            ("Title", d.title ?? "—", false),
+            ("Version", d.version, true),
+            ("Operations", list(d.operations), false),
+            ("Formats", list(d.formats), false),
+        ]
+        switch service.type {
+        case .wfs:
+            rows.append(("Paging", d.paging ? "Yes, \(d.countDefault?.grouped ?? "the server's default") per request" : "No, one request per type", false))
+        case .wms:
+            rows.append(("Max picture", d.maxWidth.map { "\($0.grouped) × \((d.maxHeight ?? $0).grouped) px" } ?? "Not stated", false))
+        case .wmts:
+            rows.append(("Tile matrix sets", list(d.tileMatrixSets.map { "\($0.identifier) (\($0.crs))" }), false))
+        default: break
+        }
+        rows.append(("Layers", String(node.children.count), false))
+        rows.append(("Abstract", d.abstract ?? "—", false))
+        rows.append(("URL", service.url.absoluteString, true))
+        return rows
     }
 }
 
@@ -364,8 +398,8 @@ private struct StartPage: View {
                     Text(model.servers.isEmpty ? "Open a server" : "Where to?")
                         .font(.sheetDisplay(24)).foregroundStyle(Palette.ink).tracking(-0.24)
                     Caption(model.servers.isEmpty
-                            ? "Paste any ArcGIS URL: a services root, a folder, a service, a layer, or a query someone sent you."
-                            : "Pick a server you have opened before, or paste any ArcGIS URL.")
+                            ? "Paste any ArcGIS URL: a services root, a folder, a service, a layer, or a query someone sent you. A WMS, WFS or WMTS endpoint works too."
+                            : "Pick a server you have opened before, or paste any ArcGIS or OGC URL.")
                 }
                 if !model.servers.isEmpty {
                     SectionHeading("Servers")
@@ -425,6 +459,7 @@ private struct StartServerRow: View {
             }
             .buttonStyle(.plain)
             .hoverTracking($editHovered, hand: true)
+            .accessibilityLabel("Server settings")
             .help("Settings: name, cookie, Origin and Referer headers")
             Button {
                 confirmForget = true
@@ -438,6 +473,7 @@ private struct StartServerRow: View {
             }
             .buttonStyle(.plain)
             .hoverTracking($forgetHovered, hand: true)
+            .accessibilityLabel("Forget server")
             .help("Forget this server: cached metadata is removed, downloaded files are kept")
         }
         .confirmationDialog("Forget \(server.friendlyName)?", isPresented: $confirmForget) {

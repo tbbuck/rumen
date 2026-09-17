@@ -14,17 +14,17 @@ struct AddServerSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Add a server").font(.sheetDisplay(18))
-            Text(preview).font(.sheetUI(13)).foregroundStyle(Palette.ink).frame(maxWidth: 440, alignment: .leading)
-            Text(pending.location.rootURL.absoluteString).font(.sheetMono(12)).foregroundStyle(Palette.muted)
+            Text(pending.preview).font(.sheetUI(13)).foregroundStyle(Palette.ink).frame(maxWidth: 440, alignment: .leading)
+            Text(pending.rootURL.absoluteString).font(.sheetMono(12)).foregroundStyle(Palette.muted).lineLimit(2).truncationMode(.middle)
             VStack(alignment: .leading, spacing: 6) {
                 Caption("Friendly name")
-                TextField(pending.location.rootURL.host ?? "Name", text: $friendlyName)
+                TextField(pending.rootURL.host ?? "Name", text: $friendlyName)
                     .textFieldStyle(SheetFieldStyle())
                     .onSubmit(add)
             }
             Button(advanced ? "Hide advanced" : "Advanced…") { advanced.toggle() }.buttonStyle(LinkButtonStyle(size: 12.5))
             if advanced {
-                AdvancedServerFields(cookie: $cookie, origin: $origin, referer: $referer, rootURL: pending.location.rootURL)
+                AdvancedServerFields(cookie: $cookie, origin: $origin, referer: $referer, rootURL: pending.rootURL)
             }
             HStack {
                 Spacer()
@@ -35,26 +35,11 @@ struct AddServerSheet: View {
         .padding(22)
         .frame(width: 480)
         .background(Palette.panel)
-        .onAppear { friendlyName = pending.location.rootURL.host ?? "" }
+        .onAppear { friendlyName = pending.rootURL.host ?? "" }
     }
 
     private func add() {
         Task { await model.addServer(pending, friendlyName: friendlyName, cookie: cookie, origin: origin, referer: referer) }
-    }
-
-    private var preview: String {
-        let host = pending.location.rootURL.host ?? "this server"
-        let loc = pending.location
-        if let layer = loc.layerID, let service = loc.servicePath, let type = loc.serviceType {
-            return "This is layer \(layer) of \(service) (\(type.name)) on \(host)."
-        }
-        if let service = loc.servicePath, let type = loc.serviceType {
-            return "This is the \(type.name) service \(service) on \(host)."
-        }
-        if let folder = loc.folderPath {
-            return "This is the \(folder) folder on \(host)."
-        }
-        return "This is the services root of \(host)."
     }
 }
 

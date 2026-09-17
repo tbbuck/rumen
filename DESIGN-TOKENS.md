@@ -126,9 +126,11 @@ Expose as `Font.sheetDisplay(_:)`, `Font.sheetUI(_:)`, `Font.sheetMono(_:)`.
   `accent-soft`, stroked `accent`, proportional to the server's union extent.
   Not extractable: no fill, `muted2` dashed `1.5 1.5`. Table (no geometry): frame
   only, dashed `2 2`.
-- **Chunk grid**: 23 columns, cells 7px tall, 2px gaps, radius 1.5. Pending `line`,
-  done `accent`, in flight `accent-soft` with a 1px inset `accent` ring, retrying
-  `warn`. Rows grow with the plan; never scrolls, cells shrink to a 3px minimum.
+- **Chunk grid**: 7px cells, 2px gaps, radius 1.5. Pending `line`, done `accent`, in
+  flight `accent-soft` with a 1px inset `accent` ring, retrying `warn`. 23 columns for up
+  to eight rows; a bigger plan widens the grid first, up to 48 columns (430px, taken from
+  the row's text column), and only then adds rows. Cells never shrink and nothing scrolls:
+  the run row grows to fit, with its text top-aligned.
 - **Run progress bar** (finished, paused, or non-chunked runs): 6px, radius 3;
   `yes` when done, `warn` when paused, `accent` while running.
 - **Map sheet**: 1px `line2` frame, `bg` fill; margins left 34 / top 22 /

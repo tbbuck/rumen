@@ -210,8 +210,9 @@ margins.
   PlanningApplications / 0, where 1=1, WGS 84, GeoParquet" or the output path when
   done, one stats sentence), progress (`ChunkGrid` while running, `RunProgressBar`
   otherwise), `RunActions`. *One run per row, its state in one glance.*
-- **`ChunkGrid`** — `Canvas`, 23 columns of 7px cells: pending, done, in flight,
-  retrying. Drawn from `download_chunk`. *The honest picture of a download; a
+- **`ChunkGrid`** — `Canvas` of 7px cells: pending, done, in flight, retrying. 23
+  columns for up to eight rows, then wider (to 48 columns) before taller; the run row
+  grows to fit. Drawn from `download_chunk`. *The honest picture of a download; a
   stalled run shows exactly which requests are stuck.*
 - **`RunProgressBar`** — 6px bar, `yes` when done, `warn` when paused. *Progress
   for runs without a chunk plan, and a quiet summary for finished ones.*

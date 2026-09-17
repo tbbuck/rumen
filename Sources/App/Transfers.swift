@@ -204,15 +204,18 @@ private struct RunRow: View {
                 Text(run.stats).font(.sheetUI(12.5)).foregroundStyle(run.status == .failed ? Palette.no : Palette.muted).lineLimit(2)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            // The grid widens (from the text column) before it grows tall; the row grows to fit it.
+            let showsGrid = run.status == .running && !run.chunks.isEmpty
+            let gridWidth = showsGrid ? max(ChunkGrid.baseWidth, ChunkGrid.layout(count: run.chunks.count).size.width) : ChunkGrid.baseWidth
             Group {
-                if run.status == .running, !run.chunks.isEmpty {
+                if showsGrid {
                     ChunkGrid(statuses: run.chunks, inFlight: run.progress?.chunksInFlight ?? 0)
                 } else {
                     ProgressBar(fraction: run.fraction, color: run.status == .complete ? Palette.yes : (run.status == .paused ? Palette.warn : Palette.accent))
                         .padding(.top, 6)
                 }
             }
-            .frame(width: 220)
+            .frame(width: gridWidth, alignment: .topLeading)
             RunActions(run: run).frame(width: 214, alignment: .leading)
             RemoveRunButton(run: run)
         }
@@ -220,24 +223,39 @@ private struct RunRow: View {
     }
 }
 
-/// 23 columns of 7px cells: pending `line`, done `accent`, in flight `accent-soft` + ring,
-/// failed `no`. Rows grow with the plan; cells shrink to a 3px minimum rather than scroll.
+/// 7px cells in 2px gaps: pending `line`, done `accent`, in flight `accent-soft` + ring,
+/// failed `no`. 23 columns for up to eight rows; a bigger plan widens the grid first (to 48
+/// columns, 430px) and only then adds rows, and the run row grows to fit. Cells never shrink.
 struct ChunkGrid: View {
     let statuses: [ChunkStatus]
     let inFlight: Int
 
+    static let cell: CGFloat = 7
+    static let gap: CGFloat = 2
+    static let minColumns = 23
+    static let maxColumns = 48
+    static let preferredRows = 8
+    /// The default width: 23 columns.
+    static var baseWidth: CGFloat { CGFloat(minColumns) * (cell + gap) - gap }
+
+    /// Columns, rows, and the size that fits `count` cells at full size.
+    static func layout(count: Int) -> (columns: Int, rows: Int, size: CGSize) {
+        let n = max(1, count)
+        let columns = min(maxColumns, max(minColumns, Int((Double(n) / Double(preferredRows)).rounded(.up))))
+        let rows = max(1, (n + columns - 1) / columns)
+        return (columns, rows, CGSize(width: CGFloat(columns) * (cell + gap) - gap, height: CGFloat(rows) * (cell + gap) - gap))
+    }
+
     var body: some View {
-        Canvas { context, size in
-            let columns = 23
-            let gap: CGFloat = 2
-            let rows = max(1, (statuses.count + columns - 1) / columns)
-            let cellW = (size.width - gap * CGFloat(columns - 1)) / CGFloat(columns)
-            let cellH = max(3, min(7, (size.height - gap * CGFloat(rows - 1)) / CGFloat(rows)))
+        let layout = Self.layout(count: statuses.count)
+        Canvas { context, _ in
+            let columns = layout.columns
+            let step = Self.cell + Self.gap
             var inFlightLeft = inFlight
             for (index, status) in statuses.enumerated() {
-                let x = CGFloat(index % columns) * (cellW + gap)
-                let y = CGFloat(index / columns) * (cellH + gap)
-                let rect = CGRect(x: x, y: y, width: cellW, height: cellH)
+                let x = CGFloat(index % columns) * step
+                let y = CGFloat(index / columns) * step
+                let rect = CGRect(x: x, y: y, width: Self.cell, height: Self.cell)
                 let path = Path(roundedRect: rect, cornerRadius: 1.5)
                 switch status {
                 case .done: context.fill(path, with: .color(Palette.accent))
@@ -254,8 +272,7 @@ struct ChunkGrid: View {
                 }
             }
         }
-        .frame(height: CGFloat(max(1, (statuses.count + 22) / 23)) * 9 - 2)
-        .frame(maxHeight: 60)
+        .frame(width: layout.size.width, height: layout.size.height)
     }
 }
 

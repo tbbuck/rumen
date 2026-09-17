@@ -1,0 +1,74 @@
+name: Release
+
+# Tag-triggered, fully automated notarized release (M9): build → bundle engine → Developer ID
+# sign → self-test → notarize → staple → DMG → attach to a GitHub Release.
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   APPLE_DEVELOPER_ID_CERT_P12       base64 of the "Developer ID Application" cert + key (.p12)
+#                                       export from Keychain Access, then: base64 -i cert.p12 | pbcopy
+#   APPLE_DEVELOPER_ID_CERT_PASSWORD  the password set when exporting the .p12
+#   APPLE_ID                          Apple ID email used for notarization
+#   APPLE_TEAM_ID                     Developer Team ID
+#   APPLE_APP_SPECIFIC_PASSWORD       an app-specific password for that Apple ID
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write        # create the GitHub Release and upload the DMG
+
+jobs:
+  release:
+    # macos-26 (Apple Silicon) matches the macOS 26 target and Xcode 26; arm64 puts Homebrew
+    # at /opt/homebrew, where Package.swift links libduckdb from.
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install build tools + DuckDB
+        run: brew install xcodegen duckdb
+
+      - name: Import Developer ID signing certificate
+        env:
+          CERT_P12: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/app-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -P "$CERT_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security list-keychain -d user -s "$KEYCHAIN" login.keychain-db
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+      - name: Create notary profile
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          set -euo pipefail
+          xcrun notarytool store-credentials "arcgis-notary" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD"
+
+      - name: Build, sign, notarize, package
+        run: bash scripts/release.sh
+
+      - name: Attach DMG to the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/ArcGIS Explorer.dmg
+          fail_on_unmatched_files: true

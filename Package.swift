@@ -12,7 +12,8 @@ import PackageDescription
 //   decoding, extractability, download planning, and the app database. No UI, no AppKit.
 //
 // The macOS app (see project.yml) links the products. Homebrew's dylib has an absolute
-// install name, so no rpath is needed for local development; bundling is M8.
+// install name, so no rpath is needed for local development; scripts/bundle-duckdb-engine.sh
+// bundles it for release.
 let duckdbLib = "/opt/homebrew/opt/duckdb/lib"
 
 let package = Package(

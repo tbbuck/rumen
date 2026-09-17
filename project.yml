@@ -11,7 +11,7 @@ settings:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
     # Local dev signs ad-hoc so no Apple Team is required to build/run.
-    # M8 switches to Developer ID + hardened runtime + notarization.
+    # scripts/release.sh signs the Release build with Developer ID + hardened runtime and notarizes it (M9).
     CODE_SIGN_STYLE: Manual
     CODE_SIGN_IDENTITY: "-"
     DEVELOPMENT_TEAM: ""
@@ -49,7 +49,8 @@ targets:
         # build-setting substitution from $(MAPTILER_API_KEY).
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Config/Info.plist
-        # libduckdb is linked from Homebrew (absolute install name) for now.
+        # libduckdb is linked from Homebrew (absolute install name) in dev; scripts/bundle-duckdb-engine.sh
+        # copies it into the bundle and rewrites the reference for release.
         LIBRARY_SEARCH_PATHS:
           - "/opt/homebrew/opt/duckdb/lib"
         LD_RUNPATH_SEARCH_PATHS:

@@ -413,7 +413,10 @@ owned by `AppDatabase`). DuckDB never holds app state.
   distribution bundles libduckdb into `Contents/Frameworks` and autoinstalls the
   `spatial` extension at first run under `disable-library-validation` (the
   `.duckdb_extension` signature footer cannot be notarised —
-  [duckdb#16926](https://github.com/duckdb/duckdb/issues/16926)).
+  [duckdb#16926](https://github.com/duckdb/duckdb/issues/16926)). A packaged build
+  (detected by the bundled dylib) sets DuckDB's default configuration at launch, before any
+  engine opens, so every engine (spatial, staging, re-export, stored files) resolves
+  extensions from the per-user folder; dev builds keep `~/.duckdb`.
 - Extensions needed: **`spatial`** only (plus `httpfs` if a remote export target is
   ever added). Verify every spatial function signature against the DuckDB docs
   index before use.
@@ -422,8 +425,17 @@ owned by `AppDatabase`). DuckDB never holds app state.
 - `Package.swift` (engine + kit + tests) and `project.yml` (xcodegen, app target,
   `SWIFT_VERSION: 6.0`, macOS 26 deployment target, ad-hoc signing in dev).
 - Build via `claude-scripts/build_app.sh`; tests via `swift test`.
-- CI: `.github/workflows/ci.yml` on `macos-26` (build + `swift test`); a release
-  workflow (tag → signed, notarised DMG) arrives with the packaging milestone.
+- CI: `.github/workflows/ci.yml` on `macos-26` (build + `swift test`).
+- Release (M9): `scripts/release.sh` builds Release, bundles `libduckdb` into
+  `Contents/Frameworks` (`scripts/bundle-duckdb-engine.sh`, rewriting the install name and
+  rpath so Homebrew is not needed), signs with Developer ID and the hardened runtime under
+  `Config/ArcGISExplorer.entitlements` (only `disable-library-validation`, for the
+  DuckDB-signed extension), runs the signed binary's `--selftest` (which installs `spatial`
+  into `~/Library/Application Support/ArcGIS Explorer/duckdb-extensions` on a clean Mac and
+  reprojects a point), notarises and staples, and packages a DMG. `.github/workflows/
+  release.yml` runs it on a `v*` tag and attaches the DMG to a GitHub Release; the secrets it
+  needs are listed at the top of the file. `SKIP_NOTARIZE=1` runs everything but the
+  notarisation locally.
 - SwiftProtobuf is the one third-party runtime dependency (for the PBF decoder).
   Generated Swift from the vendored `.proto` is committed so builds need no
   `protoc`.

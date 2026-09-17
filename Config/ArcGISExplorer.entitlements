@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for the notarized, non-sandboxed build (M9).
+
+  disable-library-validation lets the hardened app dlopen DuckDB's spatial extension, which
+  DuckDB installs at runtime into Application Support. That extension is signed by DuckDB, not
+  by our Developer ID team, so library validation would otherwise refuse to load it. It cannot
+  be bundled and re-signed instead: a .duckdb_extension carries a metadata and signature
+  footer after the Mach-O that Apple's notary rejects, and DuckDB confirms signing dynamically
+  loaded extensions is not currently possible (https://github.com/duckdb/duckdb/issues/16926).
+  The app is not sandboxed, so file access and the outbound HTTPS used to fetch the extension
+  and talk to ArcGIS servers need no further entitlement.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

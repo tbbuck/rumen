@@ -249,8 +249,11 @@ margins.
   cancel. *Background crawl with a way out.*
 - **`OverwriteConfirmation`** — alert naming the existing file and its age. *Never
   overwrite silently (SPEC §5.7).*
-- **`PreferencesWindow`** — download directory, default format and SR, concurrency,
-  retry limits, domain-label default, appearance. *SPEC M8.*
+- **`PreferencesView`** (⌘,, the `Settings` scene) — Downloads: folder with Change and
+  Reveal, default format (segmented), spatial reference (the layer's own or WGS 84, locked
+  to WGS 84 for GeoJSON), domain labels; Network: requests per host and attempts per
+  request as steppers, applied to the client at once; Appearance: Day, Night, System. Each
+  layer's Download tab starts from these and changes them for that run only. *SPEC M9.*
 
 ## Shared primitives
 

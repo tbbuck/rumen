@@ -61,3 +61,37 @@ targets:
           - "/opt/homebrew/opt/duckdb/lib"
         LD_RUNPATH_SEARCH_PATHS:
           - "/opt/homebrew/opt/duckdb/lib"
+
+  # Apple's accessibility audit and a launch-time metric, driven through XCUITest against a
+  # scratch home (`--home`) and a loopback ArcGIS server the tests synthesise. Run with
+  # claude-scripts/ui_test.sh or from Xcode.
+  ArcGISExplorerUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - Tests/ArcGISExplorerUITests
+    dependencies:
+      - target: ArcGISExplorer
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.moomoomoo.ArcGISExplorerUITests
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  ArcGISExplorer:
+    build:
+      targets:
+        ArcGISExplorer: all
+        ArcGISExplorerUITests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - ArcGISExplorerUITests
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

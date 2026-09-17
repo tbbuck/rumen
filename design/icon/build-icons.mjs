@@ -84,14 +84,16 @@ function bboxOf(geojson) {
 // A window onto the map: the feature's bounding box is centred in `box` and spans
 // `featH` of its height. Equal scale in x and y (equirectangular corrected by cos of
 // the mid latitude), so shapes keep their proportions.
-function windowFor(box, featH, feature) {
+// `shift` moves the content left by that fraction of the box width, for sheets whose
+// right edge is clipped by the tile.
+function windowFor(box, featH, feature, shift = 0) {
   const fb = bboxOf(feature);
   const midLat = (fb.y0 + fb.y1) / 2;
   const k = Math.cos(midLat * Math.PI / 180);
   const latSpan = (fb.y1 - fb.y0) / featH;
   const scale = box.h / latSpan;                // px per degree of latitude
   const lonSpan = box.w / (scale * k);
-  const lonCentre = (fb.x0 + fb.x1) / 2;
+  const lonCentre = (fb.x0 + fb.x1) / 2 + shift * lonSpan;
   return { lon0: lonCentre - lonSpan / 2, latTop: midLat + latSpan / 2, k, scale, box };
 }
 
@@ -165,8 +167,8 @@ const SOFT = `<filter id="soft" x="-20%" y="-20%" width="140%" height="140%"><fe
 // The front sheet as it was in the first rounds: white paper, the blue graticule, a
 // wash of water in the lower corner, and on it the layer (sand islands) with the
 // dashed extent. No sea fill: the water is a corner of the sheet, not the map.
-function paperMap(box, featH, gratStep, strokeW, dash, feature) {
-  const win = windowFor(box, featH, feature);
+function paperMap(box, featH, gratStep, strokeW, dash, feature, shift = 0) {
+  const win = windowFor(box, featH, feature, shift);
   const proj = project(win);
   const ext = extentRect(queryExtent, proj);
   const g = [];
@@ -285,17 +287,54 @@ function conceptStack({ name, sheets = 2, lift = 196, featH = 0.78, feature = bo
 }
 
 // Shared map tones with real contrast: deeper water, deeper sand, a graticule that survives 64px.
-const mapTones = { water: '#BCD2E5', land: '#DCCFA4', landLine: '#A99968', grat: '#AFC3D7', ghostGrat: 'rgba(34,42,38,0.14)' };
+const mapTones = { water: '#BCD2E5', land: '#DCCFA4', landLine: '#A99968', grat: '#AFC3D7', ghostGrat: 'rgba(34,42,38,0.14)', accent: PETROL, accentSoft: 'rgba(17,108,126,0.12)' };
+
+// ---- Steps with corner overflow ---------------------------------------------
+
+// A light tile with sheets stepping down in value behind a white front sheet. The
+// front sheet runs off the top-right corner of the tile and the back sheet off the
+// bottom-left, so the front map gets more room without more detail.
+//   sheets:    2 or 3
+//   gridBacks: draw the faint graticule on the sheets behind
+//   overflow:  how far the outer sheets run past the tile's corners, in px
+function conceptSteps({ name, sheets = 3, gridBacks = false, overflow = 60, featH = 0.8, feature = bold }) {
+  const w = 580, h = 650, rx = 30;
+  const layers = [];
+  if (sheets === 3) {
+    layers.push({ x: 100 - overflow, y: 924 - h + overflow, fill: p.sheetBack });
+    layers.push({ x: 232, y: 236, fill: p.sheetMid });
+    layers.push({ x: 924 - w + overflow, y: 100 - overflow, fill: p.paper, front: true });
+  } else {
+    layers.push({ x: 100 - overflow, y: 924 - h + overflow, fill: p.sheetBack });
+    layers.push({ x: 924 - w + overflow, y: 100 - overflow, fill: p.paper, front: true });
+  }
+  const front = layers[layers.length - 1];
+  const map = { x: front.x, y: front.y, w, h };
+  const defs = `${SOFT}
+    ${layers.map((s, i) => `<clipPath id="s${i}"><rect x="${s.x}" y="${s.y}" width="${w}" height="${h}" rx="${rx}"/></clipPath>`).join('\n    ')}`;
+  const body = `<rect width="1024" height="1024" fill="${p.ground}"/>
+    ${layers.map((s, i) => `<rect x="${s.x}" y="${s.y + 24}" width="${w}" height="${h}" rx="${rx}" fill="#000" opacity="${s.front ? 0.34 : 0.24}" filter="url(#soft)"/>
+    <g clip-path="url(#s${i})">
+      <rect x="${s.x}" y="${s.y}" width="${w}" height="${h}" fill="${s.fill}"/>
+      ${s.front ? paperMap(map, featH, 108, 16, '40 24', feature, 0.08 + overflow / w * 0.5) : (gridBacks ? greySheet({ x: s.x, y: s.y, w, h }, 108) : '')}
+    </g>`).join('\n    ')}`;
+  return svgDoc(name, 'Sheets stepping down in value behind a white front sheet that runs off the top-right corner of the tile, with the back sheet off the bottom-left. The front carries the graticule, a wash of water, the layer and its extent in petrol.', defs, body);
+}
+
+// Value ladders, light to dark: front paper, ground, middle sheet, back sheet.
+const ladders = {
+  mid:  { ground: '#E1E4DD', sheetMid: '#C2C9C1', sheetBack: '#98A39B' },
+  dark: { ground: '#D9DDD5', sheetMid: '#B1B9B0', sheetBack: '#7E8A81' },
+};
 
 const variants = [
-  { key: 'D1', name: 'D1 · petrol tile', sheets: 2, pal: { ...mapTones, ground: '#0F5F70', sheetBack: '#C9D7DA', accent: SLATE, accentSoft: 'rgba(52,71,90,0.12)' }, why: 'The tile is petrol, the sheets are light, the extent is ink slate. Three clear values: dark ground, light paper, dark line. The app’s colour becomes the tile itself.' },
-  { key: 'D2', name: 'D2 · slate tile', sheets: 2, pal: { ...mapTones, ground: '#34475A', sheetBack: '#CBD3DB', accent: PETROL, accentSoft: 'rgba(17,108,126,0.12)' }, why: 'The tile is ink slate, the sheets are light, the extent is petrol. Same value structure as D1 with the colours swapped: a neutral tile, a coloured mark.' },
-  { key: 'D3', name: 'D3 · sea tile', sheets: 2, pal: { ...mapTones, ground: '#5F8DB3', sheetBack: '#D3DEE8', accent: PETROL, accentSoft: 'rgba(17,108,126,0.12)' }, why: 'The tile is a mid sea blue, sheets float on it, the extent is petrol. Lighter than D1 and D2 but still two full steps below the paper.' },
-  { key: 'D4', name: 'D4 · light tile, three steps', sheets: 3, pal: { ...mapTones, ground: '#E3E6DF', sheetBack: '#9AA59D', sheetMid: '#C4CCC4', accent: PETROL, accentSoft: 'rgba(17,108,126,0.12)' }, why: 'Keeps the light tile you asked for, but the sheets behind step down to a real mid grey so the stack reads at 32px. Extent in petrol.' },
-  { key: 'D5', name: 'D5 · light tile, ink slate', sheets: 3, pal: { ...mapTones, ground: '#E3E6DF', sheetBack: '#9AA59D', sheetMid: '#C4CCC4', accent: SLATE, accentSoft: 'rgba(52,71,90,0.12)' }, why: 'D4 with the extent in ink slate.' },
+  { key: 'E1', name: 'E1 · three steps, gridded', opts: { sheets: 3, gridBacks: true, overflow: 60 }, pal: ladders.mid, why: 'Three sheets on a light tile, the outer two running off their corners. Back sheets carry the faint graticule. Ladder: white, light ground, light grey, mid grey.' },
+  { key: 'E2', name: 'E2 · three steps, plain, darker', opts: { sheets: 3, gridBacks: false, overflow: 60 }, pal: ladders.dark, why: 'E1 with plain back sheets and a darker ladder, so the steps are unmistakable at 32px and nothing on the back sheets competes with the map.' },
+  { key: 'E3', name: 'E3 · two steps', opts: { sheets: 2, gridBacks: false, overflow: 70 }, pal: ladders.mid, why: 'Only two sheets, both larger, both overflowing. The simplest silhouette and the biggest map.' },
+  { key: 'E4', name: 'E4 · three steps, further out', opts: { sheets: 3, gridBacks: false, overflow: 110 }, pal: ladders.mid, why: 'E2’s plain sheets on the mid ladder, with the outer sheets pushed well past their corners so the front map is largest of the three-sheet options.' },
 ];
 
-const concepts = variants.map(v => ({ key: v.key, file: `${v.key}.svg`, name: v.name, svg: withPalette(v.pal, () => conceptStack({ name: v.name, sheets: v.sheets })), why: v.why, tradeoff: '' }));
+const concepts = variants.map(v => ({ key: v.key, file: `${v.key}.svg`, name: v.name, svg: withPalette({ ...mapTones, ...v.pal }, () => conceptSteps({ name: v.name, ...v.opts })), why: v.why, tradeoff: '' }));
 
 // ---- Preview page ----------------------------------------------------------
 
@@ -356,7 +395,7 @@ const css = `
 
 const content = `<div class="wrap">
   <h1>ArcGIS Explorer app icon</h1>
-  <p class="lede">The pulled-layer stack rebuilt for Dock size: every element sits at least two value steps from its neighbour so nothing averages to mush at 64px. Five variants on the tile colour and the extent colour (petrol #116C7E or ink slate #34475A). Apple's squircle tile at Dock (128, 64), sidebar (32) and Finder list (16) sizes; Dock strips on a light and a dark desktop.</p>
+  <p class="lede">The pulled-layer stack as value steps on a light tile, extent in petrol (#116C7E), with the front sheet running off the top-right corner and the back sheet off the bottom-left. Four ladders. Apple's squircle tile at Dock (128, 64), sidebar (32) and Finder list (16) sizes; Dock strips on a light and a dark desktop.</p>
   <div class="strip light">
     <div class="grid">${rows}</div>
     ${dock('light')}

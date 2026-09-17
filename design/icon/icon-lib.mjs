@@ -374,27 +374,41 @@ export function layerSvg(layer) {
 }
 
 // icon.json as Icon Composer writes it. Arrays are top-to-bottom, so the bottom-first
-// layer list is reversed. One group; glass per layer.
+// layer list is reversed. Consecutive layers with the same `group` name share a group,
+// whose shadow and specular come from `concept.groups[name]`; the rest use the
+// concept's defaults. Glass is per layer.
 export function iconJson(concept) {
   const { top, bottom } = fillSpec(concept.fill);
-  const layers = concept.layers.filter(l => !l.flatOnly).reverse().map(l => ({
-    glass: l.glass === true,
-    hidden: false,
-    'image-name': `${l.name}.svg`,
-    name: l.name,
-    opacity: l.opacity ?? 1,
-  }));
+  const groups = [];
+  for (const l of concept.layers.filter(l => !l.flatOnly).reverse()) {
+    const name = l.group ?? 'main';
+    let g = groups[groups.length - 1];
+    if (!g || g.name !== name) {
+      g = { name, layers: [] };
+      groups.push(g);
+    }
+    g.layers.push({
+      glass: l.glass === true,
+      hidden: false,
+      'image-name': `${l.name}.svg`,
+      name: l.name,
+      opacity: l.opacity ?? 1,
+    });
+  }
   return JSON.stringify({
     fill: { 'linear-gradient': [hexToSrgb(top), hexToSrgb(bottom)] },
-    groups: [{
-      'blend-mode': 'normal',
-      hidden: false,
-      layers,
-      lighting: 'individual',
-      shadow: { kind: 'neutral', opacity: concept.shadow ?? 0.35 },
-      specular: true,
-      translucency: { enabled: false, value: 0.5 },
-    }],
+    groups: groups.map(g => {
+      const opts = concept.groups?.[g.name] ?? {};
+      return {
+        'blend-mode': 'normal',
+        hidden: false,
+        layers: g.layers,
+        lighting: 'individual',
+        shadow: { kind: 'neutral', opacity: opts.shadow ?? concept.shadow ?? 0.35 },
+        specular: opts.specular ?? true,
+        translucency: { enabled: false, value: 0.5 },
+      };
+    }),
     'supported-platforms': { circles: ['watchOS'], squares: 'shared' },
   }, null, 2) + '\n';
 }

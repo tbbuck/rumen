@@ -6,6 +6,10 @@ Composer bundle that actool compiles exactly as Xcode would. Earlier rounds' con
 were deliberately not carried over; the standing brief is the mechanics below and one
 caution from Tom: no clusters of small dots.
 
+Current direction (2026-09-17): **Peel**, a white map sheet with a lifted corner on OS
+Explorer orange, being iterated on how strongly the curl reads. Locator (the extent
+locator glyph on Landranger magenta) is kept in `concepts.mjs`, unbuilt.
+
 ## Files
 
 | File | Role |
@@ -15,7 +19,6 @@ caution from Tom: no clusters of small dots.
 | `bundles/<Name>.icon/` | Icon Composer bundles derived from the same layers: `icon.json` + one full-canvas SVG per layer under `Assets/`. Generated; `flatOnly` layers (hard shadows) are left out because the group shadow does that job. Delete the folder before a build that renames layers. |
 | `icon-lib.mjs` | The mechanics: Apple's squircle tile, the 1024px flat-master wrapper, lon/lat → tile-px projection, clip-free drawing helpers (dashes, rings, grids, ticks, ribbons and Chaikin smoothing as filled paths; Sutherland–Hodgman clipping to convex shapes), the layered-concept → flat master + bundle derivation, and the preview-page builder. |
 | `build-icons.mjs` | CLI: `node design/icon/build-icons.mjs design/icon/concepts.mjs <preview-dir> [renders-dir]`. Writes the SVGs and bundles here and `icon-preview.html` (standalone) + `arcgis-explorer-icon.html` (Artifact fragment) to the preview dir; with a renders dir it embeds the actool output too. |
-| `contours.sh`, `contours.json` | Schiehallion from the Copernicus GLO-30 DEM (AWS Open Data), contoured at 50 m with GDAL. Committed output so builds need no network. |
 | `geography.sql`, `geography.json`, `geography-bold.json` | DuckDB spatial + httpfs query against Overture Maps division areas: Great Britain and Ireland as land polygons, generalised to logo grade at two strengths. Committed output. Derived from OpenStreetMap (ODbL): a "Contains OpenStreetMap data" credit belongs in About if it ships. |
 
 Review tooling outside the repo (ignored, under `claude-scripts/`):

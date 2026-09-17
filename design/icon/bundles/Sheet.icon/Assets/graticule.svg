@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg width="1024px" height="1024px" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg">
-  <title>graticule</title>
-  <defs></defs>
-  <g transform="scale(1.242718) translate(-100 -100)">
-    <path d="M241.2 176h4v672h-4ZM308.4 176h4v672h-4ZM375.6 176h4v672h-4ZM442.8 176h4v672h-4ZM510 176h4v672h-4ZM577.2 176h4v672h-4ZM644.4 176h4v672h-4ZM711.6 176h4v672h-4ZM778.8 176h4v672h-4ZM176 241.2h672v4h-672ZM176 308.4h672v4h-672ZM176 375.6h672v4h-672ZM176 442.8h672v4h-672ZM176 510h672v4h-672ZM176 577.2h672v4h-672ZM176 644.4h672v4h-672ZM176 711.6h672v4h-672ZM176 778.8h672v4h-672Z" fill="#A6B8C8"/>
-  </g>
-</svg>

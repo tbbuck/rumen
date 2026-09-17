@@ -281,6 +281,51 @@ export function neatlineTicks(rect, divisions, len, t, offset = 0) {
   return d.join('');
 }
 
+// ---- Polylines as filled shapes ---------------------------------------------------
+
+// Chaikin corner cutting, `n` rounds. Closed rings stay closed.
+export function chaikin(points, n = 2, closed = false) {
+  let pts = points;
+  for (let k = 0; k < n; k++) {
+    const out = [];
+    const m = pts.length;
+    if (!closed) out.push(pts[0]);
+    for (let i = 0; i < (closed ? m : m - 1); i++) {
+      const [ax, ay] = pts[i], [bx, by] = pts[(i + 1) % m];
+      out.push([ax * 0.75 + bx * 0.25, ay * 0.75 + by * 0.25], [ax * 0.25 + bx * 0.75, ay * 0.25 + by * 0.75]);
+    }
+    if (!closed) out.push(pts[m - 1]);
+    pts = out;
+  }
+  return pts;
+}
+
+// A polyline as a filled band `w` wide. An open line gives one ring; a closed ring gives
+// an outer and a reversed inner ring, so the nonzero rule fills only the band.
+export function ribbonRings(points, w, closed = false) {
+  const m = points.length;
+  const segs = closed ? m : m - 1;
+  const normals = [];
+  for (let i = 0; i < segs; i++) {
+    const [ax, ay] = points[i], [bx, by] = points[(i + 1) % m];
+    const dx = bx - ax, dy = by - ay, len = Math.hypot(dx, dy) || 1;
+    normals.push([-dy / len, dx / len]);
+  }
+  const left = [], right = [];
+  for (let i = 0; i < m; i++) {
+    const nPrev = closed ? normals[(i - 1 + segs) % segs] : normals[Math.max(0, i - 1)];
+    const nNext = closed ? normals[i % segs] : normals[Math.min(i, segs - 1)];
+    let nx = nPrev[0] + nNext[0], ny = nPrev[1] + nNext[1];
+    const len = Math.hypot(nx, ny);
+    if (len < 1e-6) { nx = nNext[0]; ny = nNext[1]; } else { nx /= len; ny /= len; }
+    // Miter length, clamped so hairpins do not spike.
+    const h = (w / 2) / Math.max(0.5, nx * nNext[0] + ny * nNext[1]);
+    left.push([points[i][0] + nx * h, points[i][1] + ny * h]);
+    right.push([points[i][0] - nx * h, points[i][1] - ny * h]);
+  }
+  return closed ? [left, right.slice().reverse()] : [[...left, ...right.slice().reverse()]];
+}
+
 export function hexToRgba(hex, alpha) {
   const n = parseInt(hex.slice(1), 16);
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
@@ -314,13 +359,14 @@ export function flatMaster(concept, layers = concept.layers) {
   return svgDoc(concept.name, concept.comment ?? '', defs, body);
 }
 
-// One Icon Composer layer: the full canvas, tile coordinates scaled up 1024/824.
+// One Icon Composer layer: the full canvas, tile coordinates scaled up 1024/824. A
+// layer's opacity goes in icon.json, not here, so it is not applied twice.
 export function layerSvg(layer) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg width="1024px" height="1024px" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg">
   <title>${layer.name}</title>
   <defs>${layer.defs ?? ''}</defs>
-  <g transform="scale(${BUNDLE_SCALE.toFixed(6)}) translate(-100 -100)"${layer.opacity != null ? ` opacity="${layer.opacity}"` : ''}>
+  <g transform="scale(${BUNDLE_SCALE.toFixed(6)}) translate(-100 -100)">
     ${layer.body}
   </g>
 </svg>
@@ -336,7 +382,7 @@ export function iconJson(concept) {
     hidden: false,
     'image-name': `${l.name}.svg`,
     name: l.name,
-    opacity: 1,
+    opacity: l.opacity ?? 1,
   }));
   return JSON.stringify({
     fill: { 'linear-gradient': [hexToSrgb(top), hexToSrgb(bottom)] },

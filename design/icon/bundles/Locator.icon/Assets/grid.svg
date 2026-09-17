@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024px" height="1024px" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg">
+  <title>grid</title>
+  <defs></defs>
+  <g transform="scale(1.242718) translate(-100 -100)">
+    <path d="M380.7 282h4v388h-4ZM445.3 282h4v388h-4ZM510 282h4v388h-4ZM574.7 282h4v388h-4ZM639.3 282h4v388h-4ZM704 282h4v388h-4ZM318 344.7h388v4h-388ZM318 409.3h388v4h-388ZM318 474h388v4h-388ZM318 538.7h388v4h-388ZM318 603.3h388v4h-388Z" fill="#FFFFFF" fill-opacity="0.3"/>
+  </g>
+</svg>

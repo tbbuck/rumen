@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024px" height="1024px" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg">
+  <title>halo</title>
+  <defs><linearGradient id="locator-halo" gradientUnits="userSpaceOnUse" x1="0" y1="100" x2="0" y2="924"><stop offset="0" stop-color="#E9509A"/><stop offset="1" stop-color="#B01C63"/></linearGradient></defs>
+  <g transform="scale(1.242718) translate(-100 -100)">
+    <path d="M382 580h260v246h-260Z" fill="url(#locator-halo)"/>
+  </g>
+</svg>

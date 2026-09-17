@@ -184,7 +184,12 @@ commit per logical unit.
   WFS 1.0 and 2.0, WMTS 1.0), the probe, assessment, and the download shapes; 203 tests.
   **Also:** Apple's accessibility audit as a UI test target against a scratch home
   (`--home`) and a loopback ArcGIS server synthesised in the test process, and a launch
-  metric (see `Tests/ArcGISExplorerUITests`, `claude-scripts/ui_test.sh`).
+  metric (see `Tests/ArcGISExplorerUITests`). It runs on the test VM, since XCUITest takes
+  the keyboard. Every finding the audit passes over is attached as a screenshot with the
+  element outlined, and `ReferenceAuditTests` runs the same audit over Apple's own apps
+  (Font Book, System Settings, TextEdit, Weather) so a finding can be told the framework's
+  from the app's. Contrast is proved on the palette (every text tone on both grounds, every
+  chip tone on its tint) because the audit's pixel reading flags Apple's own captions too.
 
 ---
 

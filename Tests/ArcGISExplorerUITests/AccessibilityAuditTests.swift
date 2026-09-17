@@ -98,29 +98,17 @@ final class AccessibilityAuditTests: XCTestCase {
                     if let frame = issue.element?.frame { contrastFrames.append(frame) }
                     return true
                 }
-                // SwiftUI's Menu and menu-style Picker on macOS open on click yet the audit reports
-                // them as lacking a press action, standard controls though they are; a menu is a
-                // menu, and there is nothing of this app's in that element to change.
-                if issue.compactDescription.hasPrefix("Action is missing"),
-                   let type = issue.element?.elementType, type == .menuButton || type == .popUpButton {
-                    return pass("SwiftUI menu, opens on click", issue, around: issue.element?.frame)
-                }
-                // SwiftUI hosts each window's content in a group of its own, the size of the window
-                // and nameless; the app's own root group sits inside it, named. The same goes for
-                // a sheet and the Preferences window. Nothing of ours is in that outer element.
-                if issue.compactDescription.hasPrefix("Element has no description"),
-                   let element = issue.element, element.elementType == .group,
-                   Self.windowFrames(of: app).contains(where: { $0.equalTo(element.frame) }) {
-                    return pass("window-sized hosting group", issue, around: element.frame)
-                }
-                // A mismatch with no element has appeared only while a sheet is up, and the sheet's
-                // tree holds exactly one element that is not the app's: the nameless, sheet-sized
-                // group SwiftUI hosts the sheet's content in, around the app's own named group.
+                // A mismatch with no element appears only while a sheet is up; the sheet's tree
+                // (printed below) is the app's own named groups and fields, and Font Book with one
+                // of its own SwiftUI sheets up reports the very same finding (ReferenceAuditTests).
                 if issue.auditType == .parentChild, issue.element == nil, app.sheets.count > 0 {
-                    return pass("no element; the sheet's hosting group", issue, around: app.sheets.firstMatch.frame)
+                    print("[\(state)] the sheet's tree at the time:\n    " + app.sheets.firstMatch.debugDescription.prefix(2500).replacingOccurrences(of: "\n", with: "\n    "))
+                    return pass("no element, with a sheet up", issue, around: app.sheets.firstMatch.frame)
                 }
                 // The window's own buttons (close, minimise, zoom, in the top-left 80×48 of a window)
-                // are AppKit's; the element tree shows the mismatch inside the zoom button's group.
+                // are AppKit's; the element tree shows the mismatch inside the zoom button's group,
+                // and every Apple app audited for reference (Font Book, System Settings, TextEdit,
+                // Weather) reports the same 14×14 group at the same spot in each of its windows.
                 if issue.auditType == .parentChild, let element = issue.element,
                    Self.windowFrames(of: app).contains(where: { CGRect(x: $0.minX, y: $0.minY, width: 80, height: 48).contains(element.frame) }) {
                     return pass("window's zoom button", issue, around: element.frame)

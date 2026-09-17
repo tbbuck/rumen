@@ -43,7 +43,7 @@ struct ExplorerView: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("ArcGIS Explorer")
         .ignoresSafeArea(.container, edges: .top)
-        .onAppear { FieldFocus.install(); TitleBarZoom.install(model: model); HostingViews.install(); FieldFocus.clearInitialFocus() }
+        .onAppear { FieldFocus.install(); TitleBarZoom.install(model: model); HostingViews.install(model: model); FieldFocus.clearInitialFocus() }
         .sheet(item: $model.pendingAdd) { pending in
             AddServerSheet(pending: pending)
         }
@@ -275,18 +275,20 @@ enum FieldFocus {
 
 /// The AppKit view that hosts a window's SwiftUI content sits in the accessibility tree as a
 /// nameless group between the window and the app's own named root, and the audit reported
-/// each one as an element without a description. It carries nothing of the app's, so it
-/// steps out of the tree and its children become the window's; where AppKit keeps it as an
-/// element regardless, it takes the window's name. Every window that becomes key is covered:
+/// each one as an element without a description (Apple's own SwiftUI apps show the same).
+/// AppKit keeps it an element, so it is named for what it holds: "ArcGIS Explorer window",
+/// "Preferences window", "Add a server sheet". Every window that becomes key is covered:
 /// the main window, each sheet, and Preferences.
 @MainActor
 final class HostingViews: NSObject {
     private static var shared: HostingViews?
+    private static var model: AppModel?
 
-    static func install() {
+    static func install(model: AppModel) {
         guard shared == nil else { return }
         let observer = HostingViews()
         shared = observer
+        Self.model = model
         // Window notifications post on the main thread; the selector form keeps that plain.
         NotificationCenter.default.addObserver(observer, selector: #selector(windowBecameKey(_:)), name: NSWindow.didBecomeKeyNotification, object: nil)
         for window in NSApp.windows { name(window) }
@@ -297,10 +299,14 @@ final class HostingViews: NSObject {
     }
 
     private static func name(_ window: NSWindow?) {
-        guard let window, let content = window.contentView, content.isAccessibilityElement() else { return }
-        content.setAccessibilityElement(false)
-        if content.isAccessibilityElement() {
-            content.setAccessibilityLabel(window.title.isEmpty ? "ArcGIS Explorer" : window.title)
+        guard let window, let content = window.contentView, content.isAccessibilityElement(),
+              (content.accessibilityLabel() ?? "").isEmpty else { return }
+        if window.isSheet {
+            // A sheet has no title; the model knows which of the app's two it is.
+            let which = model?.pendingAdd != nil ? "Add a server" : model?.settingsServer != nil ? "Server settings" : nil
+            content.setAccessibilityLabel(which.map { "\($0) sheet" } ?? "Sheet")
+        } else {
+            content.setAccessibilityLabel(window.title.isEmpty ? "ArcGIS Explorer window" : "\(window.title) window")
         }
     }
 }

@@ -63,25 +63,39 @@ final class AccessibilityAuditTests: XCTestCase {
     /// monospaced cells whose nominal ratio is above 13:1, alongside real findings. Contrast is
     /// therefore proved on the palette itself (`PaletteContrastTests`, WCAG ratios of every text
     /// tone on both grounds), and the audit's contrast reports are attached to the test as
-    /// information rather than failures.
+    /// information rather than failures: a note per element and one picture of the state with
+    /// every flagged element outlined.
+    ///
+    /// The few findings the audit passes over are each attached as a picture of the screen
+    /// with the element outlined and the reason written above it, so an exclusion can be seen
+    /// rather than taken on trust; each is printed to the log as well.
     private func audit(_ app: XCUIApplication, _ state: String, file: StaticString = #filePath, line: UInt = #line) {
         // The pointer rests where the last click left it, and a tooltip that then appears is an
         // element of its own; park it over the tree panel's empty foot and let any tooltip go.
         app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.08, dy: 0.9)).hover()
         Thread.sleep(forTimeInterval: 1.2)
         // What the audit saw, kept in the result bundle (claude-scripts/vm_attachments.sh brings it back).
-        let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-        shot.name = "state: \(state)"
-        shot.lifetime = .keepAlways
-        add(shot)
+        let screen = XCUIScreen.main.screenshot().image
+        attach(screen, as: "state: \(state)")
         var contrastNotes = [String]()
+        var contrastFrames = [CGRect]()
+        var excluded = 0
+        /// Passes a finding over, with the picture and the log line that say why.
+        func pass(_ reason: String, _ issue: XCUIAccessibilityAuditIssue, around frame: CGRect?) -> Bool {
+            excluded += 1
+            print("[\(state)] excluded (\(reason)): \(issue.compactDescription)\(Self.placement(of: issue.element))")
+            attach(Self.annotated(screen, frames: frame.map { [$0] } ?? [], caption: "\(reason) — \(issue.compactDescription)", in: .systemRed),
+                   as: "excluded \(excluded): \(state) — \(reason)")
+            return true
+        }
         do {
             try app.performAccessibilityAudit(for: .all) { issue in
                 // The frame places an otherwise anonymous element on the screen.
-                let element = issue.element.map { " — \($0) at \(Int($0.frame.minX)),\(Int($0.frame.minY)) \(Int($0.frame.width))×\(Int($0.frame.height))" } ?? ""
+                let element = Self.placement(of: issue.element)
                 let detail = issue.detailedDescription == issue.compactDescription ? "" : " (\(issue.detailedDescription))"
                 if issue.auditType == .contrast {
                     contrastNotes.append("\(issue.compactDescription)\(element)")
+                    if let frame = issue.element?.frame { contrastFrames.append(frame) }
                     return true
                 }
                 // SwiftUI's Menu and menu-style Picker on macOS open on click yet the audit reports
@@ -89,7 +103,7 @@ final class AccessibilityAuditTests: XCTestCase {
                 // menu, and there is nothing of this app's in that element to change.
                 if issue.compactDescription.hasPrefix("Action is missing"),
                    let type = issue.element?.elementType, type == .menuButton || type == .popUpButton {
-                    return true
+                    return pass("SwiftUI menu, opens on click", issue, around: issue.element?.frame)
                 }
                 // SwiftUI hosts each window's content in a group of its own, the size of the window
                 // and nameless; the app's own root group sits inside it, named. The same goes for
@@ -97,17 +111,19 @@ final class AccessibilityAuditTests: XCTestCase {
                 if issue.compactDescription.hasPrefix("Element has no description"),
                    let element = issue.element, element.elementType == .group,
                    Self.windowFrames(of: app).contains(where: { $0.equalTo(element.frame) }) {
-                    return true
+                    return pass("window-sized hosting group", issue, around: element.frame)
                 }
                 // A mismatch with no element has appeared only while a sheet is up, and the sheet's
                 // tree holds exactly one element that is not the app's: the nameless, sheet-sized
                 // group SwiftUI hosts the sheet's content in, around the app's own named group.
-                if issue.auditType == .parentChild, issue.element == nil, app.sheets.count > 0 { return true }
+                if issue.auditType == .parentChild, issue.element == nil, app.sheets.count > 0 {
+                    return pass("no element; the sheet's hosting group", issue, around: app.sheets.firstMatch.frame)
+                }
                 // The window's own buttons (close, minimise, zoom, in the top-left 80×48 of a window)
                 // are AppKit's; the element tree shows the mismatch inside the zoom button's group.
                 if issue.auditType == .parentChild, let element = issue.element,
                    Self.windowFrames(of: app).contains(where: { CGRect(x: $0.minX, y: $0.minY, width: 80, height: 48).contains(element.frame) }) {
-                    return true
+                    return pass("window's zoom button", issue, around: element.frame)
                 }
                 // Everything else is reported with the element's own subtree, so a finding names
                 // what it is about rather than being guessed at; a finding with no element gets the
@@ -125,8 +141,54 @@ final class AccessibilityAuditTests: XCTestCase {
             attachment.name = "Contrast notes: \(state)"
             attachment.lifetime = .keepAlways
             add(attachment)
+            attach(Self.annotated(screen, frames: contrastFrames, caption: "contrast notes (advisory): \(contrastNotes.count)", in: .systemOrange),
+                   as: "contrast: \(state)")
             print("[\(state)] contrast notes (advisory): \(contrastNotes.count)")
             for note in contrastNotes { print("  \(note)") }
+        }
+    }
+
+    /// Keeps a picture in the result bundle under the given name.
+    private func attach(_ image: NSImage, as name: String) {
+        let attachment = XCTAttachment(image: image)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    /// Where an element sits on the screen, for a log line: its description and frame.
+    private static func placement(of element: XCUIElement?) -> String {
+        element.map { " — \($0) at \(Int($0.frame.minX)),\(Int($0.frame.minY)) \(Int($0.frame.width))×\(Int($0.frame.height))" } ?? ""
+    }
+
+    /// The screen with the given frames outlined and a caption by the first of them. Frames
+    /// are XCUITest's, in screen points from the top left; the picture is drawn at the
+    /// screenshot's own pixel size, so a Retina screen keeps its detail.
+    private static func annotated(_ screen: NSImage, frames: [CGRect], caption: String, in color: NSColor) -> NSImage {
+        let bitmap = screen.representations.compactMap { $0 as? NSBitmapImageRep }.first
+        let pixels = bitmap.map { CGSize(width: $0.pixelsWide, height: $0.pixelsHigh) } ?? screen.size
+        let points = NSScreen.screens.first?.frame.size ?? pixels
+        let scale = pixels.width / points.width
+        return NSImage(size: pixels, flipped: true) { bounds in
+            screen.draw(in: bounds)
+            for frame in frames {
+                let box = CGRect(x: frame.minX * scale, y: frame.minY * scale, width: frame.width * scale, height: frame.height * scale)
+                    .insetBy(dx: -3 * scale, dy: -3 * scale)
+                color.setStroke()
+                let outline = NSBezierPath(rect: box)
+                outline.lineWidth = 3 * scale
+                outline.stroke()
+            }
+            let label = NSAttributedString(string: " \(caption) ", attributes: [
+                .font: NSFont.boldSystemFont(ofSize: 15 * scale), .foregroundColor: NSColor.white, .backgroundColor: color])
+            let size = label.size()
+            // Above the first frame's top-left corner, or just inside it when that corner touches the top of the screen.
+            let anchor = frames.first.map { CGPoint(x: $0.minX * scale, y: $0.minY * scale) } ?? CGPoint(x: 24 * scale, y: 24 * scale)
+            var origin = CGPoint(x: anchor.x, y: anchor.y - size.height - 6 * scale)
+            if origin.y < 0 { origin.y = anchor.y + 6 * scale }
+            origin.x = min(max(0, origin.x), bounds.width - size.width)
+            label.draw(at: origin)
+            return true
         }
     }
 

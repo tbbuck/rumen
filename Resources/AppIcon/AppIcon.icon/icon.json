@@ -21,7 +21,7 @@
       "lighting": "individual",
       "shadow": {
         "kind": "neutral",
-        "opacity": 0.4
+        "opacity": 0.5
       },
       "specular": true,
       "translucency": {

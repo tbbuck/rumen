@@ -350,12 +350,13 @@ function fillSpec(fill) {
   return typeof fill === 'string' ? { top: fill, bottom: fill } : fill;
 }
 
+// A `blur` on a layer (flat masters only, so `flatOnly` shadows) is a Gaussian blur in px.
 export function flatMaster(concept, layers = concept.layers) {
   const { top, bottom } = fillSpec(concept.fill);
   const defs = `<linearGradient id="ground" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${top}"/><stop offset="1" stop-color="${bottom}"/></linearGradient>`
-    + layers.map(l => l.defs ?? '').join('');
+    + layers.map(l => (l.defs ?? '') + (l.blur ? `<filter id="blur-${l.name}" x="-25%" y="-25%" width="150%" height="150%"><feGaussianBlur stdDeviation="${l.blur}"/></filter>` : '')).join('');
   const body = `<rect x="0" y="0" width="1024" height="1024" fill="url(#ground)"/>\n`
-    + layers.map(l => `<g id="layer-${l.name}"${l.opacity != null ? ` opacity="${l.opacity}"` : ''}>${l.body}</g>`).join('\n');
+    + layers.map(l => `<g id="layer-${l.name}"${l.opacity != null ? ` opacity="${l.opacity}"` : ''}${l.blur ? ` filter="url(#blur-${l.name})"` : ''}>${l.body}</g>`).join('\n');
   return svgDoc(concept.name, concept.comment ?? '', defs, body);
 }
 

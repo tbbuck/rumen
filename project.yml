@@ -31,6 +31,11 @@ targets:
       - Sources/App
       - path: Resources/Fonts
         buildPhase: resources
+      # Icon Composer bundle (Liquid Glass icon; actool renders every size from it).
+      # Design source: design/icon/concepts.mjs, exported by design/icon/export-app-icon.mjs.
+      - path: Resources/AppIcon/AppIcon.icon
+        buildPhase: resources
+        type: file
     dependencies:
       - package: ArcGISCore
         product: DuckDBKit
@@ -49,6 +54,7 @@ targets:
         # build-setting substitution from $(MAPTILER_API_KEY).
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Config/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # libduckdb is linked from Homebrew (absolute install name) in dev; scripts/bundle-duckdb-engine.sh
         # copies it into the bundle and rewrites the reference for release.
         LIBRARY_SEARCH_PATHS:

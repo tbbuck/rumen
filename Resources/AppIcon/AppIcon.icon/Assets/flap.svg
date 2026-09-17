@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg width="1024px" height="1024px" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg">
-  <title>sheet</title>
+  <title>flap</title>
   <defs></defs>
   <g transform="scale(1.242718) translate(-100 -100)">
-    <path d="M196.0 196.0L828.0 196.0L828.0 488.0L488.0 828.0L196.0 828.0Z" fill="#FFFFFF"/>
+    <path d="M488.0 828.0Q811.0 811.0 828.0 488.0Q644.4 522.0 552.6 528.8Q528.8 528.8 528.8 552.6Q522.0 644.4 488.0 828.0Z" fill="#EEF1F5"/>
   </g>
 </svg>

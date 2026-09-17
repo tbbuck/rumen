@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<svg width="1024px" height="1024px" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg">
-  <title>flap</title>
-  <defs><linearGradient id="peelbeneath-underside" gradientUnits="userSpaceOnUse" x1="658" y1="658" x2="528.8" y2="528.8"><stop offset="0" stop-color="#9AA5B4"/><stop offset="0.32" stop-color="#DEE4EB"/><stop offset="0.6" stop-color="#FFFFFF"/><stop offset="1" stop-color="#FFFFFF"/></linearGradient></defs>
-  <g transform="scale(1.242718) translate(-100 -100)">
-    <path d="M488 828Q811 811 828 488Q644.4 522 528.8 528.8Q522 644.4 488 828Z" fill="url(#peelbeneath-underside)"/>
-  </g>
-</svg>

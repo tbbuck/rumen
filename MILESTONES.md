@@ -157,9 +157,9 @@ commit per logical unit.
   verifies, the self-test fetched `spatial` v1.5.5 into the per-user folder and reprojected
   London through it under library validation, no Homebrew reference remains in the bundle,
   `notarytool` accepted the submission, the staple validates, and `spctl` reports
-  "accepted, source=Notarized Developer ID"; an 18 MB DMG. Not done: the app icon, which is
-  being designed under `design/icon` in a separate session and is not wired into the bundle.
-  187 tests.
+  "accepted, source=Notarized Developer ID"; an 18 MB DMG. The app icon (Peel, designed
+  under `design/icon`, exported to `Resources/AppIcon/AppIcon.icon`) was wired into the
+  bundle on 2026-09-17. 187 tests.
 
 ---
 
@@ -321,7 +321,7 @@ commit per logical unit.
   Retry where one applies, and Reduce-Motion-aware slide-in. Keep run failures in the
   transfers drawer where they are.
 
-## M9 — Preferences & packaging — ✅ done 2026-09-17 (icon pending)
+## M9 — Preferences & packaging — ✅ done 2026-09-17
 **Goal:** secured servers and a shippable app.
 - **Deliverables**
   - Preferences: download directory, default format and SR, concurrency, retry

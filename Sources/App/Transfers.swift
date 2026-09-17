@@ -8,6 +8,8 @@ struct TransferRun: Identifiable, Equatable {
     let layerName: String
     let serviceName: String
     let serverName: String
+    /// The run's server, for the settings link on a run the server turned away.
+    let server: ServerRecord?
     let progress: DownloadProgress?
     let chunks: [ChunkStatus]
     let startedRunningAt: Date?
@@ -35,10 +37,16 @@ struct TransferRun: Identifiable, Equatable {
         }
     }
 
+    /// Live progress while running; the stored chunks otherwise, so a paused or failed run
+    /// still shows how far it got.
     var fraction: Double {
-        guard let p = progress, p.chunksTotal > 0 else { return status == .complete ? 1 : 0 }
-        return Double(p.chunksDone) / Double(p.chunksTotal)
+        if let p = progress, p.chunksTotal > 0 { return Double(p.chunksDone) / Double(p.chunksTotal) }
+        if status == .complete { return 1 }
+        return chunksPlanned > 0 ? Double(chunksDone) / Double(chunksPlanned) : 0
     }
+    var chunksDone: Int { chunks.filter { $0 == .done }.count }
+    /// Split chunks are replaced by their halves, so they do not count.
+    var chunksPlanned: Int { chunks.filter { $0 != .split }.count }
 
     /// "138 of 207 requests, 4.2k features/s, 1:40 left" while running; a summary otherwise.
     var stats: String {
@@ -64,9 +72,10 @@ struct TransferRun: Identifiable, Equatable {
             let size = ByteCountFormatter.string(fromByteCount: record.bytes ?? 0, countStyle: .file)
             return "\(n.grouped) features, \(size) fetched, finished \(Age.text(record.finishedAt))."
         case .paused, .failed:
-            return record.error ?? status.rawValue
+            let kept = chunksPlanned > 0 ? "\(chunksDone.grouped) of \(chunksPlanned.grouped) requests kept. " : ""
+            return kept + (record.error ?? status.rawValue)
         case .cancelled:
-            return "Cancelled; \(chunks.filter { $0 == .done }.count) of \(chunks.count) requests kept."
+            return "Cancelled; \(chunksDone.grouped) of \(chunksPlanned.grouped) requests kept."
         case .planned:
             return "Planned, not started."
         }
@@ -293,10 +302,14 @@ private struct RunActions: View {
                     .help("Open the stored file: its rows, a SQL scratch box, and export as GeoJSON or CSV without the server")
                 Button("Map") { Task { await model.showStoredMap(run.record) } }.buttonStyle(LinkButtonStyle())
             case .paused:
-                if run.record.error?.contains("token") == true {
-                    Button("Sign in and resume") {}.buttonStyle(PrimaryButtonStyle(small: true)).disabled(true).help("Arrives with milestone M8")
-                } else {
-                    Button("Resume") { Task { await model.resumeDownload(run.id) } }.buttonStyle(PrimaryButtonStyle(small: true))
+                // A run pauses when the server answers a request with 498 or 499 mid-run. Token
+                // sign-in is not built (backlog), so the way through is to try again, or to set
+                // the server's Cookie first when the server is behind a session wall.
+                Button("Resume") { Task { await model.resumeDownload(run.id) } }.buttonStyle(PrimaryButtonStyle(small: true))
+                    .help("Picks up where it stopped; nothing already fetched is refetched")
+                if let server = run.server {
+                    Button("Settings…") { model.settingsServer = server }.buttonStyle(LinkButtonStyle())
+                        .help("The server asked for a token. For a server behind a login, set its Cookie here, then resume.")
                 }
                 Button("Remove") { Task { await model.removeDownload(run.id) } }.buttonStyle(LinkButtonStyle())
             case .failed, .cancelled, .planned:

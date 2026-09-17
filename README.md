@@ -46,8 +46,8 @@ Swift and SwiftUI, with DuckDB as its spatial engine.
 The app only ever calls `query`, the metadata endpoints, and `generateToken`. There is no
 code path that writes to a server. Every request carries an `Origin` and a `Referer` set to
 the server's own origin (overridable per server), and a raw `Cookie` header can be sent
-verbatim, like curl's `-b`, for servers behind a session wall. ArcGIS token sign-in is in
-scope; OAuth is not.
+verbatim, like curl's `-b`, for servers behind a session wall. ArcGIS token sign-in is
+planned but not built yet; OAuth is not in scope.
 
 ## Install
 

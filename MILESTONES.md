@@ -344,6 +344,9 @@ commit per logical unit.
 ---
 
 ### Backlog / post-v1 (explicitly out of scope now)
+- ArcGIS token sign-in (`generateToken`, username and password in the Keychain, refresh
+  on 498/499): the crawler and the engine take a token provider, nothing supplies one
+  yet. A 498/499 mid-run pauses the run with Resume and a link to the server's Cookie.
 - Attachments download; related-record joins.
 - Image service and tile cache extraction.
 - OAuth / enterprise sign-in.

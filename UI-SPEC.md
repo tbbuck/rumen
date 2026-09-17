@@ -216,9 +216,11 @@ margins.
   stalled run shows exactly which requests are stuck.*
 - **`RunProgressBar`** — 6px bar, `yes` when done, `warn` when paused. *Progress
   for runs without a chunk plan, and a quiet summary for finished ones.*
-- **`RunActions`** — running: Pause · Cancel; done: Show in Finder · Re-export (opens
-  the layer's Stored tab on that file) · Map; paused on 498/499: "Sign in and resume"
-  (small primary) · Cancel; failed: Retry · Cancel. *Every state has its next step.*
+- **`RunActions`** — running: Pause; done: Show in Finder · Re-export (opens the
+  layer's Stored tab on that file) · Map; paused (a 498/499 mid-run): Resume (small
+  primary) · Settings… (the server's Cookie) · Remove; failed: Retry · Remove. The bar
+  and the stats of a paused or failed run show the requests already kept. *Every state
+  has its next step.*
 - **`Chip`** — `PBF`, `Offset paging`, `OID range`, `Done`, `Paused`, `Failed`.
   *Transport, strategy and state in form.*
 - **`DownloadRun` / `DownloadChunk` (models)** — from the `download` and
@@ -247,7 +249,8 @@ margins.
   knobs from SPEC §5.1.*
 - **`SignInSheet`** — username + password, or a pasted API key; stored in the
   Keychain; offered from the paused run and from server settings. *Token auth,
-  nothing else (SPEC §5.10).*
+  nothing else (SPEC §5.10).* **Not built:** on the backlog; the Cookie field on
+  server settings is the way through a login for now.
 - **`DeepCrawlProgress`** — popover from the server header: services done / total,
   cancel. *Background crawl with a way out.*
 - **`OverwriteConfirmation`** — alert naming the existing file and its age. *Never

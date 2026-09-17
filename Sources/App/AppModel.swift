@@ -696,7 +696,8 @@ extension AppModel {
                 } else { chunks = [] }
                 built.append(TransferRun(record: record, layerName: layer?.name ?? "layer \(record.layerID)",
                                          serviceName: service?.shortName ?? "", serverName: server?.friendlyName ?? "",
-                                         progress: liveProgress[record.id], chunks: chunks, startedRunningAt: runStarted[record.id]))
+                                         server: server, progress: liveProgress[record.id], chunks: chunks,
+                                         startedRunningAt: runStarted[record.id]))
             }
             runs = built
             if let layer = currentLayer {

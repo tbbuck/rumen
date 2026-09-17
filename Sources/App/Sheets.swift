@@ -75,7 +75,8 @@ struct ServerSettingsSheet: View {
             AdvancedServerFields(cookie: $cookie, origin: $origin, referer: $referer, rootURL: server.rootURL)
             VStack(alignment: .leading, spacing: 6) {
                 Caption("Sign-in")
-                Caption("Public server. Token sign-in arrives with milestone M8.", size: 12.5, color: Palette.muted2)
+                Caption("Token sign-in is not built yet. For a server behind a login, paste a signed-in browser's Cookie above.", size: 12.5, color: Palette.muted2)
+                    .frame(maxWidth: 440, alignment: .leading)
             }
             HStack {
                 Spacer()

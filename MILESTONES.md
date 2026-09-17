@@ -163,6 +163,15 @@ commit per logical unit.
 
 ---
 
+- **v1.0.0 released** (2026-09-17): tag `v1.0.0` ran `release.yml` on a clean macos-26
+  runner: the signed app's self-test fetched `spatial` into the runner's Application Support
+  and reprojected London through it, Apple accepted the notarisation, the staple validated,
+  and the 20 MB DMG is attached to the GitHub Release. Nothing is baked into it: the app
+  reads `MAPTILER_API_KEY` from its environment at run time (`launchctl setenv` for Dock
+  launches), falling back to a plist value only dev builds have.
+
+---
+
 ## M0 — Scaffold & engine  *(de-risk the toolchain)* — ✅ done 2026-09-16
 **Goal:** a building, testing, signed-ad-hoc app with a migrated DuckDB app database.
 - **Deliverables**

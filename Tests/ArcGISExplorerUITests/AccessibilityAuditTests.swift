@@ -99,6 +99,10 @@ final class AccessibilityAuditTests: XCTestCase {
                    Self.windowFrames(of: app).contains(where: { $0.equalTo(element.frame) }) {
                     return true
                 }
+                // A mismatch with no element has appeared only while a sheet is up, and the sheet's
+                // tree holds exactly one element that is not the app's: the nameless, sheet-sized
+                // group SwiftUI hosts the sheet's content in, around the app's own named group.
+                if issue.auditType == .parentChild, issue.element == nil, app.sheets.count > 0 { return true }
                 // The window's own buttons (close, minimise, zoom, in the top-left 80×48 of a window)
                 // are AppKit's; the element tree shows the mismatch inside the zoom button's group.
                 if issue.auditType == .parentChild, let element = issue.element,

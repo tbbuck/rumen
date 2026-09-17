@@ -172,7 +172,9 @@ struct TransfersDrawer: View {
             .accessibilityLabel("Transfers")
             .accessibilityHint("Click the empty part to collapse")
             ScrollView {
-                LazyVStack(spacing: 0) {
+                // A plain stack: a lazy one wraps each row in a nameless cell of its own, and the
+                // list is a few dozen rows at most.
+                VStack(spacing: 0) {
                     ForEach(model.runs) { run in
                         RunRow(run: run)
                         Rectangle().fill(Palette.line).frame(height: 1)

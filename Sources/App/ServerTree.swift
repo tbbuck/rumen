@@ -103,6 +103,7 @@ private struct TreeFilterField: View {
                 .textFieldStyle(.plain)
                 .font(.sheetUI(12))
                 .foregroundStyle(Palette.ink)
+                .accessibilityLabel("Filter the tree")
                 .focused($focused)
                 .onExitCommand { model.treeFilter = ""; focused = false; model.focusTree() }
                 .onKeyPress(.downArrow) { model.focusTree(); return .handled }
@@ -112,6 +113,7 @@ private struct TreeFilterField: View {
                     Image(systemName: "xmark.circle.fill").font(.system(size: 10)).foregroundStyle(Palette.muted2)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Clear the filter")
             }
         }
         .padding(.horizontal, 8)
@@ -140,6 +142,7 @@ private struct CloseServerButton: View {
         }
         .buttonStyle(.plain)
         .hoverTracking($hovered, hand: true)
+        .accessibilityLabel("Close this server")
         .help("Close this server and go back to all servers (⌘⇧H)")
     }
 }

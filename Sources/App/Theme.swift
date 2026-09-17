@@ -14,7 +14,7 @@ enum Palette {
     static let water      = Color.sheet(0xDCE7F0, 0x22303D)
     static let ink        = Color.sheet(0x222A26, 0xE7EAE6)
     static let muted      = Color.sheet(0x5E6863, 0xA2ACA6)
-    static let muted2     = Color.sheet(0x8A948E, 0x7B867F)
+    static let muted2     = Color.sheet(0x646F6B, 0x8C9791)
     static let accent     = Color.sheet(0xB8236B, 0xEA6AA6)
     static let accentSoft = Color.sheet(0xB8236B, 0xEA6AA6, alpha: (0.10, 0.14))
     static let onAccent   = Color.sheet(0xFFFFFF, 0x2A0F1D)

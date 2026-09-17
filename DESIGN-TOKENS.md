@@ -26,7 +26,7 @@ set with `Any` + `Dark` variants; a manual override in Preferences just sets
 | `water` | `#DCE7F0` | `#22303D` | Water fill on the map sheet |
 | `ink` | `#222A26` | `#E7EAE6` | Primary text |
 | `muted` | `#5E6863` | `#A2ACA6` | Secondary text, fact labels, tab labels |
-| `muted2` | `#8A948E` | `#7B867F` | Captions, ids, kind labels, tick labels, dimmed rows |
+| `muted2` | `#646F6B` | `#8C9791` | Captions, ids, kind labels, tick labels, dimmed rows. Darkened (Day) and lightened (Night) from `#8A948E` / `#7B867F` on 2026-09-17 so small text meets 4.5:1 on `bg` and `panel`; the accessibility audit had it at 3.0:1 and 3.9:1 |
 | `accent` | `#B8236B` | `#EA6AA6` | Landranger magenta: selection rail, links, primary button, current path segment, extent, sample points, progress |
 | `accent-soft` | `rgba(184,35,107,.10)` | `rgba(234,106,166,.14)` | Selection fill, current path segment, locator fill, chips |
 | `on-accent` | `#FFFFFF` | `#2A0F1D` | Text on an accent fill |

@@ -98,6 +98,7 @@ private struct PanelDivider: View {
                     .help("Drag to resize the tree; double-click to reset")
             }
             .zIndex(1)
+            .accessibilityHidden(true)   // a pointer affordance only; the tree's width is not read
     }
 }
 

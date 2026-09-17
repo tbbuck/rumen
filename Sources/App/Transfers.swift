@@ -129,6 +129,10 @@ struct TransfersStrip: View {
         .hoverTracking($hovered, hand: true)
         // The whole row opens the drawer; the link inside still takes its own click.
         .onTapGesture { model.showTransfers = true }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(model.headlineRun.map { "Transfers: \($0.layerName), \($0.stats)" } ?? "Transfers: nothing moving")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { model.showTransfers = true }
         .help("Show the transfers (⌘⇧T)")
     }
 }
@@ -155,6 +159,7 @@ struct TransfersDrawer: View {
                     Image(systemName: "chevron.down").font(.system(size: 11, weight: .medium)).foregroundStyle(Palette.muted)
                 }
                 .buttonStyle(LinkButtonStyle())
+                .accessibilityLabel("Collapse the transfers")
                 .help("Collapse")
             }
             .padding(.horizontal, 16)
@@ -283,6 +288,7 @@ struct ChunkGrid: View {
             }
         }
         .frame(width: layout.size.width, height: layout.size.height)
+        .accessibilityLabel("\(statuses.filter { $0 == .done }.count) of \(statuses.filter { $0 != .split }.count) requests done, \(inFlight) in flight")
     }
 }
 
@@ -342,6 +348,7 @@ private struct RemoveRunButton: View {
         }
         .buttonStyle(.plain)
         .hoverTracking($hovered, hand: run.status != .running)
+        .accessibilityLabel("Remove the run for \(run.layerName)")
         .disabled(run.status == .running)
         .help(run.status == .running ? "Pause the run before removing it" : "Remove from the list; the file on disk is kept")
     }

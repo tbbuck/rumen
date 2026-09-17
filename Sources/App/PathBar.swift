@@ -15,6 +15,7 @@ struct PathBar: View {
                     .textFieldStyle(.plain)
                     .font(.sheetMono(12.5))
                     .foregroundStyle(Palette.ink)
+                    .accessibilityLabel("URL")
                     .focused($editing)
                     .onSubmit { Task { await model.submitURL() } }
                     .onExitCommand { model.cancelURLEdit() }
@@ -84,6 +85,7 @@ private struct HostSegment: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("Recent servers. Current server: \(server.friendlyName)")
         .help(server.rootURL.absoluteString)
     }
 }
@@ -125,6 +127,7 @@ struct ColumnSearchField: View {
                 .textFieldStyle(.plain)
                 .font(.sheetUI(12.5))
                 .foregroundStyle(Palette.ink)
+                .accessibilityLabel("Find a column")
                 .focused($focused)
                 .onExitCommand { model.columnSearch = ""; focused = false; model.focusTree() }
                 .onChange(of: model.focusColumnSearch) { if model.focusColumnSearch { focused = true; model.focusColumnSearch = false } }
@@ -176,6 +179,8 @@ private struct AppearanceButton: View {
         }
         .buttonStyle(.plain)
         .hoverTracking($hovered, hand: !isOn)
+        .accessibilityLabel(help)
+        .accessibilityAddTraits(isOn ? .isSelected : [])
         .help(help)
     }
 }

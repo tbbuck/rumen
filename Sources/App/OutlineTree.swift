@@ -29,6 +29,7 @@ struct TreeOutline: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSScrollView {
         let outline = TreeOutlineView()
+        outline.setAccessibilityLabel("Server tree")
         outline.headerView = nil
         outline.rowHeight = 27
         outline.intercellSpacing = .zero
@@ -432,9 +433,33 @@ final class TreeCellView: NSView {
         self.isSelected = isSelected
         self.expandable = expandable
         toolTip = error ?? locatorHelp
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+        setAccessibilityLabel(Self.spokenDescription(of: item.node, error: error))
         if isLoading { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
         needsLayout = true
         needsDisplay = true
+    }
+
+    /// The row for a screen reader: name, kind, and the verdict or the error.
+    static func spokenDescription(of node: TreeNode, error: String?) -> String {
+        var parts = [node.name]
+        switch node.kind {
+        case .server: parts.append("server")
+        case .folder: parts.append("folder")
+        case .service(let type): parts.append(type.name)
+        case .layer: parts.append(node.layerID.map { "layer \($0)" } ?? "layer")
+        case .table: parts.append(node.layerID.map { "table \($0)" } ?? "table")
+        }
+        if node.kind == .layer {
+            switch node.extractable {
+            case true?: parts.append("extractable")
+            case false?: parts.append("not extractable")
+            case nil: break
+            }
+        }
+        if let error { parts.append("failed: \(error)") }
+        return parts.joined(separator: ", ")
     }
 
     override func prepareForReuse() {
@@ -641,7 +666,7 @@ enum NSPalette {
     static let line = NSColor.sheet(0xD6DBD2, 0x33404A)
     static let line2 = NSColor.sheet(0xBEC5BA, 0x445362)
     static let ink = NSColor.sheet(0x222A26, 0xE7EAE6)
-    static let muted2 = NSColor.sheet(0x8A948E, 0x7B867F)
+    static let muted2 = NSColor.sheet(0x646F6B, 0x8C9791)
     static let accent = NSColor.sheet(0xB8236B, 0xEA6AA6)
     static let accentSoft = NSColor.sheet(0xB8236B, 0xEA6AA6, alpha: (0.10, 0.14))
     static let no = NSColor.sheet(0xB3382D, 0xE07A70)

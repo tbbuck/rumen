@@ -60,7 +60,8 @@ final class AccessibilityAuditTests: XCTestCase {
         do {
             try app.performAccessibilityAudit(for: .all) { issue in
                 let element = issue.element.map { " — \($0)" } ?? ""
-                XCTFail("[\(state)] \(issue.auditType.name): \(issue.compactDescription)\(element)", file: file, line: line)
+                let detail = issue.detailedDescription == issue.compactDescription ? "" : " (\(issue.detailedDescription))"
+                XCTFail("[\(state)] \(issue.auditType.name): \(issue.compactDescription)\(element)\(detail)", file: file, line: line)
                 return true   // recorded above; let the audit go on to the next issue
             }
         } catch {
@@ -91,8 +92,9 @@ final class AccessibilityAuditTests: XCTestCase {
 
     func testAddServerSheet() {
         let app = launch([])
-        let field = app.textFields.firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 10))
+        // The start page's URL field, not the title bar's column search (also a text field).
+        let field = app.textFields.matching(NSPredicate(format: "placeholderValue CONTAINS 'rest/services'")).firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "the start page's URL field was not found")
         field.click()
         field.typeText(server.layerURL)
         field.typeKey(.enter, modifierFlags: [])
@@ -126,26 +128,31 @@ final class AccessibilityAuditTests: XCTestCase {
         audit(launchOnLayer(tab: "raw"), "raw tab")
     }
 
+    /// Waits for the run to finish, then opens the drawer by the strip's own "Show all" link.
+    private func openDrawerAfterDownload(_ app: XCUIApplication) {
+        XCTAssertTrue(app.staticTexts["Done"].firstMatch.waitForExistence(timeout: 60), "the download never finished")
+        let showAll = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Show all'")).firstMatch
+        XCTAssertTrue(showAll.waitForExistence(timeout: 10), "the transfers strip shows no run")
+        showAll.click()
+        XCTAssertTrue(app.buttons["Show in Finder"].firstMatch.waitForExistence(timeout: 10), "the drawer never opened")
+    }
+
     func testTransfersDrawerWithAFinishedRun() {
         let app = launchOnLayer(run: "download")
-        XCTAssertTrue(app.staticTexts["Done"].firstMatch.waitForExistence(timeout: 60), "the download never finished")
-        app.typeKey("t", modifierFlags: [.command, .shift])   // Go ▸ Transfers
-        XCTAssertTrue(app.staticTexts["Show in Finder"].firstMatch.waitForExistence(timeout: 10), "the drawer never opened")
+        openDrawerAfterDownload(app)
         audit(app, "transfers drawer, day")
     }
 
     func testTransfersDrawerAtNight() {
         let app = launchOnLayer(run: "download", appearance: "dark")
-        XCTAssertTrue(app.staticTexts["Done"].firstMatch.waitForExistence(timeout: 60), "the download never finished")
-        app.typeKey("t", modifierFlags: [.command, .shift])
-        XCTAssertTrue(app.staticTexts["Show in Finder"].firstMatch.waitForExistence(timeout: 10), "the drawer never opened")
+        openDrawerAfterDownload(app)
         audit(app, "transfers drawer, night")
     }
 
     func testStoredTab() {
         let app = launchOnLayer(run: "download")
         XCTAssertTrue(app.staticTexts["Done"].firstMatch.waitForExistence(timeout: 60), "the download never finished")
-        app.staticTexts["Stored"].firstMatch.click()
+        app.buttons["Stored"].firstMatch.click()   // the tabs are buttons
         XCTAssertTrue(app.staticTexts["Town 1"].firstMatch.waitForExistence(timeout: 30), "the stored rows never appeared")
         audit(app, "stored tab")
     }

@@ -20,6 +20,7 @@ struct AddServerSheet: View {
                 Caption("Friendly name")
                 TextField(pending.rootURL.host ?? "Name", text: $friendlyName)
                     .textFieldStyle(SheetFieldStyle())
+                    .accessibilityLabel("Friendly name")
                     .onSubmit(add)
             }
             Button(advanced ? "Hide advanced" : "Advanced…") { advanced.toggle() }.buttonStyle(LinkButtonStyle(size: 12.5))
@@ -89,7 +90,7 @@ struct ServerSettingsSheet: View {
     private func field(_ label: String, text: Binding<String>, placeholder: String, mono: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Caption(label)
-            TextField(placeholder, text: text).textFieldStyle(SheetFieldStyle(mono: mono))
+            TextField(placeholder, text: text).textFieldStyle(SheetFieldStyle(mono: mono)).accessibilityLabel(label)
         }
     }
 }
@@ -106,17 +107,17 @@ struct AdvancedServerFields: View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
                 Caption("Cookie")
-                TextField("name=value; other=value", text: $cookie).textFieldStyle(SheetFieldStyle(mono: true))
+                TextField("name=value; other=value", text: $cookie).textFieldStyle(SheetFieldStyle(mono: true)).accessibilityLabel("Cookie")
                 Caption("Sent as the Cookie header on every request to this server, like curl -b. Kept in your login keychain, not in the app database.", size: 11.5, color: Palette.muted2)
                     .frame(maxWidth: 440, alignment: .leading)
             }
             VStack(alignment: .leading, spacing: 6) {
                 Caption("Origin header")
-                TextField(ServerHeaders.resolve(rootURL: rootURL).origin, text: $origin).textFieldStyle(SheetFieldStyle(mono: true))
+                TextField(ServerHeaders.resolve(rootURL: rootURL).origin, text: $origin).textFieldStyle(SheetFieldStyle(mono: true)).accessibilityLabel("Origin header")
             }
             VStack(alignment: .leading, spacing: 6) {
                 Caption("Referer header")
-                TextField(ServerHeaders.resolve(rootURL: rootURL).referer, text: $referer).textFieldStyle(SheetFieldStyle(mono: true))
+                TextField(ServerHeaders.resolve(rootURL: rootURL).referer, text: $referer).textFieldStyle(SheetFieldStyle(mono: true)).accessibilityLabel("Referer header")
             }
             Caption("Leave a header blank to use the default shown. Both are sent on every request to this server.", size: 11.5, color: Palette.muted2)
                 .frame(maxWidth: 440, alignment: .leading)

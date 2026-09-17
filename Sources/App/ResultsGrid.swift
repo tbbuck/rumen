@@ -20,6 +20,7 @@ struct ResultsGrid: NSViewRepresentable {
         table.rowHeight = 24
         table.intercellSpacing = NSSize(width: 8, height: 0)
         table.headerView = SheetHeaderView()
+        table.setAccessibilityLabel("Rows")
         table.allowsColumnResizing = true
         table.allowsMultipleSelection = true
         table.dataSource = context.coordinator
@@ -98,7 +99,7 @@ struct ResultsGrid: NSViewRepresentable {
             field.stringValue = value.contains(where: \.isNewline)
                 ? value.replacingOccurrences(of: "\r\n", with: "↵ ").replacingOccurrences(of: "\r", with: "↵ ").replacingOccurrences(of: "\n", with: "↵ ")
                 : value
-            field.textColor = isNull ? .sheet(0x8A948E, 0x7B867F) : .sheet(0x222A26, 0xE7EAE6)   // muted2 / ink
+            field.textColor = isNull ? .sheet(0x646F6B, 0x8C9791) : .sheet(0x222A26, 0xE7EAE6)   // muted2 / ink
             field.alignment = grid.columns[index].isNumeric && !isNull ? .right : .left
             return field
         }
@@ -149,7 +150,7 @@ final class SheetHeaderCell: NSTableHeaderCell {
         if !type.isEmpty {
             (type as NSString).draw(in: NSRect(x: cellFrame.minX + inset, y: typeY, width: width, height: 14),
                                     withAttributes: [.font: sheetMonoFont(9.5),
-                                                     .foregroundColor: NSColor.sheet(0x8A948E, 0x7B867F)])
+                                                     .foregroundColor: NSColor.sheet(0x646F6B, 0x8C9791)])
         }
     }
 }

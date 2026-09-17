@@ -282,6 +282,7 @@ private struct FieldsTab: View {
     var body: some View {
         TextField("Filter fields", text: $filter)
             .textFieldStyle(SheetFieldStyle())
+            .accessibilityLabel("Filter fields")
             .frame(width: 260)
         FieldsTable(fields: filtered)
     }

@@ -171,6 +171,7 @@ private struct FeatureInfoPanel: View {
                 }
                 .buttonStyle(.plain)
                 .hoverTracking($closeHovered, hand: true)
+                .accessibilityLabel("Close the feature panel")
             }
             .padding(.horizontal, 12).padding(.vertical, 9)
             Rectangle().fill(Palette.line).frame(height: 1)

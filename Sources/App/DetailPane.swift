@@ -191,7 +191,7 @@ private struct ChildRow: View {
         }
         .buttonStyle(.plain)
         .hoverTracking($hovered, hand: true)
-        .help(node.lastError ?? "")
+        .help(node.lastError ?? "Open \(node.name)")
     }
 
     /// The layer id in mono, as in the tree; a glyph for folders and services.
@@ -415,6 +415,7 @@ private struct StartPage: View {
                 HStack(spacing: 10) {
                     TextField("https://gis.example.gov.uk/arcgis/rest/services", text: $draft)
                         .textFieldStyle(SheetFieldStyle(mono: true))
+                        .accessibilityLabel("URL to open")
                         .frame(maxWidth: 560)
                         .onSubmit { open() }
                     Button("Open") { open() }

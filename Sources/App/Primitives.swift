@@ -29,10 +29,11 @@ struct Chip: View {
     }
 }
 
-/// 8px status dot: accent running, yes done, warn paused, muted2 queued.
+/// 8px status dot: accent running, yes done, warn paused, muted2 queued. Colour only, so it
+/// says nothing to a screen reader; the word beside it does.
 struct StatusDot: View {
     let color: Color
-    var body: some View { Circle().fill(color).frame(width: 8, height: 8) }
+    var body: some View { Circle().fill(color).frame(width: 8, height: 8).accessibilityHidden(true) }
 }
 
 /// `Extractable` / `Not extractable` / `Unknown` — the one word that matters.
@@ -308,5 +309,8 @@ struct ProgressBar: View {
             }
         }
         .frame(height: height)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Progress")
+        .accessibilityValue("\(Int((max(0, min(1, fraction)) * 100).rounded())) percent")
     }
 }

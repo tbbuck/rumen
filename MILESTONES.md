@@ -112,6 +112,26 @@ commit per logical unit.
   the Overview's primary button was still disabled "until M4" and now starts a download with
   the defaults. 183 tests; verified live: a 378-feature stored layer re-exported as GeoJSON
   reads back in DuckDB with 378 features inside Teesside's longitude and latitude.
+- **M8 complete** (2026-09-17). **Tree on `NSOutlineView`**: cells are reused, so filtering
+  costs only the visible rows, and arrows, Home and End, type-ahead, Return and double-click
+  to expand come from AppKit; the Sheet row (chevron or spinner, mono layer id, name, kind
+  label, stale caption, locator or error glyph, the selection rail with the name in
+  semibold) is drawn by one custom cell with Cabin and Fira Code as `NSFont`s; the model
+  stays the source of truth for expansion and selection, the outline mirrors them and
+  reports the user's changes back, so a pasted URL still expands the ancestors and lands on
+  the layer. **Folder listings as rows** (migration 0006): the crawler records every folder
+  a directory lists and the outcome of listing it; a failed folder keeps what was cached,
+  shows the error glyph with the message as its tooltip in the tree and the directory rows,
+  and its page offers Retry; column search's banner counts the folders it cannot see. The
+  **error banner** now spans the top of the page with Retry where the step can run again,
+  slides in unless Reduce Motion is on, and the MapLibre page's hover and selection fades
+  honour Reduce Motion too. **Housekeeping**: `KeychainMigration` and its marker setting
+  gone (migration 0005), `--bench-filter` and `Perf.swift` gone; no `--row` capture
+  variants were left in the tree. Capture hooks added: `--stored <id>`,
+  `--run export-geojson|export-csv`, `--filter <text>`. Found on the way: a `sed` over the
+  model's error sites turned `clearError` into a call to itself; the compiler's recursion
+  warning caught it on the next build. 186 tests; verified by captures on sampleserver6
+  (expanded service, selected layer) and ONS (3,937 services filtered flat).
 
 ---
 
@@ -246,7 +266,7 @@ commit per logical unit.
   types when read back with DuckDB; re-export never issues a network request.
 - **Demo:** re-export a (small) stored layer as GeoJSON.
 
-## M8 — Stretch Goals
+## M8 — Stretch Goals — ✅ done 2026-09-17
 **Goal:** the rough edges noted after a week of real use; none blocks the others.
 - **Tree keyboard navigation.** The tree is a SwiftUI `LazyVStack`: no arrow keys, no
   type-to-select, and every filter keystroke costs 40–70 ms of row rebuilding on a

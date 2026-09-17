@@ -193,11 +193,12 @@ private extension NSRect {
 }
 
 extension NSColor {
-    /// Dynamic Day/Night NSColor mirroring the Sheet palette, for AppKit views.
-    static func sheet(_ light: UInt32, _ dark: UInt32) -> NSColor {
+    /// Dynamic Day/Night NSColor mirroring the Sheet palette, for AppKit views, with optional
+    /// per-appearance alpha.
+    static func sheet(_ light: UInt32, _ dark: UInt32, alpha: (Double, Double) = (1, 1)) -> NSColor {
         NSColor(name: nil) { appearance in
             let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            return NSColor(hex: isDark ? dark : light)
+            return NSColor(hex: isDark ? dark : light, alpha: isDark ? alpha.1 : alpha.0)
         }
     }
 }

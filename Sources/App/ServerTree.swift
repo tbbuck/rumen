@@ -1,24 +1,18 @@
 import SwiftUI
 import ArcGISKit
 
-/// 288px panel: the server header and the flattened tree of folders, services, layers.
+/// 288px panel: the server header, the filter, and the outline of folders, services, layers.
 struct ServerTree: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        let rows = model.treeFilter.trimmingCharacters(in: .whitespaces).isEmpty ? model.visibleRows : model.filteredRows
         VStack(alignment: .leading, spacing: 0) {
             if let server = model.currentServer {
                 ServerHeader(server: server)
                 TreeFilterField()
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(rows) { row in
-                            TreeRow(row: row, frame: model.tree?.extent)
-                        }
-                    }
-                    .padding(.bottom, 12)
-                }
+                TreeOutline(model: model, state: TreeState(version: model.treeVersion, filter: model.treeFilter,
+                                                           selection: model.selection, expanded: model.expanded,
+                                                           loading: model.loadingNodes, errors: model.nodeErrors))
             } else {
                 VStack(alignment: .leading, spacing: 6) {
                     if let opening = model.openingStatus {
@@ -90,100 +84,6 @@ private struct ServerHeader: View {
     }
 }
 
-/// One node: chevron, layer id, name, kind, staleness, and its extent locator.
-private struct TreeRow: View {
-    @Environment(AppModel.self) private var model
-    let row: TreeRowItem
-    let frame: BoundingBox?
-
-    private var node: TreeNode { row.node }
-    private var isSelected: Bool { model.selection == node.id }
-    private var isLoading: Bool { model.loadingNodes.contains(node.id) }
-    private var isDimmed: Bool { node.extractable == false }
-    /// A crawl that failed on this node, or a folder listing that failed (recorded on its row).
-    private var rowError: String? { model.nodeErrors[node.id] ?? node.lastError }
-    @State private var hovered = false
-
-    var body: some View {
-        content
-            .contentShape(Rectangle())
-            .hoverTracking($hovered)
-            // One tap handler: a separate double-tap gesture would hold every single click until the
-            // double-click window had passed. The second click of a double toggles expansion instead.
-            .onTapGesture {
-                if (NSApp.currentEvent?.clickCount ?? 1) >= 2 {
-                    if node.isExpandable { Task { await model.toggleExpanded(node) } }
-                } else {
-                    Task { await model.select(node.id) }
-                }
-            }
-            .help(rowError ?? "")
-    }
-
-    private var content: some View {
-        HStack(spacing: 7) {
-            if isLoading {
-                ProgressView().controlSize(.mini).frame(width: 10, height: 10)
-            } else if node.isExpandable {
-                ChevronButton(expanded: model.isExpanded(node.id)) { Task { await model.toggleExpanded(node) } }
-            } else if let layerID = node.layerID {
-                Text(String(layerID))
-                    .font(.sheetMono(10.5))
-                    .foregroundStyle(Palette.muted2)
-                    .frame(width: 14, alignment: .trailing)
-            } else {
-                Color.clear.frame(width: 10, height: 10)
-            }
-            Text(node.name)
-                .font(.sheetUI(13, isSelected ? .semibold : .regular))
-                .foregroundStyle(isDimmed ? Palette.muted2 : Palette.ink)
-                .lineLimit(1)
-            if case .service(let type) = node.kind {
-                KindLabel(type: type)
-            }
-            if Age.isStale(node.fetchedAt) {
-                Caption("stale", size: 10.5, color: Palette.warn)
-            }
-            Spacer(minLength: 4)
-            if rowError != nil {
-                Image(systemName: "exclamationmark.circle").font(.system(size: 11)).foregroundStyle(Palette.no)
-                    .frame(width: 22, height: 15)
-            } else {
-                ExtentLocator(extent: node.extent, frame: frame, style: locatorStyle, trusted: node.kind == .folder)
-                    .help(locatorHelp)
-            }
-        }
-        .padding(.leading, row.indent)
-        .padding(.trailing, 14)
-        .frame(height: 27)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isSelected ? Palette.accentSoft : (hovered ? Palette.line.opacity(0.55) : .clear))
-        .overlay(alignment: .leading) {
-            if isSelected { Rectangle().fill(Palette.accent).frame(width: 2) }
-        }
-    }
-
-    private var locatorHelp: String {
-        switch node.kind {
-        case .table: return "A table: no geometry, so no extent."
-        default:
-            if node.extent == nil { return "No extent known yet; it arrives when the node is crawled." }
-            if node.kind != .folder, node.extent?.isDefaultLike == true {
-                return "The server reports an extent covering most of the world (or a speck at 0,0), which looks like a default rather than data, so nothing is drawn."
-            }
-            let what = isDimmed ? "Not extractable; its extent is outlined." : "Extent locator: the frame is where the bulk of this server's data sits; the box is where this \(node.kind == .folder ? "folder" : "node") lies within it. A dot on the edge means it lies outside the frame."
-            return what
-        }
-    }
-
-    private var locatorStyle: ExtentLocator.Style {
-        switch node.kind {
-        case .table: return .table
-        default: return isDimmed ? .notExtractable : .normal
-        }
-    }
-}
-
 /// Filters the tree by name; matching nodes are listed flat with their usual indent.
 private struct TreeFilterField: View {
     @Environment(AppModel.self) private var model
@@ -210,30 +110,6 @@ private struct TreeFilterField: View {
         .background(Palette.bg, in: RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).stroke(focused ? Palette.accent : Palette.line2, lineWidth: 1))
         .padding(.horizontal, 16).padding(.bottom, 8)
-    }
-}
-
-/// The disclosure chevron with a full-height square hit target (UI feedback: clicking anywhere
-/// around the chevron toggles).
-private struct ChevronButton: View {
-    let expanded: Bool
-    let action: () -> Void
-    @State private var hovered = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(hovered ? Palette.ink : Palette.muted2)
-                .frame(width: 10, height: 10)
-                .frame(width: 22, height: 27)
-                .background(hovered ? Palette.line : .clear, in: RoundedRectangle(cornerRadius: 4))
-                .padding(.horizontal, -6)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .hoverTracking($hovered)
-        .help(expanded ? "Collapse" : "Expand")
     }
 }
 

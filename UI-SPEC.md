@@ -68,8 +68,11 @@ margins.
 
 ## Server tree
 
-- **`ServerTree`** — `List(selection:)` + `OutlineGroup` over server → folder →
-  service → layer / table; 288px. *Navigate structure; drives the layer page.*
+- **`ServerTree`** — the server header, the filter box, and `TreeOutline`: an
+  `NSOutlineView` over folder → service → layer / table with reused cells, so arrows,
+  Home and End, type-ahead, Return-to-open, and double-click-to-expand come with it and
+  filtering costs only the visible rows; 288px. The model owns expansion and selection;
+  the outline mirrors them. *Navigate structure; drives the layer page.*
 - **`ServerHeader`** — friendly name (14/700) + caption "ArcGIS Server 11.3, cached
   14 minutes ago"; context menu: Rename, Refresh, Deep crawl, Settings, Forget.
   *The server at a glance.*

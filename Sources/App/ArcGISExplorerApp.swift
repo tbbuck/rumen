@@ -16,6 +16,8 @@ struct ArcGISExplorerApp: App {
     static var runArgument: String? { argument("--run") }
     static var searchArgument: String? { argument("--search") }
     static var storedArgument: Int64? { argument("--stored").flatMap(Int64.init) }
+    /// `--filter <text>`: type into the tree's filter box after opening.
+    static var filterArgument: String? { argument("--filter") }
 
     private static func argument(_ flag: String) -> String? {
         let args = CommandLine.arguments
@@ -42,6 +44,7 @@ struct ArcGISExplorerApp: App {
                     if Self.runArgument == "export-csv" { await model.storedSession?.reexport(.csv, overwrite: true) }
                     if Self.runArgument == "preview" { await model.querySession?.preview() }
                     if let text = Self.searchArgument { model.columnSearch = text }
+                    if let text = Self.filterArgument { model.treeFilter = text }
                     if Self.runArgument == "download", let layer = model.currentLayer {
                         var request = DownloadRequest(layerID: layer.id, outputDirectory: model.downloadDirectory)
                         request.overwrite = true

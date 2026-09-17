@@ -91,7 +91,8 @@ final class AppModel {
     private(set) var openingStatus: OpeningStatus?
     /// Cached service counts per server, for the start page.
     private(set) var serverServiceCounts: [Int64: Int] = [:]
-    private var treeVersion = 0
+    /// Bumps whenever the tree is rebuilt; the outline view reloads on a change.
+    private(set) var treeVersion = 0
     /// Every node flattened with a case- and diacritic-folded key, rebuilt when the tree is.
     @ObservationIgnored private var searchIndex: (version: Int, entries: [(key: [UInt8], row: TreeRowItem)])?
     @ObservationIgnored private var filterCache: (needle: String, version: Int, rows: [TreeRowItem])?
@@ -215,29 +216,16 @@ final class AppModel {
         }
     }
 
-    /// The flattened, currently visible rows (server header is drawn separately).
-    var visibleRows: [TreeRowItem] {
-        guard let tree else { return [] }
-        var rows = [TreeRowItem]()
-        func walk(_ nodes: [TreeNode]) {
-            for node in nodes {
-                rows.append(TreeRowItem(node: node, indent: Self.indent(for: node)))
-                if expanded.contains(node.id) { walk(node.children) }
-            }
-        }
-        walk(tree.children)
-        return rows
-    }
-
-    private static func indent(for node: TreeNode) -> CGFloat {
-        switch node.kind {
-        case .server: return 0
-        case .folder, .service: return 14 + 18 * CGFloat(node.folderDepth)
-        case .layer, .table: return 14 + 18 * CGFloat(node.folderDepth) + 20
-        }
-    }
-
     func isExpanded(_ id: NodeID) -> Bool { expanded.contains(id) }
+
+    /// The outline view's disclosure changed: mirror it. Expanding an uncrawled service crawls it.
+    func setExpanded(_ node: TreeNode, _ on: Bool) async {
+        if on {
+            if !expanded.contains(node.id) { await toggleExpanded(node) }
+        } else {
+            expanded.remove(node.id)
+        }
+    }
 
     /// Expands or collapses a node. Expanding an uncrawled service crawls it first.
     func toggleExpanded(_ node: TreeNode) async {
@@ -641,7 +629,7 @@ final class AppModel {
     }
 
     func clearError() {
-        clearError()
+        errorText = nil
         errorRetry = nil
     }
 }

@@ -83,6 +83,8 @@ final class AppModel {
     var treeFilter = ""
     var appearanceOverride: ColorScheme?
     private(set) var errorText: String?
+    /// Runs the failed step again, when the banner can offer that.
+    private(set) var errorRetry: (@MainActor () async -> Void)?
     private(set) var deepCrawlStatus: String?
     /// While a server is being opened: where, and what the crawler is doing right now.
     private(set) var openingStatus: OpeningStatus?
@@ -127,27 +129,12 @@ final class AppModel {
             }
             try await db.markInterruptedDownloads()
             try await reloadServers()
-            try await moveCookiesOutOfKeychain()
             await reloadRuns()
             // Land on the start page: the user picks a server rather than being dropped into one.
             phase = .ready
         } catch {
             phase = .failed(String(describing: error))
         }
-    }
-
-    /// One-off: cookies were briefly kept in the Keychain (decision 17 moved them to the app
-    /// DB). Any still there are copied across and removed.
-    private func moveCookiesOutOfKeychain() async throws {
-        guard let database, try await database.setting("cookies_moved_from_keychain") == nil else { return }
-        for server in servers where server.cookie == nil {
-            if let cookie = KeychainMigration.cookie(forRoot: server.rootURL) {
-                try await database.setCookie(serverID: server.id, cookie: cookie)
-                try KeychainMigration.remove(forRoot: server.rootURL)
-            }
-        }
-        try await database.setSetting("cookies_moved_from_keychain", "1")
-        try await reloadServers()
     }
 
     private func reloadServers() async throws {
@@ -191,7 +178,7 @@ final class AppModel {
             if expanded.isEmpty { expanded = [.server(id)] }
             await select(.server(id))
         } catch {
-            errorText = String(describing: error)
+            report(error, retry: { [weak self] in await self?.selectServer(id) })
         }
     }
 
@@ -292,7 +279,7 @@ final class AppModel {
                 await assessCurrentLayer()
             }
         } catch {
-            errorText = String(describing: error)
+            report(error)
         }
     }
 
@@ -323,7 +310,7 @@ final class AppModel {
             guard currentLayer?.id == layer.id else { return }
             currentRawJSON = pretty
         } catch {
-            errorText = String(describing: error)
+            report(error)
         }
     }
 
@@ -371,7 +358,7 @@ final class AppModel {
             assessment = try await crawler.assess(layerID: layer.id)
             try await reloadTree()
         } catch {
-            errorText = String(describing: error)
+            report(error)
         }
     }
 
@@ -394,7 +381,7 @@ final class AppModel {
     /// ⌘R: re-fetches the current node from the server.
     func refreshCurrent() async {
         guard let crawler, let server = currentServer else { return }
-        errorText = nil
+        clearError()
         do {
             switch selection {
             case .none, .server?:
@@ -410,7 +397,7 @@ final class AppModel {
             try await reloadTree()
             await select(selection)
         } catch {
-            errorText = String(describing: error)
+            report(error, retry: { [weak self] in await self?.refreshCurrent() })
         }
     }
 
@@ -447,13 +434,14 @@ final class AppModel {
             try await reloadServers()
             try await reloadTree()
             if !failures.isEmpty {
-                errorText = "\(failures.count) service\(failures.count == 1 ? "" : "s") failed to crawl: "
-                    + failures.compactMap { if case .failed(let what, _) = $0 { return what } else { return nil } }.joined(separator: ", ")
+                report("\(failures.count) service\(failures.count == 1 ? "" : "s") failed to crawl: "
+                       + failures.compactMap { if case .failed(let what, _) = $0 { return what } else { return nil } }.joined(separator: ", "),
+                       retry: { [weak self] in await self?.deepCrawlCurrentServer() })
             }
         } catch is CancellationError {
-            errorText = nil
+            clearError()
         } catch {
-            errorText = String(describing: error)
+            report(error, retry: { [weak self] in await self?.deepCrawlCurrentServer() })
         }
     }
 
@@ -473,7 +461,7 @@ final class AppModel {
     func submitURL() async {
         let text = urlDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { isEditingURL = false; return }
-        errorText = nil
+        clearError()
         do {
             let location = try ArcGISURL.parse(text)
             guard let database else { return }
@@ -485,7 +473,7 @@ final class AppModel {
                 pendingAdd = PendingAdd(text: text, location: location)
             }
         } catch {
-            errorText = String(describing: error)
+            report(error)
         }
     }
 
@@ -549,10 +537,13 @@ final class AppModel {
             if !opened.problems.isEmpty {
                 let listed = opened.problems.prefix(3).map { "\($0.folderPath): \($0.message)" }.joined(separator: "; ")
                 let more = opened.problems.count > 3 ? " and \(opened.problems.count - 3) more" : ""
-                errorText = "\(opened.problems.count == 1 ? "One folder" : "\(opened.problems.count) folders") could not be listed and will be missing from the tree: \(listed)\(more). Refresh to try again."
+                report("\(opened.problems.count == 1 ? "One folder" : "\(opened.problems.count) folders") could not be listed: \(listed)\(more).",
+                       retry: { [weak self] in await self?.refreshCurrent() })
             }
         } catch {
-            errorText = String(describing: error)
+            report(error, retry: { [weak self] in
+                await self?.open(text, friendlyName: friendlyName, headerOverrides: headerOverrides, cookie: cookie)
+            })
             // The server may have been registered before the failure: go there rather than
             // leaving the user on whatever was open before.
             if let database, let root = (try? ArcGISURL.parse(text))?.rootURL,
@@ -585,7 +576,7 @@ final class AppModel {
             try await reloadServers()
             try await reloadTree()
             await select(selection)
-        } catch { errorText = String(describing: error) }
+        } catch { report(error) }
     }
 
     func saveSettings(_ server: ServerRecord, name: String, origin: String, referer: String, cookie: String) async {
@@ -597,7 +588,7 @@ final class AppModel {
             try await reloadServers()
             try await reloadTree()
             await select(selection)
-        } catch { errorText = String(describing: error) }
+        } catch { report(error) }
     }
 
     func forget(_ server: ServerRecord) async {
@@ -612,10 +603,25 @@ final class AppModel {
                 await select(nil)
                 if let next = servers.first { await selectServer(next.id) }
             }
-        } catch { errorText = String(describing: error) }
+        } catch { report(error) }
     }
 
-    func dismissError() { errorText = nil }
+    func dismissError() { clearError() }
+
+    /// Shows an error in the banner, with a Retry when the failed step can simply run again.
+    func report(_ error: Error, retry: (@MainActor () async -> Void)? = nil) {
+        report(String(describing: error), retry: retry)
+    }
+
+    func report(_ text: String, retry: (@MainActor () async -> Void)? = nil) {
+        errorText = text
+        errorRetry = retry
+    }
+
+    func clearError() {
+        clearError()
+        errorRetry = nil
+    }
 }
 
 // MARK: - Transfers
@@ -812,7 +818,6 @@ extension AppModel {
         guard let tree else { return [] }
         let needle = Self.searchKey(treeFilter.trimmingCharacters(in: .whitespaces))
         if let cached = filterCache, cached.needle == needle, cached.version == treeVersion { return cached.rows }
-        let t0 = CFAbsoluteTimeGetCurrent()
         if searchIndex?.version != treeVersion {
             var entries = [(key: [UInt8], row: TreeRowItem)]()
             func walk(_ nodes: [TreeNode]) {
@@ -833,7 +838,6 @@ extension AppModel {
                 }
             }
         }.map(\.row)
-        Perf.note("filtered(\"\(needle)\") \(rows.count) rows in \(Int((CFAbsoluteTimeGetCurrent() - t0) * 1000)) ms")
         filterCache = (needle, treeVersion, rows)
         return rows
     }
@@ -868,7 +872,7 @@ extension AppModel {
 
     /// `--stored <id>`: the download by id, from cache.
     func showStoredDownload(id: Int64) async {
-        guard let record = try? await database?.download(id: id) else { errorText = "download \(id) not found"; return }
+        guard let record = try? await database?.download(id: id) else { report("download \(id) not found"); return }
         await showStored(record)
     }
 

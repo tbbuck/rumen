@@ -18,6 +18,16 @@ struct ExplorerView: View {
                 Rectangle().fill(Palette.line).frame(width: 1)
                 DetailPane()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // Errors sit at the top of the page, under the title bar, where a failed open
+                    // is seen; run failures stay in the transfers drawer.
+                    .overlay(alignment: .top) {
+                        if let error = model.errorText {
+                            ErrorBanner(message: error, retry: model.errorRetry) { model.dismissError() }
+                                .transition(reduceMotion ? .identity : .move(edge: .top).combined(with: .opacity))
+                        }
+                    }
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.errorText)
+                    .clipped()
             }
             if model.showTransfers { TransfersDrawer() } else { TransfersStrip() }
         }
@@ -43,12 +53,6 @@ struct ExplorerView: View {
                 let age = (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date).map { Age.text($0) } ?? "unknown age"
                 Text("\(path)\nwritten \(age). Replacing it cannot be undone.")
                     .onAppear { _ = request }
-            }
-        }
-        .overlay(alignment: .bottom) {
-            if let error = model.errorText {
-                ErrorBanner(message: error) { model.dismissError() }
-                    .padding(.bottom, 52)
             }
         }
         .overlay {
@@ -77,22 +81,41 @@ private struct TitleBar: View {
     }
 }
 
-/// Verbatim error text, dismissable, in a panel above the strip.
+/// Verbatim error text spanning the top of the page: Retry where the step can run again,
+/// Dismiss always.
 private struct ErrorBanner: View {
     let message: String
+    let retry: (@MainActor () async -> Void)?
     let dismiss: () -> Void
+    @State private var retrying = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Palette.no)
-            ErrorText(message: message)
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 12)).foregroundStyle(Palette.no)
+            Text(message)
+                .font(.sheetMono(11))
+                .foregroundStyle(Palette.no)
+                .lineLimit(4)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if let retry {
+                if retrying {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Button("Retry") {
+                        retrying = true
+                        Task { await retry(); retrying = false }
+                    }
+                    .buttonStyle(LinkButtonStyle(size: 12.5))
+                }
+            }
             Button("Dismiss", action: dismiss).buttonStyle(LinkButtonStyle(size: 12.5))
         }
-        .padding(12)
-        .background(Palette.panel, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.line2, lineWidth: 1))
-        .shadow(color: .black.opacity(0.25), radius: 18, y: -6)
-        .padding(.horizontal, 24)
+        .padding(.horizontal, 36).padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Palette.panel)
+        .overlay(alignment: .bottom) { Rectangle().fill(Palette.line2).frame(height: 1) }
+        .shadow(color: .black.opacity(0.25), radius: 9, y: 6)
     }
 }
 

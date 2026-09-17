@@ -16,8 +16,6 @@ struct ArcGISExplorerApp: App {
     static var runArgument: String? { argument("--run") }
     static var searchArgument: String? { argument("--search") }
     static var storedArgument: Int64? { argument("--stored").flatMap(Int64.init) }
-    /// `--bench-filter`: after opening, set the tree filter in steps and log main-thread busy time.
-    static var benchFilter: Bool { CommandLine.arguments.contains("--bench-filter") }
 
     private static func argument(_ flag: String) -> String? {
         let args = CommandLine.arguments
@@ -44,14 +42,6 @@ struct ArcGISExplorerApp: App {
                     if Self.runArgument == "export-csv" { await model.storedSession?.reexport(.csv, overwrite: true) }
                     if Self.runArgument == "preview" { await model.querySession?.preview() }
                     if let text = Self.searchArgument { model.columnSearch = text }
-                    if Self.benchFilter {
-                        Perf.installHangObserver()
-                        for needle in ["e", "en", "eng", "", "s", "st", "sta", ""] {
-                            try? await Task.sleep(for: .seconds(1))
-                            Perf.note("filter = \"\(needle)\"")
-                            model.treeFilter = needle
-                        }
-                    }
                     if Self.runArgument == "download", let layer = model.currentLayer {
                         var request = DownloadRequest(layerID: layer.id, outputDirectory: model.downloadDirectory)
                         request.overwrite = true

@@ -49,6 +49,7 @@ struct GeoMapView: NSViewRepresentable {
             context.coordinator.style = style
             context.coordinator.reload(Self.page(style: style))
         }
+        context.coordinator.setReduceMotion(context.environment.accessibilityReduceMotion)
         context.coordinator.apply(content)
     }
 
@@ -82,6 +83,8 @@ struct GeoMapView: NSViewRepresentable {
         private var loaded = false
         private var pending: MapContent?
         private var applied = MapContent()
+        private var reduceMotion = false
+        private var reduceMotionSent: Bool?
 
         init(onViewport: @escaping (MapViewport) -> Void, onFeature: @escaping ([String: String]?) -> Void) {
             self.onViewport = onViewport
@@ -91,12 +94,24 @@ struct GeoMapView: NSViewRepresentable {
         func reload(_ html: String) {
             loaded = false
             applied = MapContent()
+            reduceMotionSent = nil
             webView?.loadHTMLString(html, baseURL: URL(string: "https://tiles.local/"))
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             loaded = true
+            reduceMotionSent = nil
+            setReduceMotion(reduceMotion)
             if let pending { apply(pending, force: true) }
+        }
+
+        /// The system's Reduce Motion setting, handed to the page so its hover and selection
+        /// fades snap instead, as the SwiftUI ones do.
+        func setReduceMotion(_ on: Bool) {
+            reduceMotion = on
+            guard loaded, let webView, reduceMotionSent != on else { return }
+            reduceMotionSent = on
+            webView.evaluateJavaScript("window.setReduceMotion(\(on));")
         }
 
         /// Injects only what changed since the last apply.
@@ -226,6 +241,14 @@ struct GeoMapView: NSViewRepresentable {
       const h = e => { if (e.sourceId === id && map.isSourceLoaded(id)) { map.off('sourcedata', h); fn(); } };
       map.on('sourcedata', h);
     }
+    // ---- Reduce Motion: every paint transition drops to zero and the hover strength jumps.
+    let reduceMotion = false;
+    function applyMotion() {
+      const t = reduceMotion ? { duration: 0 } : T;
+      const props = [['f-fill', 'fill-opacity'], ['f-line', 'line-opacity'], ['f-pt', 'circle-opacity'], ['f-pt', 'circle-stroke-opacity']];
+      for (const s of SLOTS) props.push([s + '-fill', 'fill-opacity'], [s + '-line', 'line-opacity'], [s + '-pt', 'circle-opacity'], [s + '-pt', 'circle-stroke-opacity']);
+      for (const [layer, prop] of props) if (map.getLayer(layer)) map.setPaintProperty(layer, prop + '-transition', t);
+    }
     // ---- Hover: tween the strength with requestAnimationFrame; only the entering and leaving features tick.
     const HOVER_MS = 140;
     const hoverAnim = new Map();
@@ -242,6 +265,7 @@ struct GeoMapView: NSViewRepresentable {
       hoverRaf = active ? requestAnimationFrame(tickHover) : null;
     }
     function animateHover(id, target) {
+      if (reduceMotion) { hoverAnim.delete(id); map.setFeatureState({ source: 'features', id: id }, { hover: target }); return; }
       const a = hoverAnim.get(id) || { v: 0, target: 0 };
       a.target = target; hoverAnim.set(id, a);
       if (hoverRaf === null) { hoverLast = performance.now(); hoverRaf = requestAnimationFrame(tickHover); }
@@ -321,6 +345,7 @@ struct GeoMapView: NSViewRepresentable {
     window.setFeatures = fc => whenReady(() => { window.clearSelection(); resetHover(); map.getSource('features').setData(fc); });
     window.setExtent = fc => whenReady(() => map.getSource('extent').setData(fc));
     window.fitTo = b => whenReady(() => { try { map.fitBounds(b, { padding: 40, maxZoom: 14, duration: 0 }); } catch (e) {} });
+    window.setReduceMotion = on => { reduceMotion = !!on; whenReady(applyMotion); };
     </script></body></html>
     """
 }

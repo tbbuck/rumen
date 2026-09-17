@@ -129,10 +129,9 @@ struct TransfersStrip: View {
         .hoverTracking($hovered, hand: true)
         // The whole row opens the drawer; the link inside still takes its own click.
         .onTapGesture { model.showTransfers = true }
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(model.headlineRun.map { "Transfers: \($0.layerName), \($0.stats)" } ?? "Transfers: nothing moving")
-        .accessibilityAddTraits(.isButton)
-        .accessibilityAction { model.showTransfers = true }
+        .accessibilityHint("Click the empty part to show the transfers")
         .help("Show the transfers (⌘⇧T)")
     }
 }

@@ -309,8 +309,7 @@ struct ProgressBar: View {
             }
         }
         .frame(height: height)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Progress")
-        .accessibilityValue("\(Int((max(0, min(1, fraction)) * 100).rounded())) percent")
+        // Read as a standard progress indicator, whatever it is drawn as.
+        .accessibilityRepresentation { ProgressView("Progress", value: max(0, min(1, fraction))) }
     }
 }

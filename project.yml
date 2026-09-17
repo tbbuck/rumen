@@ -70,6 +70,12 @@ targets:
     platform: macOS
     sources:
       - Tests/ArcGISExplorerUITests
+      # The palette test reads the tokens from the code and the design doc; carried in the
+      # bundle so the test also runs on a Mac that has no checkout.
+      - path: Sources/App/Theme.swift
+        buildPhase: resources
+      - path: DESIGN-TOKENS.md
+        buildPhase: resources
     dependencies:
       - target: ArcGISExplorer
     settings:

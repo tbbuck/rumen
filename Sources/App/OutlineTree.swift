@@ -432,7 +432,8 @@ final class TreeCellView: NSView {
         self.error = error
         self.isSelected = isSelected
         self.expandable = expandable
-        toolTip = error ?? locatorHelp
+        let help = error ?? locatorHelp
+        toolTip = help.isEmpty ? nil : help
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
         setAccessibilityLabel(Self.spokenDescription(of: item.node, error: error))

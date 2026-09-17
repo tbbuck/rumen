@@ -121,6 +121,8 @@ private struct TitleBar: View {
         .frame(height: TitleBarZoom.height)
         .background(Palette.panel)
         .gesture(WindowDragGesture())
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Title bar")
     }
 }
 

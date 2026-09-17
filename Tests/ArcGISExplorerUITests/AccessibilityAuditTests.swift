@@ -68,7 +68,8 @@ final class AccessibilityAuditTests: XCTestCase {
         var contrastNotes = [String]()
         do {
             try app.performAccessibilityAudit(for: .all) { issue in
-                let element = issue.element.map { " — \($0)" } ?? ""
+                // The frame places an otherwise anonymous element on the screen.
+                let element = issue.element.map { " — \($0) at \(Int($0.frame.minX)),\(Int($0.frame.minY)) \(Int($0.frame.width))×\(Int($0.frame.height))" } ?? ""
                 let detail = issue.detailedDescription == issue.compactDescription ? "" : " (\(issue.detailedDescription))"
                 if issue.auditType == .contrast {
                     contrastNotes.append("\(issue.compactDescription)\(element)")

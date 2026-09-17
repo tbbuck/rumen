@@ -63,17 +63,15 @@ struct DownloadTab: View {
                 .help("Features through GetMap as GeoJSON or the WFS twin, or one GetMap picture of the extent")
                 .onChange(of: wantsPicture) { format = wantsPicture ? (pictureFormats.first ?? .png) : model.preferences.defaultFormat }
             }
-            Menu {
+            // A single choice, so a picker: it reads as a pop-up button with a real action.
+            Picker("Format", selection: $format) {
                 ForEach(isPicture ? pictureFormats : ExportFormat.vector, id: \.self) { choice in
-                    Button(choice == format ? "✓ \(choice.label)" : choice.label) {
-                        format = choice
-                        if choice.forcesWGS84 { wgs84 = true }
-                    }
+                    Text("Format: \(choice.label)").tag(choice)
                 }
-            } label: {
-                Text("Format: \(format.label)").font(.sheetUI(12.5)).hoverLabel()
             }
-            .menuStyle(.button).buttonStyle(.borderless).fixedSize()
+            .pickerStyle(.menu).labelsHidden().fixedSize()
+            .font(.sheetUI(12.5))
+            .onChange(of: format) { if format.forcesWGS84 { wgs84 = true } }
             .help(format.geometryNote.capitalizedFirst)
             if !isPicture {
                 Picker("", selection: $wgs84) {

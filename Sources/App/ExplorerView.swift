@@ -34,7 +34,7 @@ struct ExplorerView: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.showTransfers)
         .background(Palette.bg)
         .ignoresSafeArea(.container, edges: .top)
-        .onAppear { FieldFocus.install(); TitleBarZoom.install(model: model) }
+        .onAppear { FieldFocus.install(); TitleBarZoom.install(model: model); FieldFocus.clearInitialFocus() }
         .sheet(item: $model.pendingAdd) { pending in
             AddServerSheet(pending: pending)
         }
@@ -232,6 +232,21 @@ private struct FatalView: View {
 @MainActor
 enum FieldFocus {
     private static var monitor: Any?
+
+    /// No text field takes the keyboard at launch. AppKit hands the first text field in the
+    /// window's key loop the focus when the window opens, so the first thing typed would land
+    /// in the URL bar or the search box; the app asks for focus itself when it wants it (the
+    /// tree after a server opens, a field on ⌘L or ⌘F).
+    static func clearInitialFocus() {
+        DispatchQueue.main.async {
+            for window in NSApp.windows where window.isVisible {
+                window.initialFirstResponder = nil
+                if let editor = window.firstResponder as? NSTextView, editor.isFieldEditor {
+                    window.makeFirstResponder(nil)
+                }
+            }
+        }
+    }
 
     static func install() {
         guard monitor == nil else { return }

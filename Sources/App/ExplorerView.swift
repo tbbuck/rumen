@@ -34,7 +34,7 @@ struct ExplorerView: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.showTransfers)
         .background(Palette.bg)
         .ignoresSafeArea(.container, edges: .top)
-        .onAppear { FieldFocus.install() }
+        .onAppear { FieldFocus.install(); TitleBarZoom.install(model: model) }
         .sheet(item: $model.pendingAdd) { pending in
             AddServerSheet(pending: pending)
         }
@@ -106,16 +106,69 @@ private struct TitleBar: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
+        @Bindable var model = model
         HStack(spacing: 14) {
             Color.clear.frame(width: 64)   // traffic lights live here
             PathBar()
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { model.chromeFrames["path"] = $0 }
             ColumnSearchField()
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { model.chromeFrames["search"] = $0 }
             AppearanceToggle()
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { model.chromeFrames["appearance"] = $0 }
         }
         .padding(.trailing, 14)
-        .frame(height: 48)
+        .frame(height: TitleBarZoom.height)
         .background(Palette.panel)
         .gesture(WindowDragGesture())
+    }
+}
+
+/// Double-clicking the title strip does what the System Setting "Double-click a window's title
+/// bar to" says (Zoom unless changed; Fill, Minimise, or nothing), as any title bar does. The
+/// strip's controls keep their own double-clicks (a field selects text, a button acts), with one
+/// exception: the path bar's empty area enters URL edit mode on the first click, and a second
+/// click within the double-click interval cancels that and zooms instead, so the first click
+/// is never held back waiting for a second.
+@MainActor
+enum TitleBarZoom {
+    static let height: CGFloat = 48
+    private static var monitor: Any?
+
+    static func install(model: AppModel) {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { event in
+            let handled = MainActor.assumeIsolated { handle(event, model: model) }
+            return handled ? nil : event
+        }
+    }
+
+    /// True when the click was a title-strip double-click that has been acted on.
+    private static func handle(_ event: NSEvent, model: AppModel) -> Bool {
+        guard event.clickCount == 2, let window = event.window, let content = window.contentView,
+              window.styleMask.contains(.fullSizeContentView), window.styleMask.contains(.titled) else { return false }
+        let point = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)
+        guard point.y >= 0, point.y <= height else { return false }
+        if model.chromeFrames.values.contains(where: { $0.contains(point) }) {
+            guard model.isEditingURL, let started = model.urlEditStartedAt,
+                  Date().timeIntervalSince(started) < NSEvent.doubleClickInterval else { return false }
+            model.cancelURLEdit()
+        }
+        perform(on: window)
+        return true
+    }
+
+    /// The system's title-bar double-click action; the default when unset is Zoom.
+    static func perform(on window: NSWindow) {
+        switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") ?? "Maximize" {
+        case "Minimize":
+            window.performMiniaturize(nil)
+        case "Fill":
+            if let screen = window.screen ?? NSScreen.main { window.setFrame(screen.visibleFrame, display: true, animate: true) }
+        case "None":
+            break
+        default:
+            window.performZoom(nil)
+        }
     }
 }
 

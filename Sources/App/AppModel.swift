@@ -70,6 +70,12 @@ final class AppModel {
     // Chrome
     var isEditingURL = false
     var urlDraft = ""
+    /// When edit mode was last entered: a second click inside the double-click interval is a
+    /// double-click on the title strip, not a click into the field.
+    private(set) var urlEditStartedAt: Date?
+    /// The title strip's controls (path bar, column search, appearance toggle) in window
+    /// content coordinates, so a double-click between them can zoom the window.
+    var chromeFrames: [String: CGRect] = [:]
     var pendingAdd: PendingAdd?
     var settingsServer: ServerRecord?
     var showRecents = false
@@ -483,6 +489,7 @@ final class AppModel {
     func beginURLEdit() {
         urlDraft = pathContent?.url.absoluteString ?? ""
         isEditingURL = true
+        urlEditStartedAt = Date()
     }
 
     func cancelURLEdit() {

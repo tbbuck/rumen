@@ -91,7 +91,11 @@ Expose as `Font.sheetDisplay(_:)`, `Font.sheetUI(_:)`, `Font.sheetMono(_:)`.
 **Window & chrome**
 - Minimum window 1140 × 720. System window chrome; the mockups' 12px radius and
   1px `line2` border stand in for it.
-- Title bar 48px: traffic lights, then the **path bar** (fills the width, 30px tall,
+- Title bar 48px, and it behaves like one: double-clicking it does what the system's
+  "Double-click a window's title bar to" setting says (Zoom by default). The controls in
+  it keep their own double-clicks; the path bar's empty area, whose single click enters
+  edit mode, gives way when a second click follows within the double-click interval.
+  Traffic lights, then the **path bar** (fills the width, 30px tall,
   radius 7, 1px `line2`, `bg` fill, 10px side padding, segments separated by 12px
   chevrons in `muted2`, a right-aligned mono tail such as `arcgis/rest/services`),
   then the column search field (190 × 30, radius 7).

@@ -154,20 +154,53 @@ extension Crawler {
             if let client = error as? ArcGISClientError, client == .cancelled { throw error }
             // Fall through to one request per type.
         }
+        // One request per type, for a server that would not describe them all at once. Like the
+        // ArcGIS per-layer fallback, this used to run strictly sequentially, so a WFS offering
+        // sixty types cost sixty round trips end to end. Bounded by what the host has shown it
+        // can take rather than by a number chosen here.
+        let host = ArcGISURL.origin(of: server.rootURL)
+        let version = detail.version
+        let root = server.rootURL
         var failures = [String]()
-        for layer in layers {
-            guard let name = layer.ogcName else { continue }
-            try Task.checkCancellation()
-            do {
-                let params = OGCRequests.describeFeatureType(version: detail.version, typeName: name)
-                let data = try await client.fetch(root: server.rootURL, params: params, server: connection, maxAttempts: 2)
-                let types = try OGCCapabilities.parseFeatureTypes(data, url: OGCURL.url(root: server.rootURL, params: params))
-                if try await apply(types, to: [layer]) == 0, let only = types.first {
-                    try await db.setOGCFields(layerID: layer.id, fields: only.fields)   // one type asked, one described
+        try await withThrowingTaskGroup(of: String?.self) { group in
+            var pending = layers.filter { $0.ogcName != nil }[...]
+            var inFlight = 0
+            func fill() async {
+                let width = max(1, await client.concurrencyLimit(forHost: host))
+                while inFlight < width, let layer = pending.popFirst() {
+                    group.addTask { [self] in
+                        guard let name = layer.ogcName else { return nil }
+                        do {
+                            let params = OGCRequests.describeFeatureType(version: version, typeName: name)
+                            let data = try await client.fetch(root: root, params: params, server: connection, maxAttempts: 2)
+                            let types = try OGCCapabilities.parseFeatureTypes(data, url: OGCURL.url(root: root, params: params))
+                            if let match = types.first(where: { $0.name == local(layer.ogcName) }) {
+                                try await db.setOGCFields(layerID: layer.id, fields: match.fields)
+                            } else if let only = types.first {
+                                try await db.setOGCFields(layerID: layer.id, fields: only.fields)   // one type asked, one described
+                            } else {
+                                return nil
+                            }
+                            progress?(.layer(name: layer.name))
+                            return nil
+                        } catch is CancellationError {
+                            throw CancellationError()
+                        } catch let error as ArcGISClientError where error == .cancelled {
+                            throw CancellationError()
+                        } catch {
+                            return "\(name): \(error)"
+                        }
+                    }
+                    inFlight += 1
                 }
-            } catch {
-                if error is CancellationError { throw error }
-                failures.append("\(name): \(error)")
+            }
+            await fill()
+            while inFlight > 0 {
+                guard let outcome = try await group.next() else { break }
+                inFlight -= 1
+                if let failure = outcome { failures.append(failure) }
+                try Task.checkCancellation()
+                await fill()
             }
         }
         if !failures.isEmpty {

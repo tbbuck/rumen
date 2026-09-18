@@ -596,9 +596,23 @@ owned by `AppDatabase`). DuckDB never holds app state.
     preference are all *ceilings*: the first two are what a server claims on a good day,
     the third is a hope. Both numbers now start low and climb — `AdaptiveLimit`, shared
     by the client's per-host concurrency and both download engines' page size: open at
-    the floor (1 slot, 100 features), double while the server keeps up, halve on pushback
-    and creep additively thereafter. The asymmetry is the argument: undershooting costs
-    one cheap round trip, overshooting costs a timeout, its retries and a re-plan.
+    the floor (1 slot, 100 features) and double while the server keeps up. The asymmetry
+    is the argument: undershooting costs one cheap round trip, overshooting costs a
+    timeout, its retries and a re-plan.
+
+    **The signal is cost, not success** (revised 2026-09-18, and the substance of the
+    decision). Climbing on "it worked" alone settles in the wrong place: after a backoff
+    the limit rose a step per success with nothing remembering the size that had just
+    failed, so the steady state was a loop through a timeout. AIMD across a loss signal
+    suits TCP, where a loss costs one retransmit; here it costs two timeouts, a split and
+    a re-fetch, so the cliff is not a place to oscillate around. Three signals instead:
+    a refused value is remembered and the climb stops a step beneath the lowest one ever
+    refused; a request past half its time budget holds the climb and past three-quarters
+    gives ground, so the retreat happens *before* the cliff; and a step must pay for
+    itself in features per second, since a larger page can succeed and still be slower.
+    Throughput is smoothed, and a response under 50 ms is a success that says nothing,
+    because at that scale the measurement is jitter. The deliberate consequence is that
+    a healthy server settles a little below the most it would tolerate.
     Chunks are handed out by a `ChunkFeed` during the run rather than laid out when it is
     planned, because a fixed plan fixes the page size with it; the feed derives its cursor
     from the chunks already recorded, so a resume is exact. A refusal now shrinks every

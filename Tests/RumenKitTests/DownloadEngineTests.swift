@@ -18,6 +18,7 @@ private final class StubLayer: @unchecked Sendable {
     var lieAboutMore = false                 // short page with exceededTransferLimit
     var rejectPBF = false
     var refuseLimitAbove: Int? = nil        // pages asking for more than this get a 500 envelope
+    var badRequestAtOffset: Int? = nil      // a page that fails for a reason that is not about size
     var seenFailures: Set<Int> = []
     var requestLog: [String] = []
 
@@ -54,6 +55,9 @@ private final class StubLayer: @unchecked Sendable {
             let failOnce = lock.withLock { failSeqOnce.contains(offset) && !seenFailures.contains(offset) }
             if failOnce { lock.withLock { _ = seenFailures.insert(offset) }; return .json("busy", status: 503) }
             if alwaysFailOffsets.contains(offset) { return .json("broken", status: 500) }
+            if badRequestAtOffset == offset {
+                return .json(#"{"error":{"code":400,"message":"Invalid field: NOPE","details":[]}}"#)
+            }
             if tokenExpiredAtOffset == offset { return .json(#"{"error":{"code":499,"message":"Token Required","details":[]}}"#) }
             ids = offset < featureCount ? Array((offset + 1)...min(featureCount, offset + count)) : []
             if offset + count < featureCount { exceeded = true }
@@ -183,11 +187,13 @@ final class DownloadEngineTests: XCTestCase {
         let planned = try await engine.start(request())
         XCTAssertEqual(planned.strategy, .offset)
         XCTAssertEqual(planned.transport, .pbf)
+
+        let record = try await engine.wait(downloadID: planned.id)
+        // Chunks are handed out as the run goes, not laid out in advance, so the plan is read
+        // back once the run has finished rather than the moment it was started.
         let chunks = try await db.chunks(downloadID: planned.id)
         XCTAssertEqual(chunks.count, 6, "51 features in pages of 10")
         XCTAssertEqual(chunks.map(\.offset), [0, 10, 20, 30, 40, 50])
-
-        let record = try await engine.wait(downloadID: planned.id)
         XCTAssertEqual(record.status, .complete, record.error ?? "")
         XCTAssertEqual(record.featureCount, 51)
         XCTAssertEqual(record.invalidGeometryCount, 0)
@@ -331,9 +337,9 @@ final class DownloadEngineTests: XCTestCase {
         try await recrawlLayer()
         let planned = try await engine.start(request())
         XCTAssertEqual(planned.strategy, .oidRange)
+        let record = try await engine.wait(downloadID: planned.id)
         let chunks = try await db.chunks(downloadID: planned.id)
         XCTAssertEqual(chunks.map { ($0.lo ?? 0, $0.hi ?? 0) }.map { "\($0.0)-\($0.1)" }, ["1-10", "11-20", "21-30", "31-40", "41-50", "51-51"])
-        let record = try await engine.wait(downloadID: planned.id)
         XCTAssertEqual(record.status, .complete, record.error ?? "")
         XCTAssertEqual(try readBack(try XCTUnwrap(record.outputPath)).count, 51)
         XCTAssertTrue(stub.requestLog.contains { $0.contains("OBJECTID%20%3E%3D%2011%20AND%20OBJECTID%20%3C%3D%2020") }, "range where clauses are sent")
@@ -345,11 +351,11 @@ final class DownloadEngineTests: XCTestCase {
         try await recrawlLayer()
         let planned = try await engine.start(request())
         XCTAssertEqual(planned.strategy, .oidList)
+        let record = try await engine.wait(downloadID: planned.id)
         let chunks = try await db.chunks(downloadID: planned.id)
         XCTAssertEqual(chunks.count, 6)
         XCTAssertEqual(chunks[0].objectIDs, Array(1...10))
         XCTAssertEqual(chunks[5].objectIDs, [51])
-        let record = try await engine.wait(downloadID: planned.id)
         XCTAssertEqual(record.status, .complete, record.error ?? "")
         XCTAssertEqual(try readBack(try XCTUnwrap(record.outputPath)).count, 51)
     }
@@ -405,19 +411,59 @@ private actor HeldGate {
 }
 
 extension DownloadEngineTests {
+    /// The point of the exercise: a server's advertised `maxRecordCount` is a ceiling, and the
+    /// run climbs to it instead of opening there. One request at a time so the climb is exactly
+    /// observable rather than dependent on which of three in flight lands first.
+    func testThePageSizeClimbsAsTheServerKeepsUp() async throws {
+        stub.pageSize = 2_000              // what the server claims it can do
+        stub.featureCount = 3_000
+        try await recrawlLayer()
+        await engine.setConcurrency(1)
+
+        let planned = try await engine.start(request())
+        let record = try await engine.wait(downloadID: planned.id)
+        XCTAssertEqual(record.status, .complete, record.error ?? "")
+        XCTAssertEqual(record.featureCount, 3_000)
+
+        let chunks = try await db.chunks(downloadID: planned.id)
+        XCTAssertEqual(chunks.map(\.limit), [100, 200, 400, 800, 1_500],
+                       "doubling from the floor, and the last request asks only for what is left")
+        XCTAssertEqual(chunks.map(\.offset), [0, 100, 300, 700, 1_500], "contiguous, no gaps and no overlaps")
+    }
+
+    /// Splitting answers "that was too much to ask for" and nothing else. A bad field name is
+    /// not about size, and halving the request would only make the server refuse it twice.
+    func testAFailureThatIsNotAboutSizeIsNotSplit() async throws {
+        stub.badRequestAtOffset = 0
+        try await recrawlLayer()
+        await engine.setConcurrency(1)
+
+        let planned = try await engine.start(request())
+        let record = try await engine.wait(downloadID: planned.id)
+        XCTAssertEqual(record.status, .failed)
+        XCTAssertTrue(record.error?.contains("Invalid field") == true, record.error ?? "")
+
+        let chunks = try await db.chunks(downloadID: planned.id)
+        XCTAssertTrue(chunks.filter { $0.status == .split }.isEmpty, "nothing was halved over a bad field name")
+    }
+
     /// sampleserver6 refused a 1,000-county page after 60 s; the engine must halve and carry on.
+    ///
+    /// The feed asks for exactly what is left rather than a whole page, so the layer's 51
+    /// features go out as one request for 51 — which is why the refusal threshold sits below
+    /// that rather than at the old 60.
     func testRefusedChunksAreSplitUntilTheyFit() async throws {
-        stub.pageSize = 200                 // one planned chunk for 51 features
-        stub.refuseLimitAbove = 60          // …which the server refuses; halves of 100 too; quarters of 50 pass
+        stub.pageSize = 200
+        stub.refuseLimitAbove = 40          // the single request for 51 is refused; its halves fit
         try await recrawlLayer()
         let planned = try await engine.start(request())
         let record = try await engine.wait(downloadID: planned.id)
         XCTAssertEqual(record.status, .complete, record.error ?? "")
         XCTAssertEqual(record.featureCount, 51)
         let chunks = try await db.chunks(downloadID: planned.id)
-        XCTAssertEqual(chunks.filter { $0.status == .split }.count, 3, "the 200 and both 100s were split")
-        XCTAssertEqual(chunks.filter { $0.status == .done }.map(\.limit), [50, 50, 50, 50])
-        XCTAssertEqual(chunks.filter { $0.status == .done }.compactMap(\.offset).sorted(), [0, 50, 100, 150], "the two 100s split in parallel, so their halves may land in either order")
+        XCTAssertEqual(chunks.filter { $0.status == .split }.count, 1, "the request for 51 was split once")
+        XCTAssertEqual(chunks.filter { $0.status == .done }.compactMap(\.limit).sorted(), [25, 26])
+        XCTAssertEqual(chunks.filter { $0.status == .done }.compactMap(\.offset).sorted(), [0, 25])
         XCTAssertTrue(chunks.first?.lastError?.contains("split into 2 and 3") == true, chunks.first?.lastError ?? "")
         XCTAssertEqual(try readBack(try XCTUnwrap(record.outputPath)).count, 51, "no duplicates from the split")
     }

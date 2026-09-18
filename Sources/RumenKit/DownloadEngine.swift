@@ -100,6 +100,8 @@ public actor DownloadEngine {
 
     var requests: [Int64: DownloadRequest] = [:]
     var resumeContext: [Int64: (URL, Bool)] = [:]
+    /// What each planned run has to fetch, so the run does not ask the server again.
+    var plannedWork: [Int64: ChunkFeed.Work] = [:]
 
     private func plan(_ request: DownloadRequest) async throws -> DownloadRecord {
         let assessment = try await crawler.assess(layerID: request.layerID)
@@ -123,36 +125,51 @@ public actor DownloadEngine {
         let record = try await db.createDownload(layerID: request.layerID, transport: transport, strategy: strategy,
                                                  whereClause: request.whereClause, outWkid: request.outWkid,
                                                  format: request.format, domainLabels: request.domainLabels)
-        let chunks: [DownloadChunk]
+        // The chunks themselves are not laid out here any more: the run hands them out against a
+        // page size that moves (see `ChunkFeed`). All that is settled up front is the extent of
+        // the work, and the probe that settles it is the one the verdict already needed.
+        if strategy == .single {
+            try await db.insertChunks([DownloadChunk(downloadID: record.id, seq: 0, kind: .offset, offset: 0, limit: nil)])
+        } else {
+            plannedWork[record.id] = try await work(strategy: strategy, downloadID: record.id, layerID: request.layerID,
+                                                    connection: connection, url: url, oidField: oidField,
+                                                    whereClause: request.whereClause)
+        }
+        _ = pageSize
+        let staging = stagingDirectory.appendingPathComponent("download-\(record.id).duckdb").path
+        try await db.setDownloadStaging(id: record.id, path: staging)
+        requests[record.id] = request
+        return try await db.download(id: record.id)
+    }
+
+    /// The whole of what a download has to fetch. Computed when the run is planned and kept for
+    /// the run that follows; a resume in a later process asks the server again, which is the
+    /// same question the plan asked and no more expensive.
+    private func work(strategy: Assessment.Strategy, downloadID: Int64, layerID: Int64, connection: ServerConnection,
+                      url: URL, oidField: String, whereClause: String) async throws -> ChunkFeed.Work {
         switch strategy {
-        case .offset:
-            let count = try await client.count(connection, layerURL: url, where: request.whereClause)
-            try await db.setFeatureCount(layerID: request.layerID, count: Int64(count))
-            chunks = DownloadPlanner.offsetChunks(downloadID: record.id, count: Int64(count), pageSize: pageSize)
+        case .offset, .single:
+            let count = try await client.count(connection, layerURL: url, where: whereClause)
+            try await db.setFeatureCount(layerID: layerID, count: Int64(count))
+            return .offset(count: Int64(count))
         case .oidRange:
             let stats = try await client.features(connection, layerURL: url, options: QueryOptions(
-                whereClause: request.whereClause,
+                whereClause: whereClause,
                 statistics: [StatisticDefinition(.min, field: oidField, outName: "min_oid"),
                              StatisticDefinition(.max, field: oidField, outName: "max_oid")])).value
             let attributes = stats.features.first?.attributes ?? [:]
             let lo = AttributeValue(attributes["min_oid"]).int64 ?? 0
             let hi = AttributeValue(attributes["max_oid"]).int64 ?? -1
-            chunks = DownloadPlanner.rangeChunks(downloadID: record.id, minOID: lo, maxOID: hi, pageSize: pageSize)
+            return .oidRange(min: lo, max: hi)
         case .oidList:
-            let ids = try await client.objectIDs(connection, layerURL: url, where: request.whereClause)
+            let ids = try await client.objectIDs(connection, layerURL: url, where: whereClause)
             guard ids.count <= DownloadPlanner.objectIDListCap else {
-                try await db.setDownloadStatus(id: record.id, status: .failed, error: DownloadError.tooManyObjectIDs(ids.count).description)
+                try await db.setDownloadStatus(id: downloadID, status: .failed,
+                                               error: DownloadError.tooManyObjectIDs(ids.count).description)
                 throw DownloadError.tooManyObjectIDs(ids.count)
             }
-            chunks = DownloadPlanner.listChunks(downloadID: record.id, objectIDs: ids, pageSize: pageSize)
-        case .single:
-            chunks = [DownloadChunk(downloadID: record.id, seq: 0, kind: .offset, offset: 0, limit: nil)]
+            return .oidList(ids.sorted())
         }
-        try await db.insertChunks(chunks)
-        let staging = stagingDirectory.appendingPathComponent("download-\(record.id).duckdb").path
-        try await db.setDownloadStaging(id: record.id, path: staging)
-        requests[record.id] = request
-        return try await db.download(id: record.id)
     }
 
     // MARK: - Running
@@ -174,6 +191,7 @@ public actor DownloadEngine {
         tasks[id] = nil
         requests[id] = nil
         resumeContext[id] = nil
+        plannedWork[id] = nil
     }
 
     private struct FetchedChunk: Sendable {
@@ -209,11 +227,37 @@ public actor DownloadEngine {
         let url = service.url.appendingPathComponent(String(source.layerID))
         let fields = try await db.fields(layerID: source.id)
         let oidField = source.objectIdField ?? "OBJECTID"
-        let pageSize = requests[id]?.manualPageSize ?? source.maxRecordCount ?? 1000
         let outputDirectory = requests[id]?.outputDirectory ?? resumeContext[id]?.0 ?? stagingDirectory
         let overwrite = requests[id]?.overwrite ?? resumeContext[id]?.1 ?? false
 
         var chunks = try await db.chunks(downloadID: id)
+
+        // How many features to ask for at a time. The server's `maxRecordCount` is the ceiling,
+        // not the opening bid: it is what the server claims on a good day, and believing it on a
+        // struggling one costs a timeout per chunk before anything adapts. A size the user set
+        // by hand is pinned, floor and ceiling alike, because they meant it.
+        var pager: AdaptiveLimit
+        if let manual = requests[id]?.manualPageSize {
+            pager = AdaptiveLimit(floor: manual, ceiling: manual)
+        } else {
+            pager = .pageSize(ceiling: source.maxRecordCount ?? 1000)
+        }
+        let pageSize = pager.value
+
+        // Chunks are handed out as they are needed so the size above can change between them.
+        // `.single` had its one chunk recorded when the run was planned and needs no feed.
+        var feed = ChunkFeed(work: .offset(count: 0))
+        if record.strategy != .single {
+            let planned: ChunkFeed.Work
+            if let cached = plannedWork[id] {
+                planned = cached
+            } else {
+                planned = try await work(strategy: record.strategy, downloadID: id, layerID: source.id,
+                                         connection: connection, url: url, oidField: oidField,
+                                         whereClause: record.whereClause)
+            }
+            feed = ChunkFeed(work: planned, after: chunks)
+        }
         let stagingPath = record.stagingPath ?? stagingDirectory.appendingPathComponent("download-\(id).duckdb").path
         let staging = try StagingDatabase(path: stagingPath, fields: fields, oidField: source.objectIdField,
                                           hasZ: source.hasZ ?? false, hasM: source.hasM ?? false)
@@ -226,14 +270,22 @@ public actor DownloadEngine {
         let whereClause = record.whereClause
         let outWkid = record.outWkid
         let startedAsJSON = record.transport == .json
+        // The request count is not known while the page size is still moving, so the total is
+        // what has been handed out plus an estimate of what is left at the size in force. It
+        // firms up within a few requests, as the size settles.
         func report(_ status: DownloadStatus, inFlight: Int, message: String? = nil) {
-            progress(DownloadProgress(downloadID: id, status: status, chunksDone: done, chunksTotal: chunks.filter { $0.status != .split }.count,
+            let issued = chunks.filter { $0.status != .split }.count
+            progress(DownloadProgress(downloadID: id, status: status, chunksDone: done,
+                                      chunksTotal: issued + feed.remainingRequests(at: pager.value),
                                       chunksInFlight: inFlight, chunksFailed: failed, features: features, bytes: bytes, message: message))
         }
         report(.running, inFlight: 0)
 
         var pending = chunks.filter { $0.status != .done && $0.status != .split }
         var outcome: (status: DownloadStatus, error: String?)? = nil
+        /// Tracked rather than recomputed: an OID-list run can carry tens of thousands of chunks,
+        /// and scanning them all for the highest sequence on every one is quadratic.
+        var nextSeq = (chunks.map(\.seq).max() ?? -1) + 1
 
         do {
             let switchedToJSON: Bool = try await withThrowingTaskGroup(of: ChunkOutcome.self) { group in
@@ -268,7 +320,25 @@ public actor DownloadEngine {
                     }
                     inFlight += 1
                 }
-                while inFlight < concurrency, !pending.isEmpty { enqueue(pending.removeFirst()) }
+
+                /// Fills the in-flight slots from the chunks already waiting, then from the feed
+                /// at whatever page size the server has earned by now. A chunk is recorded before
+                /// it is issued, so a crash leaves it pending rather than losing its range.
+                func refill() async throws {
+                    while inFlight < concurrency {
+                        if !pending.isEmpty {
+                            enqueue(pending.removeFirst())
+                            continue
+                        }
+                        guard let chunk = feed.next(downloadID: id, seq: nextSeq, size: pager.value) else { return }
+                        nextSeq += 1
+                        try await db.insertChunks([chunk])
+                        chunks.append(chunk)
+                        attempts[chunk.seq] = 0
+                        enqueue(chunk)
+                    }
+                }
+                try await refill()
 
                 while inFlight > 0 {
                     guard let next = try await group.next() else { break }
@@ -284,17 +354,25 @@ public actor DownloadEngine {
                             group.cancelAll()
                             throw error
                         }
-                        // The server could not serve this chunk whole: halve it and carry on.
-                        if let index = chunks.firstIndex(where: { $0.seq == seq }),
-                           let halves = DownloadPlanner.split(chunks[index], pageSize: pageSize, firstSeq: (chunks.map(\.seq).max() ?? 0) + 1) {
+                        // Splitting is the answer to "that was too much to ask for", and only to
+                        // that. A 404, a bad where clause or a broken service says nothing about
+                        // size, and halving chunks down to the floor over it only multiplies the
+                        // requests a struggling server has to refuse.
+                        if error.isPushback, let index = chunks.firstIndex(where: { $0.seq == seq }),
+                           let halves = DownloadPlanner.split(chunks[index], pageSize: pager.value, firstSeq: nextSeq) {
+                            nextSeq += 2
+                            // Every chunk still to come shrinks too. Without this each one pays
+                            // the same timeout to learn the same lesson.
+                            pager.pushedBack()
                             try await db.updateChunk(downloadID: id, seq: seq, status: .split, count: nil, attempts: attempts[seq] ?? 1,
                                                      error: "split into \(halves[0].seq + 1) and \(halves[1].seq + 1): \(error.description)")
                             try await db.insertChunks(halves)
                             chunks[index].status = .split
                             chunks.append(contentsOf: halves)
                             pending.append(contentsOf: halves)
-                            report(.running, inFlight: inFlight, message: "request \(seq + 1) refused, split in two")
-                            while inFlight < concurrency, !pending.isEmpty { enqueue(pending.removeFirst()) }
+                            report(.running, inFlight: inFlight,
+                                   message: "request \(seq + 1) refused, split in two; asking for \(pager.value.formatted()) at a time")
+                            try await refill()
                             continue
                         }
                         outcome = (.failed, DownloadError.chunkFailed(seq: seq, message: error.description).description)
@@ -321,10 +399,12 @@ public actor DownloadEngine {
                             group.cancelAll()
                             throw DownloadError.shortPageWithMore(seq: seq, got: page.features.count, expected: expected)
                         }
-                        if page.exceededTransferLimit, seq == chunks.map(\.seq).max() {
-                            // The count was stale or the server lied: extend the plan by one page.
-                            let extra = DownloadChunk(downloadID: id, seq: (chunks.map(\.seq).max() ?? seq) + 1, kind: .offset,
+                        if page.exceededTransferLimit, feed.isExhausted, seq == nextSeq - 1 {
+                            // The count was stale or the server lied: extend the plan by one page
+                            // beyond what the feed thought was the end.
+                            let extra = DownloadChunk(downloadID: id, seq: nextSeq, kind: .offset,
                                                       offset: (chunk.offset ?? 0) + Int64(expected), limit: expected)
+                            nextSeq += 1
                             try await db.insertChunks([extra])
                             chunks.append(extra)
                             pending.append(extra)
@@ -347,8 +427,10 @@ public actor DownloadEngine {
                     done += 1
                     features += Int64(appended)
                     bytes += Int64(fetched.bytes)
+                    // The server coped with that one, so the next may be bigger.
+                    pager.succeeded()
                     report(.running, inFlight: inFlight)
-                    while inFlight < concurrency, !pending.isEmpty { enqueue(pending.removeFirst()) }
+                    try await refill()
                 }
                 return useJSON && !startedAsJSON
             }

@@ -111,7 +111,10 @@ public enum ArcGISClientError: Error, CustomStringConvertible, Equatable {
         switch self {
         case .http(let status, _): return status == 408 || status == 429 || (500...504).contains(status)
         case .server(let code, let message, _, _):
-            if code == 429 || code == 503 { return true }
+            // ArcGIS reports a refusal in an error envelope over HTTP 200, so the code here is
+            // the server's, not the transport's. Its generic 500 ("Error performing query
+            // operation") is the usual answer to a page the server could not build in time.
+            if let code, code == 429 || (500...504).contains(code) { return true }
             return message.lowercased().contains("timeout") || message.lowercased().contains("timed out")
         case .transport(let message, _):
             // A timed-out or dropped connection is the commonest way an overloaded server says no.

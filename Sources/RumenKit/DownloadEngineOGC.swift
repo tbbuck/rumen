@@ -34,7 +34,6 @@ extension DownloadEngine {
         let chunks: [DownloadChunk]
         switch service.type {
         case .wfs:
-            let pageSize = request.manualPageSize ?? assessment.pageSize ?? detail.countDefault ?? 1000
             let strategy: Assessment.Strategy = detail.paging && request.manualStrategy != .single ? .offset : .single
             // WGS 84 is asked of the server only when the type is offered in it; otherwise the
             // native reference is fetched and written, and the record says which.
@@ -43,8 +42,10 @@ extension DownloadEngine {
             record = try await db.createDownload(layerID: target.id, transport: transport, strategy: strategy, whereClause: "1=1",
                                                  outWkid: outWkid, format: request.format, domainLabels: request.domainLabels)
             if strategy == .offset {
-                let count = try await crawler.probeCount(layerID: source.id)
-                chunks = DownloadPlanner.offsetChunks(downloadID: record.id, count: count, pageSize: pageSize)
+                // As on the ArcGIS side: the extent of the work is settled here, the chunks are
+                // handed out during the run at whatever page size the server has earned.
+                plannedWork[record.id] = .offset(count: try await crawler.probeCount(layerID: source.id))
+                chunks = []
             } else {
                 chunks = [DownloadChunk(downloadID: record.id, seq: 0, kind: .offset, offset: nil, limit: nil)]
             }
@@ -154,8 +155,27 @@ extension DownloadEngine {
         var fields = try await db.fields(layerID: layer.id)
         let outputDirectory = requests[id]?.outputDirectory ?? resumeContext[id]?.0 ?? stagingDirectory
         let overwrite = requests[id]?.overwrite ?? resumeContext[id]?.1 ?? false
-        let pageSize = requests[id]?.manualPageSize ?? detail.countDefault ?? 1000
+        // A WFS advertises `CountDefault` the way an ArcGIS layer advertises maxRecordCount, and
+        // it is just as much a claim rather than a promise — so it is the ceiling and the run
+        // climbs to it. A size the user set by hand is pinned.
+        var pager: AdaptiveLimit
+        if let manual = requests[id]?.manualPageSize {
+            pager = AdaptiveLimit(floor: manual, ceiling: manual)
+        } else {
+            pager = .pageSize(ceiling: detail.countDefault ?? 1000)
+        }
         var chunks = try await db.chunks(downloadID: id)
+
+        var feed = ChunkFeed(work: .offset(count: 0))
+        if record.strategy == .offset {
+            let planned: ChunkFeed.Work
+            if let cached = plannedWork[id] {
+                planned = cached
+            } else {
+                planned = .offset(count: try await crawler.probeCount(layerID: layer.id))
+            }
+            feed = ChunkFeed(work: planned, after: chunks)
+        }
         let stagingPath = record.stagingPath ?? stagingDirectory.appendingPathComponent("download-\(id).duckdb").path
         let wantsGeoJSON = record.transport == .geojson
         let fileExtension = wantsGeoJSON ? "json" : "gml"
@@ -189,13 +209,16 @@ extension DownloadEngine {
         var features = chunks.filter { $0.status == .done }.reduce(Int64(0)) { $0 + ($1.count ?? 0) }
         var bytes = record.bytes ?? 0
         func report(_ status: DownloadStatus, inFlight: Int, message: String? = nil) {
-            progress(DownloadProgress(downloadID: id, status: status, chunksDone: done, chunksTotal: chunks.filter { $0.status != .split }.count,
+            let issued = chunks.filter { $0.status != .split }.count
+            progress(DownloadProgress(downloadID: id, status: status, chunksDone: done,
+                                      chunksTotal: issued + feed.remainingRequests(at: pager.value),
                                       chunksInFlight: inFlight, chunksFailed: failed, features: features, bytes: bytes, message: message))
         }
         report(.running, inFlight: 0)
 
         var pending = chunks.filter { $0.status != .done && $0.status != .split }
         var outcome: (status: DownloadStatus, error: String?)? = nil
+        var nextSeq = (chunks.map(\.seq).max() ?? -1) + 1
 
         do {
             try await withThrowingTaskGroup(of: WFSPage.self) { group in
@@ -221,7 +244,22 @@ extension DownloadEngine {
                     }
                     inFlight += 1
                 }
-                while inFlight < concurrency, !pending.isEmpty { enqueue(pending.removeFirst()) }
+
+                func refill() async throws {
+                    while inFlight < concurrency {
+                        if !pending.isEmpty {
+                            enqueue(pending.removeFirst())
+                            continue
+                        }
+                        guard let chunk = feed.next(downloadID: id, seq: nextSeq, size: pager.value) else { return }
+                        nextSeq += 1
+                        try await db.insertChunks([chunk])
+                        chunks.append(chunk)
+                        attempts[chunk.seq] = 0
+                        enqueue(chunk)
+                    }
+                }
+                try await refill()
 
                 while inFlight > 0 {
                     guard let page = try await group.next() else { break }
@@ -235,16 +273,21 @@ extension DownloadEngine {
                             group.cancelAll()
                             throw error
                         }
-                        if let index = chunks.firstIndex(where: { $0.seq == page.seq }),
-                           let halves = DownloadPlanner.split(chunks[index], pageSize: pageSize, firstSeq: (chunks.map(\.seq).max() ?? 0) + 1) {
+                        // Only a refusal about size is answered by asking for less; see the
+                        // ArcGIS engine for why halving over anything else is just more load.
+                        if error.isPushback, let index = chunks.firstIndex(where: { $0.seq == page.seq }),
+                           let halves = DownloadPlanner.split(chunks[index], pageSize: pager.value, firstSeq: nextSeq) {
+                            nextSeq += 2
+                            pager.pushedBack()
                             try await db.updateChunk(downloadID: id, seq: page.seq, status: .split, count: nil, attempts: attempts[page.seq] ?? 1,
                                                      error: "split into \(halves[0].seq + 1) and \(halves[1].seq + 1): \(error.description)")
                             try await db.insertChunks(halves)
                             chunks[index].status = .split
                             chunks.append(contentsOf: halves)
                             pending.append(contentsOf: halves)
-                            report(.running, inFlight: inFlight, message: "request \(page.seq + 1) refused, split in two")
-                            while inFlight < concurrency, !pending.isEmpty { enqueue(pending.removeFirst()) }
+                            report(.running, inFlight: inFlight,
+                                   message: "request \(page.seq + 1) refused, split in two; asking for \(pager.value.formatted()) at a time")
+                            try await refill()
                             continue
                         }
                         outcome = (.failed, DownloadError.chunkFailed(seq: page.seq, message: error.description).description)
@@ -268,8 +311,9 @@ extension DownloadEngine {
                     done += 1
                     features += Int64(appended)
                     bytes += Int64(page.bytes)
+                    pager.succeeded()
                     report(.running, inFlight: inFlight)
-                    while inFlight < concurrency, !pending.isEmpty { enqueue(pending.removeFirst()) }
+                    try await refill()
                 }
             }
         } catch is CancellationError {

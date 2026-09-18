@@ -345,10 +345,10 @@ final class OGCTests: XCTestCase {
         XCTAssertEqual(planned.transport, .geojson)
         XCTAssertEqual(planned.strategy, .offset)
         XCTAssertEqual(planned.outWkid, 27700)
+        let record = try await engine.wait(downloadID: planned.id)
+        // Chunks are handed out as the run goes, so the plan is read back at the end.
         let chunks = try await db.chunks(downloadID: planned.id)
         XCTAssertEqual(chunks.map(\.offset), [0, 2, 4], "five features in pages of two")
-
-        let record = try await engine.wait(downloadID: planned.id)
         XCTAssertEqual(record.status, .complete, record.error ?? "")
         XCTAssertEqual(record.featureCount, 5)
         let path = try XCTUnwrap(record.outputPath)
@@ -360,7 +360,9 @@ final class OGCTests: XCTestCase {
         XCTAssertTrue(back.geo.contains("\"Point\""))
         let pages = endpoint.log.filter { $0["request"] == "GetFeature" && $0["resultType"] == nil }
         XCTAssertEqual(pages.count, 3)
-        XCTAssertTrue(pages.allSatisfy { $0["outputFormat"] == "application/json" && $0["typeNames"] == "ms:towns" && $0["count"] == "2" })
+        XCTAssertTrue(pages.allSatisfy { $0["outputFormat"] == "application/json" && $0["typeNames"] == "ms:towns" })
+        XCTAssertEqual(pages.map { $0["count"] }, ["2", "2", "1"],
+                       "the last page asks for the one feature that is left, not for a full page of two")
         XCTAssertTrue(pages.allSatisfy { $0["srsName"] == nil }, "native coordinates are not reprojected by the server")
     }
 

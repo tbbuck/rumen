@@ -113,7 +113,6 @@ public actor DownloadEngine {
         guard assessment.verdict == true else { throw DownloadError.notExtractable(assessment.reason) }
         let strategy = request.manualStrategy ?? assessment.strategy
         guard let strategy, let transport = assessment.transport else { throw DownloadError.unknownStrategy }
-        let pageSize = request.manualPageSize ?? assessment.pageSize ?? 1000
 
         let source = try await db.layer(id: assessment.sourceLayerID)
         let service = try await db.service(id: source.serviceID)
@@ -135,7 +134,7 @@ public actor DownloadEngine {
                                                     connection: connection, url: url, oidField: oidField,
                                                     whereClause: request.whereClause)
         }
-        _ = pageSize
+
         let staging = stagingDirectory.appendingPathComponent("download-\(record.id).duckdb").path
         try await db.setDownloadStaging(id: record.id, path: staging)
         requests[record.id] = request

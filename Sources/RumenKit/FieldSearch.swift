@@ -72,6 +72,9 @@ public enum FieldSearchError: Error, CustomStringConvertible, Equatable {
 }
 
 extension AppDatabase {
+    /// Rows read at a time when a search has to look at every candidate itself (regex).
+    public static let scanBatch = 5_000
+
     private static let hitColumns = """
         f.name, f.alias, f.esri_type, f.duck_type, l.id, l.name, l.layer_id, l.extractable,
         s.id, s.name, s.type, sv.id, sv.friendly_name
@@ -98,18 +101,29 @@ extension AppDatabase {
             } catch {
                 throw FieldSearchError.badRegex(error.localizedDescription)
             }
-            let rows = try query("SELECT \(Self.hitColumns) \(base) WHERE 1=1\(scope)\(order);").rows
+            // SQLite has no regular expressions, so the match happens here and every candidate
+            // row has to be looked at. Read them in batches rather than all at once: a server
+            // with a few thousand services has hundreds of thousands of fields, and the whole
+            // set was being materialised before a single one was tested. The order is fixed, so
+            // paging is deterministic, and the scan stops as soon as there are enough hits.
             var hits = [FieldSearchHit]()
-            for row in rows {
-                guard var hit = Self.hit(row) else { continue }
-                if expression.firstMatch(in: hit.fieldName, range: NSRange(hit.fieldName.startIndex..., in: hit.fieldName)) != nil {
-                    hits.append(hit)
-                } else if options.includeAlias, let alias = hit.alias,
-                          expression.firstMatch(in: alias, range: NSRange(alias.startIndex..., in: alias)) != nil {
-                    hit.matchedAlias = true
-                    hits.append(hit)
+            var offset = 0
+            scan: while hits.count < options.limit {
+                let rows = try query("SELECT \(Self.hitColumns) \(base) WHERE 1=1\(scope)\(order) LIMIT \(Self.scanBatch) OFFSET \(offset);").rows
+                if rows.isEmpty { break }
+                offset += rows.count
+                for row in rows {
+                    guard var hit = Self.hit(row) else { continue }
+                    if expression.firstMatch(in: hit.fieldName, range: NSRange(hit.fieldName.startIndex..., in: hit.fieldName)) != nil {
+                        hits.append(hit)
+                    } else if options.includeAlias, let alias = hit.alias,
+                              expression.firstMatch(in: alias, range: NSRange(alias.startIndex..., in: alias)) != nil {
+                        hit.matchedAlias = true
+                        hits.append(hit)
+                    }
+                    if hits.count >= options.limit { break scan }
                 }
-                if hits.count >= options.limit { break }
+                if rows.count < Self.scanBatch { break }
             }
             return hits
         }

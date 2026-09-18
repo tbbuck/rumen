@@ -230,6 +230,22 @@ extension CrawlerTests {
         XCTAssertEqual(layers.filter(\.isCrawled).count, layers.count, "and all of them still land")
     }
 
+    /// The shallow crawl lists the root and then its thirteen folders. That descent used to be a
+    /// depth-first recursion — list one folder, wait, list the next — so a wide or deep tree cost
+    /// a full round trip per folder in sequence.
+    func testTheFolderDescentListsFoldersInParallel() async throws {
+        transport.delay = .milliseconds(30)
+        defer { transport.delay = .zero }
+
+        let opened = try await crawler.open(root)
+
+        XCTAssertGreaterThan(transport.maxConcurrent, 1, "the folder listings should overlap")
+        let folders = try await db.folders(serverID: opened.server.id)
+        XCTAssertEqual(folders.count, 13, "and every folder still gets its row")
+        XCTAssertTrue(folders.allSatisfy { $0.fetchedAt != nil || $0.lastError != nil },
+                      "each one either listed or recorded why it could not")
+    }
+
     /// A crawl is the longest conversation the app has with a server, so what it learns about
     /// the host is worth keeping for the next one.
     func testADeepCrawlRecordsWhatTheHostCouldTake() async throws {

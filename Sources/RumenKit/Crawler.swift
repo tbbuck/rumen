@@ -187,6 +187,16 @@ public actor Crawler {
             return []
         }
         let conn = await connection(server)
+        let folderPaths = try await listLevel(serverID: serverID, server: server, conn: conn,
+                                              folderPath: folderPath, progress: progress)
+        guard recursive else { return [] }
+        return try await descend(serverID: serverID, server: server, conn: conn, from: folderPaths, progress: progress)
+    }
+
+    /// Lists one folder: its services, its sub-folder rows, and its own "listed" mark. Returns
+    /// the sub-folder paths, for the caller to descend into or not.
+    private func listLevel(serverID: Int64, server: ServerRecord, conn: ServerConnection, folderPath: String,
+                           progress: (@Sendable (CrawlEvent) -> Void)?) async throws -> [String] {
         let listing = try await client.serviceDirectory(conn, folder: folderPath.isEmpty ? nil : folderPath).value
         if folderPath.isEmpty, let version = listing.currentVersion {
             try await db.setServerVersion(id: serverID, version: version)
@@ -204,19 +214,63 @@ public actor Crawler {
         try await db.pruneFolders(serverID: serverID, parentPath: folderPath, keeping: folderPaths)
         try await db.markFolderListed(serverID: serverID, path: folderPath)
         progress?(.directory(folderPath: folderPath, services: records.count))
-        guard recursive else { return [] }
+        return folderPaths
+    }
+
+    /// Walks a folder subtree, a level at a time and several folders at once.
+    ///
+    /// This was a depth-first recursion that listed one folder, waited, then listed the next, so
+    /// a server with a wide or deep tree paid a full round trip per folder in sequence. Breadth
+    /// first with an explicit queue keeps the fan-out bounded — a recursive task group would
+    /// spawn a task per folder at every level at once — and the width is the host's discovered
+    /// limit, so it widens as the server copes.
+    ///
+    /// A folder that will not list is recorded on its row and collected, and the walk carries on:
+    /// one broken folder must not hide the rest of the server.
+    private func descend(serverID: Int64, server: ServerRecord, conn: ServerConnection, from roots: [String],
+                         progress: (@Sendable (CrawlEvent) -> Void)?) async throws -> [CrawlProblem] {
+        let host = ArcGISURL.origin(of: server.rootURL)
+        var queue = roots
         var problems = [CrawlProblem]()
-        for path in folderPaths {
+        while !queue.isEmpty {
             try Task.checkCancellation()
-            do {
-                problems += try await crawlFolder(serverID: serverID, path: path, progress: progress)
-            } catch {
-                if error is CancellationError { throw error }
-                if let client = error as? ArcGISClientError, case .cancelled = client { throw error }
-                let message = String(describing: error)
-                progress?(.failed(what: "folder \(path)", error: message))
-                problems.append(CrawlProblem(folderPath: path, message: message))
+            var nextLevel = [String]()
+            try await withThrowingTaskGroup(of: ([String], CrawlProblem?).self) { group in
+                var pending = queue[...]
+                var inFlight = 0
+                func fill() async {
+                    let width = max(1, await client.concurrencyLimit(forHost: host))
+                    while inFlight < width, let path = pending.popFirst() {
+                        group.addTask { [self] in
+                            do {
+                                let children = try await listLevel(serverID: serverID, server: server, conn: conn,
+                                                                   folderPath: path, progress: progress)
+                                return (children, nil)
+                            } catch is CancellationError {
+                                throw CancellationError()
+                            } catch let error as ArcGISClientError where error == .cancelled {
+                                throw CancellationError()
+                            } catch {
+                                let message = String(describing: error)
+                                try await db.markFolderFailed(serverID: serverID, path: path, error: message)
+                                progress?(.failed(what: "folder \(path)", error: message))
+                                return ([], CrawlProblem(folderPath: path, message: message))
+                            }
+                        }
+                        inFlight += 1
+                    }
+                }
+                await fill()
+                while inFlight > 0 {
+                    guard let outcome = try await group.next() else { break }
+                    inFlight -= 1
+                    nextLevel += outcome.0
+                    if let problem = outcome.1 { problems.append(problem) }
+                    try Task.checkCancellation()
+                    await fill()
+                }
             }
+            queue = nextLevel
         }
         return problems
     }
@@ -265,7 +319,21 @@ public actor Crawler {
         guard !summaries.isEmpty else { return }
 
         var stored = Set<Int>()
-        if let bulk = try? await client.layers(conn, serviceURL: service.url) {
+        // The bulk endpoint is a genuine best-effort: plenty of servers do not have it, and the
+        // per-layer fallback below covers every case it misses. What must not be swallowed is a
+        // cancellation — a `try?` here turned "the user stopped the crawl" into "no bulk answer"
+        // and went on to make a request per layer.
+        var bulk: (value: LayersResponse, raw: Data)?
+        do {
+            bulk = try await client.layers(conn, serviceURL: service.url)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as ArcGISClientError where error == .cancelled {
+            throw CancellationError()
+        } catch {
+            bulk = nil
+        }
+        if let bulk {
             // The bulk response has no per-layer raw JSON of its own; re-encode each element
             // so the stored raw is exactly that layer's definition.
             for definition in bulk.value.layers + bulk.value.tables {

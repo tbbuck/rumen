@@ -40,6 +40,51 @@ final class FieldSearchTests: XCTestCase {
         try? FileManager.default.removeItem(at: scratch)
     }
 
+    /// A regex search cannot push its filter into SQLite, so it has to look at every candidate
+    /// itself. It used to materialise the whole set first — on a server with thousands of
+    /// services that is hundreds of thousands of rows in memory before one is tested — and now
+    /// reads in batches. The match here sits past the first batch, so a scan that stopped there
+    /// would miss it entirely.
+    func testARegexSearchReadsBeyondTheFirstBatch() async throws {
+        let found = try await anyCrawledLayerID()
+        let layerID = try XCTUnwrap(found)
+        let total = AppDatabase.scanBatch + 250
+        try await db.query("BEGIN;")
+        for index in 0..<total {
+            // Only the very last ones match, and they are ordered last within the layer.
+            let name = index >= total - 3 ? "NEEDLE_\(index)" : "filler_\(index)"
+            try await db.query("INSERT INTO field (layer_id, position, name, esri_type, duck_type) VALUES (?, ?, ?, ?, ?);",
+                               [.int(layerID), .int(Int64(1_000 + index)), .string(name),
+                                .string("esriFieldTypeString"), .string("VARCHAR")])
+        }
+        try await db.query("COMMIT;")
+
+        let hits = try await db.searchFields(FieldSearchOptions(text: "^NEEDLE_", regex: true))
+        XCTAssertEqual(hits.count, 3, "all three matches found, though they sit past the first batch")
+        XCTAssertTrue(hits.allSatisfy { $0.fieldName.hasPrefix("NEEDLE_") })
+    }
+
+    /// The scan stops as soon as it has enough, rather than reading everything and trimming.
+    func testARegexSearchStopsAtTheLimit() async throws {
+        let found = try await anyCrawledLayerID()
+        let layerID = try XCTUnwrap(found)
+        try await db.query("BEGIN;")
+        for index in 0..<50 {
+            try await db.query("INSERT INTO field (layer_id, position, name, esri_type, duck_type) VALUES (?, ?, ?, ?, ?);",
+                               [.int(layerID), .int(Int64(2_000 + index)), .string("MANY_\(index)"),
+                                .string("esriFieldTypeString"), .string("VARCHAR")])
+        }
+        try await db.query("COMMIT;")
+
+        let hits = try await db.searchFields(FieldSearchOptions(text: "^MANY_", regex: true, limit: 10))
+        XCTAssertEqual(hits.count, 10)
+    }
+
+    /// The id of a layer that already has fields, to hang synthetic ones off.
+    private func anyCrawledLayerID() async throws -> Int64? {
+        try await db.query("SELECT layer_id FROM field LIMIT 1;").rows.first?.first?.int64
+    }
+
     func testPartialCaseInsensitiveAcrossServers() async throws {
         let hits = try await db.searchFields(FieldSearchOptions(text: "name"))
         XCTAssertTrue(hits.contains { $0.fieldName == "STATE_NAME" && $0.serverName == "Sample 6" && $0.layerName == "states" })

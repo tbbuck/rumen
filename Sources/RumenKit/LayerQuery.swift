@@ -50,6 +50,16 @@ public struct QueryOptions: Sendable, Equatable {
     /// Decimal places for returned geometry (`geometryPrecision`); nil = server default.
     public var geometryPrecision: Int? = nil
 
+    /// Roughly how many features this asks for, when it asks for a bounded number: the page
+    /// size, or the length of an explicit id list. An OID-range window is bounded by its where
+    /// clause rather than by a number, and a statistics or extent query returns one row, so both
+    /// answer nil and take the default timeout.
+    public var pagedCount: Int? {
+        if let count { return count }
+        if let objectIDs, !objectIDs.isEmpty { return objectIDs.count }
+        return nil
+    }
+
     public init(whereClause: String = "1=1", outFields: [String]? = nil, returnGeometry: Bool = true,
                 outWkid: Int? = nil, orderBy: (field: String, ascending: Bool)? = nil, offset: Int? = nil,
                 count: Int? = nil, distinct: Bool = false, statistics: [StatisticDefinition] = []) {
@@ -97,7 +107,8 @@ extension ArcGISClient {
     public func features(_ server: ServerConnection, layerURL: URL, options: QueryOptions,
                          maxAttempts: Int? = nil, progress: TransferProgressHandler? = nil) async throws -> (value: FeatureSet, raw: Data) {
         try await json(FeatureSet.self, .post, url: layerURL.appendingPathComponent("query"),
-                       params: options.params, server: server, maxAttempts: maxAttempts, progress: progress)
+                       params: options.params, server: server, maxAttempts: maxAttempts,
+                       timeout: ArcGISClient.timeout(forFeatures: options.pagedCount), progress: progress)
     }
 
     /// `returnExtentOnly=true` for a where clause, optionally in another spatial reference.
@@ -123,7 +134,7 @@ extension ArcGISClient {
         var params = options.params
         params["f"] = "pbf"
         return try await request(.post, url: layerURL.appendingPathComponent("query"), params: params, server: server,
-                                 maxAttempts: maxAttempts)
+                                 maxAttempts: maxAttempts, timeout: ArcGISClient.timeout(forFeatures: options.pagedCount))
     }
 
     /// Every object id matching `where`, as the server lists them.

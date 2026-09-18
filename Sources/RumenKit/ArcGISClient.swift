@@ -201,6 +201,23 @@ public enum HTTPMethod: String, Sendable { case get = "GET", post = "POST" }
 public actor ArcGISClient {
     public static let userAgent = "Rumen/0.1 (macOS)"
 
+    /// What a request with nothing to say about its own size gets: metadata, a count, a
+    /// capabilities document.
+    public static let defaultTimeout: TimeInterval = 120
+
+    /// How long to wait for a page of `count` features.
+    ///
+    /// A flat timeout is wrong in both directions. A request for 2,000 features from a slow box
+    /// is given the same grace as one for 25, so the big one fails when it might merely have
+    /// been slow; and the small one — the one asked for precisely because the server is
+    /// struggling — sits for two minutes before anyone finds out, which is the delay the page
+    /// size is trying to avoid. Waiting in proportion to what was asked for makes a refusal at
+    /// the floor quick and a large page patient.
+    public static func timeout(forFeatures count: Int?) -> TimeInterval {
+        guard let count, count > 0 else { return defaultTimeout }
+        return min(240, 60 + Double(count) * 0.05)
+    }
+
     /// What one host has shown it can actually take. The climb, the halving and the ceiling all
     /// live in `AdaptiveLimit`, which answers the same question for a download's page size —
     /// deliberately, because both are "how hard can I lean on this box" and the box is the same
@@ -259,13 +276,14 @@ public actor ArcGISClient {
     /// unless the caller set `f`.
     public func request(_ method: HTTPMethod, url: URL, params: [String: String] = [:],
                         server: ServerConnection, maxAttempts: Int? = nil,
+                        timeout: TimeInterval = ArcGISClient.defaultTimeout,
                         progress: TransferProgressHandler? = nil) async throws -> Data {
         var all = params
         if all["f"] == nil { all["f"] = "json" }
         if let token = server.token, all["token"] == nil { all["token"] = token }
         let sent = all
         func attempt(_ method: HTTPMethod) async throws -> Data {
-            let request = try Self.build(method, url: url, params: sent, server: server)
+            let request = try Self.build(method, url: url, params: sent, server: server, timeout: timeout)
             return try await send(request, url: url, maxAttempts: maxAttempts, progress: progress)
         }
         let origin = ArcGISURL.origin(of: url)
@@ -435,8 +453,10 @@ public actor ArcGISClient {
     public func json<T: Decodable>(_ type: T.Type, _ method: HTTPMethod = .get, url: URL,
                                    params: [String: String] = [:],
                                    server: ServerConnection, maxAttempts: Int? = nil,
+                                   timeout: TimeInterval = ArcGISClient.defaultTimeout,
                                    progress: TransferProgressHandler? = nil) async throws -> (value: T, raw: Data) {
-        let data = try await request(method, url: url, params: params, server: server, maxAttempts: maxAttempts, progress: progress)
+        let data = try await request(method, url: url, params: params, server: server, maxAttempts: maxAttempts,
+                                     timeout: timeout, progress: progress)
         do {
             return (try ArcGISJSON.decode(type, from: data), data)
         } catch {
@@ -476,7 +496,8 @@ public actor ArcGISClient {
 
     // MARK: - Request building
 
-    static func build(_ method: HTTPMethod, url: URL, params: [String: String], server: ServerConnection) throws -> URLRequest {
+    static func build(_ method: HTTPMethod, url: URL, params: [String: String], server: ServerConnection,
+                      timeout: TimeInterval = ArcGISClient.defaultTimeout) throws -> URLRequest {
         let encoded = formEncode(params)
         var request: URLRequest
         switch method {
@@ -501,7 +522,7 @@ public actor ArcGISClient {
         }
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
-        request.timeoutInterval = 120
+        request.timeoutInterval = timeout
         return request
     }
 

@@ -591,6 +591,23 @@ owned by `AppDatabase`). DuckDB never holds app state.
     reported verbatim rather than followed by OGC attempts; any other error envelope is
     only a hint and rides along in the message. Only a URL that answers as none of these
     is taken for an OGC endpoint, and when that fails too the message names both.
+20. **What a server can take is discovered, not declared** — accepted 2026-09-18. A
+    layer's `maxRecordCount`, a WFS's `CountDefault` and the user's concurrency
+    preference are all *ceilings*: the first two are what a server claims on a good day,
+    the third is a hope. Both numbers now start low and climb — `AdaptiveLimit`, shared
+    by the client's per-host concurrency and both download engines' page size: open at
+    the floor (1 slot, 100 features), double while the server keeps up, halve on pushback
+    and creep additively thereafter. The asymmetry is the argument: undershooting costs
+    one cheap round trip, overshooting costs a timeout, its retries and a re-plan.
+    Chunks are handed out by a `ChunkFeed` during the run rather than laid out when it is
+    planned, because a fixed plan fixes the page size with it; the feed derives its cursor
+    from the chunks already recorded, so a resume is exact. A refusal now shrinks every
+    chunk still to come, not only the one that failed, and splitting requires evidence
+    about *size* — including an ArcGIS error envelope, where a refusal arrives as code 500
+    over HTTP 200. What a host settles on is kept in `server_capacity`, keyed on the host
+    rather than the registered server, so an ArcGIS service and a WFS on one box share
+    what either learned. Request timeouts scale with the number of features asked for
+    (§5.6), rather than one flat 120 s for 25 features and 2,000 alike.
 
 ## 10. Open questions
 1. ~~**Design direction**: reuse DuckLake Explorer's Stratum system or give this app

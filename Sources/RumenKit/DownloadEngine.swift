@@ -236,10 +236,18 @@ public actor DownloadEngine {
         // struggling one costs a timeout per chunk before anything adapts. A size the user set
         // by hand is pinned, floor and ceiling alike, because they meant it.
         var pager: AdaptiveLimit
+        let host = ArcGISURL.origin(of: server.rootURL)
         if let manual = requests[id]?.manualPageSize {
             pager = AdaptiveLimit(floor: manual, ceiling: manual)
         } else {
             pager = .pageSize(ceiling: source.maxRecordCount ?? 1000)
+            // What this host coped with last time, so the climb is not repeated from scratch on
+            // every run. It is a starting point: the layer's ceiling still bounds it, and a
+            // refusal still takes it straight back down.
+            if let remembered = try await db.capacity(host: host) {
+                if let size = remembered.pageSize { pager.adopt(size) }
+                if let slots = remembered.concurrency { await client.seedConcurrency(slots, forHost: host) }
+            }
         }
         let pageSize = pager.value
 
@@ -435,6 +443,12 @@ public actor DownloadEngine {
             }
             if switchedToJSON {
                 try await db.setLayerTransport(layerID: source.id, transport: Assessment.Transport.json.rawValue)
+            }
+            // What the run settled on, for the next one to start from. Recorded only when the
+            // size was free to move: a size the user pinned says nothing about the host.
+            if requests[id]?.manualPageSize == nil {
+                try? await db.recordCapacity(host: host, concurrency: await client.concurrencyLimit(forHost: host),
+                                             pageSize: pager.value)
             }
         } catch is CancellationError {
             let db = self.db

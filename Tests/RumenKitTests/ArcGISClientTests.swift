@@ -339,6 +339,30 @@ extension ArcGISClientTests {
         XCTAssertEqual(clamped, 4, "clamped to the ceiling")
     }
 
+    // MARK: - Timeouts
+
+    /// A flat timeout is wrong twice over: too mean for a big page, far too patient for the
+    /// small one asked for precisely because the server is struggling.
+    func testTheTimeoutFollowsWhatWasAskedFor() {
+        XCTAssertEqual(ArcGISClient.timeout(forFeatures: nil), 120, "metadata keeps the default")
+        XCTAssertEqual(ArcGISClient.timeout(forFeatures: 0), 120)
+        XCTAssertEqual(ArcGISClient.timeout(forFeatures: 100), 65)
+        XCTAssertEqual(ArcGISClient.timeout(forFeatures: 2_000), 160)
+        XCTAssertEqual(ArcGISClient.timeout(forFeatures: 100_000), 240, "capped, however greedy the page")
+        XCTAssertLessThan(ArcGISClient.timeout(forFeatures: 100), ArcGISClient.timeout(forFeatures: 2_000))
+    }
+
+    func testAPagedQueryCarriesItsSizeAsTheTimeoutHint() {
+        var options = QueryOptions(whereClause: "1=1")
+        XCTAssertNil(options.pagedCount, "an unbounded query has no size to go on")
+        options.count = 500
+        XCTAssertEqual(options.pagedCount, 500)
+
+        var byIDs = QueryOptions(whereClause: "1=1")
+        byIDs.objectIDs = Array(1...42)
+        XCTAssertEqual(byIDs.pagedCount, 42, "an id list is as bounded as a page size")
+    }
+
     // MARK: - Retry-After
 
     func testRetryAfterParsesSecondsAndRejectsNonsense() {

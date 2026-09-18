@@ -431,6 +431,31 @@ extension DownloadEngineTests {
         XCTAssertEqual(chunks.map(\.offset), [0, 100, 300, 700, 1_500], "contiguous, no gaps and no overlaps")
     }
 
+    /// What one run learned, the next one starts from: the climb is paid once per host, not once
+    /// per download. Five requests become two.
+    func testASecondRunStartsFromWhatTheFirstLearned() async throws {
+        stub.pageSize = 2_000
+        stub.featureCount = 3_000
+        try await recrawlLayer()
+        await engine.setConcurrency(1)
+
+        let first = try await engine.start(request())
+        _ = try await engine.wait(downloadID: first.id)
+        let firstChunks = try await db.chunks(downloadID: first.id)
+        XCTAssertEqual(firstChunks.map(\.limit), [100, 200, 400, 800, 1_500], "the first run climbs")
+
+        var again = request()
+        again.overwrite = true
+        let second = try await engine.start(again)
+        let record = try await engine.wait(downloadID: second.id)
+        XCTAssertEqual(record.status, .complete, record.error ?? "")
+        XCTAssertEqual(record.featureCount, 3_000)
+
+        let secondChunks = try await db.chunks(downloadID: second.id)
+        XCTAssertEqual(secondChunks.map(\.limit), [2_000, 1_000],
+                       "the second run opens at what the host was last seen to manage")
+    }
+
     /// Splitting answers "that was too much to ask for" and nothing else. A bad field name is
     /// not about size, and halving the request would only make the server refuse it twice.
     func testAFailureThatIsNotAboutSizeIsNotSplit() async throws {

@@ -103,7 +103,7 @@ final class AppDatabaseTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: dbPath))
 
         let expected = ["download", "download_chunk", "export", "field", "folder", "layer", "query_history",
-                        "schema_migrations", "server", "service", "setting"]
+                        "schema_migrations", "server", "server_capacity", "service", "setting"]
         let names = try await db.tableNames()
         XCTAssertEqual(names, expected)
     }

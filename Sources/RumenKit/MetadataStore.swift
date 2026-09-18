@@ -563,6 +563,47 @@ extension AppDatabase {
     }
 }
 
+// MARK: - Learned host capacity
+
+/// What a host sustained last time, as a starting point rather than a promise.
+public struct ServerCapacity: Sendable, Equatable {
+    public let concurrency: Int?
+    public let pageSize: Int?
+
+    public init(concurrency: Int?, pageSize: Int?) {
+        self.concurrency = concurrency
+        self.pageSize = pageSize
+    }
+}
+
+extension AppDatabase {
+    /// What the host was last seen to cope with, if this app has met it before.
+    public func capacity(host: String) throws -> ServerCapacity? {
+        guard let row = try query("SELECT concurrency, page_size FROM server_capacity WHERE host = ?;",
+                                  [.string(host)]).rows.first else { return nil }
+        let concurrency = row.first?.intValue
+        let pageSize = row.count > 1 ? row[1].intValue : nil
+        guard concurrency != nil || pageSize != nil else { return nil }
+        return ServerCapacity(concurrency: concurrency, pageSize: pageSize)
+    }
+
+    /// Records what a finished run settled on. Either number may be left out, so a run that
+    /// learned nothing about one of them does not overwrite what another run knew.
+    public func recordCapacity(host: String, concurrency: Int? = nil, pageSize: Int? = nil) throws {
+        guard concurrency != nil || pageSize != nil else { return }
+        try query("""
+            INSERT INTO server_capacity (host, concurrency, page_size, updated_at)
+            VALUES (?, ?, ?, datetime('now'))
+            ON CONFLICT (host) DO UPDATE SET
+                concurrency = coalesce(excluded.concurrency, server_capacity.concurrency),
+                page_size   = coalesce(excluded.page_size, server_capacity.page_size),
+                updated_at  = excluded.updated_at;
+            """,
+            [.string(host), concurrency.map { SQLBind.int(Int64($0)) } ?? .null,
+             pageSize.map { SQLBind.int(Int64($0)) } ?? .null])
+    }
+}
+
 // MARK: - Settings
 
 extension AppDatabase {

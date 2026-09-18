@@ -44,6 +44,21 @@ xcodegen generate
 xcodebuild -project Rumen.xcodeproj -scheme "$SCHEME" -configuration "$CONFIG" \
   -derivedDataPath "$DDP" -quiet clean build
 
+# The version shipped comes from project.yml, and the release is triggered by a tag: nothing
+# connects the two, so tagging v1.3.0 without bumping MARKETING_VERSION would notarise and
+# publish a DMG that calls itself 1.2.0. Checked here, before anything expensive or public.
+TAG="${GITHUB_REF_NAME:-}"
+case "$TAG" in
+  v*)
+    BUILT="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
+    if [ "v$BUILT" != "$TAG" ]; then
+      echo "release: tag $TAG does not match the built version $BUILT — bump MARKETING_VERSION in project.yml" >&2
+      exit 1
+    fi
+    echo "    version $BUILT matches tag $TAG"
+    ;;
+esac
+
 echo "==> 2/6  Bundle libduckdb"
 "$R/scripts/bundle-duckdb-engine.sh" "$APP"
 
@@ -72,6 +87,10 @@ else
   ditto -c -k --keepParent "$APP" "$ZIP"
   xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
   xcrun stapler staple "$APP"
+  # Prove the ticket is actually attached. `spctl` below can be satisfied by an online check,
+  # so it passes even when stapling silently did not — and then the first person to open the
+  # app offline, or behind a firewall that blocks Apple, is the one who finds out.
+  xcrun stapler validate "$APP"
   rm -f "$ZIP"
 fi
 

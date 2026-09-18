@@ -484,6 +484,14 @@ extension DownloadEngineTests {
         let latency = try XCTUnwrap(last.latency)
         XCTAssertGreaterThanOrEqual(latency, 0)
 
+        // The drawer shows these as "running out of allowed", so the first must never exceed the
+        // second — the run creates no more tasks than the host will take.
+        for report in afterAChunk {
+            guard let allowed = report.concurrency else { continue }
+            XCTAssertLessThanOrEqual(report.chunksInFlight, allowed,
+                                     "\(report.chunksInFlight) in flight against an allowance of \(allowed)")
+        }
+
         // The size is reported as it moves, not only at the end.
         let sizes = afterAChunk.compactMap(\.pageSize)
         XCTAssertGreaterThan(Set(sizes).count, 1, "the reported size follows the climb")

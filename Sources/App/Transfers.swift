@@ -86,17 +86,22 @@ struct TransferRun: Identifiable, Equatable {
         }
     }
 
-    /// "3 × 800 @ 2.4s": requests in flight, features per request, and the last request's time.
-    /// Each part is left out when there is nothing to say — a WFS fetched in one request has no
+    /// "2/3 × 800 @ 2.4s": requests running out of the number this host currently allows,
+    /// features per request, and how long the last one took.
+    ///
+    /// Both halves of the fraction are needed. The allowance alone cannot be read — three of
+    /// what? — and the running count alone hides the reason a run is crawling, which is usually
+    /// that the host has been throttled down to one slot rather than that the app is idle.
+    ///
+    /// Each part is left out when there is nothing to say: a WFS fetched in one request has no
     /// page size, and nothing has a latency until the first request comes back.
     static func shape(_ p: DownloadProgress) -> String? {
         var shape = ""
-        if let concurrency = p.concurrency, let pageSize = p.pageSize {
-            shape = "\(concurrency) × \(pageSize.grouped)"
+        if let allowed = p.concurrency {
+            shape = "\(p.chunksInFlight)/\(allowed)"
+            if let pageSize = p.pageSize { shape += " × \(pageSize.grouped)" }
         } else if let pageSize = p.pageSize {
             shape = "\(pageSize.grouped) per request"
-        } else if let concurrency = p.concurrency {
-            shape = "\(concurrency) at a time"
         }
         guard let latency = p.latency else { return shape.isEmpty ? nil : shape }
         let time = latency < 10 ? "\(latency.formatted(.number.precision(.fractionLength(1))))s"

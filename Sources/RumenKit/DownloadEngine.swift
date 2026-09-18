@@ -351,7 +351,12 @@ public actor DownloadEngine {
                 /// at whatever page size the server has earned by now. A chunk is recorded before
                 /// it is issued, so a crash leaves it pending rather than losing its range.
                 func refill() async throws {
-                    while inFlight < concurrency {
+                    // The run's own cap and the host's discovered one, whichever binds. Creating
+                    // more tasks than the host will take only queues them inside the client, and
+                    // makes the transfers drawer claim requests are in flight when they are not.
+                    let width = min(concurrency, await client.concurrencyLimit(forHost: host))
+                    hostWidth = width
+                    while inFlight < max(1, width) {
                         if !pending.isEmpty {
                             enqueue(pending.removeFirst())
                             continue
@@ -458,7 +463,6 @@ public actor DownloadEngine {
                     pager.succeeded(AdaptiveLimit.Sample(work: Double(appended), elapsed: fetched.elapsed,
                                                          budget: fetched.budget))
                     lastLatency = fetched.elapsed
-                    hostWidth = await client.concurrencyLimit(forHost: host)
                     report(.running, inFlight: inFlight)
                     try await refill()
                 }

@@ -257,7 +257,10 @@ extension DownloadEngine {
                 }
 
                 func refill() async throws {
-                    while inFlight < concurrency {
+                    // As on the ArcGIS side: the run's cap and the host's, whichever binds.
+                    let width = min(concurrency, await client.concurrencyLimit(forHost: host))
+                    hostWidth = width
+                    while inFlight < max(1, width) {
                         if !pending.isEmpty {
                             enqueue(pending.removeFirst())
                             continue
@@ -324,7 +327,6 @@ extension DownloadEngine {
                     bytes += Int64(page.bytes)
                     pager.succeeded(AdaptiveLimit.Sample(work: Double(appended), elapsed: page.elapsed, budget: page.budget))
                     lastLatency = page.elapsed
-                    hostWidth = await client.concurrencyLimit(forHost: host)
                     report(.running, inFlight: inFlight)
                     try await refill()
                 }

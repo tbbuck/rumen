@@ -95,11 +95,29 @@ public enum ArcGISClientError: Error, CustomStringConvertible, Equatable {
     /// Whether another attempt could plausibly succeed.
     var isRetryable: Bool {
         switch self {
-        case .http(let status, _): return status == 429 || status == 500 || (502...504).contains(status)
+        case .http(let status, _): return status == 408 || status == 429 || status == 500 || (502...504).contains(status)
         case .server(let code, let message, _, _):
             if code == 429 || code == 503 { return true }
             return message.lowercased().contains("timeout") || message.lowercased().contains("timed out")
         case .transport: return true
+        case .tokenRequired, .decoding, .cancelled: return false
+        }
+    }
+
+    /// Whether this failure is the host saying "too much": the signal that drives the per-host
+    /// concurrency back down. A 404 or a bad where clause says nothing about capacity, so it
+    /// does not count — only overload, timeouts, and the gateway errors a struggling box emits.
+    var isPushback: Bool {
+        switch self {
+        case .http(let status, _): return status == 408 || status == 429 || (500...504).contains(status)
+        case .server(let code, let message, _, _):
+            if code == 429 || code == 503 { return true }
+            return message.lowercased().contains("timeout") || message.lowercased().contains("timed out")
+        case .transport(let message, _):
+            // A timed-out or dropped connection is the commonest way an overloaded server says no.
+            let text = message.lowercased()
+            return text.contains("timed out") || text.contains("timeout")
+                || text.contains("connection lost") || text.contains("network connection was lost")
         case .tokenRequired, .decoding, .cancelled: return false
         }
     }
@@ -180,9 +198,32 @@ public enum HTTPMethod: String, Sendable { case get = "GET", post = "POST" }
 public actor ArcGISClient {
     public static let userAgent = "Rumen/0.1 (macOS)"
 
+    /// What one host has shown it can actually take, discovered rather than assumed.
+    ///
+    /// Slow start: the cap opens at 1 and gains a slot per clean response, so it doubles each
+    /// round and reaches the ceiling in a handful of requests. The first time the host pushes
+    /// back the cap halves and the climb turns additive — one slot per `limit` clean responses
+    /// — which is where it stays, because a box that has said no once will say it again.
+    ///
+    /// Probing upward from 1 costs a healthy server almost nothing (the early requests are the
+    /// ones that would have run anyway), while starting at the ceiling costs a weak one a
+    /// timeout per request before anything learns. The asymmetry is the whole argument.
+    struct HostCapacity: Sendable {
+        var limit = 1
+        var ceiling: Int
+        /// Clean responses since the cap last changed.
+        var successes = 0
+        /// True until the host first pushes back: the fast, doubling phase.
+        var slowStart = true
+        /// When the host asked us to come back later (`Retry-After`), the earliest time to try.
+        var retryAfter: Date?
+    }
+
     private let transport: HTTPTransport
     private var retry: RetryPolicy
+    /// The user's preference: the ceiling a host may climb to, never the starting point.
     private var maxConcurrentPerHost: Int
+    private var capacity: [String: HostCapacity] = [:]
     private var inFlight: [String: Int] = [:]
     private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
     /// Origins that answered `405 Allow: GET` to a POST. Some proxies in front of ArcGIS route
@@ -203,14 +244,17 @@ public actor ArcGISClient {
     public func setLimits(maxConcurrentPerHost: Int, retry: RetryPolicy) {
         self.maxConcurrentPerHost = max(1, maxConcurrentPerHost)
         self.retry = retry
-        for host in Array(waiters.keys) {
-            while inFlight[host, default: 0] < self.maxConcurrentPerHost, var queue = waiters[host], !queue.isEmpty {
-                let next = queue.removeFirst()
-                waiters[host] = queue
-                inFlight[host, default: 0] += 1
-                next.resume()
-            }
+        // Snapshot the keys: mutating the dictionary while iterating its own `keys` view is an
+        // exclusivity violation, and traps at runtime.
+        for host in Array(capacity.keys) {
+            var state = capacity[host] ?? HostCapacity(ceiling: self.maxConcurrentPerHost)
+            state.ceiling = self.maxConcurrentPerHost
+            // A lowered ceiling takes effect at once for new requests; those already in flight
+            // finish and their slots retire rather than passing on (see `release`).
+            state.limit = min(state.limit, self.maxConcurrentPerHost)
+            capacity[host] = state
         }
+        for host in Array(waiters.keys) { wake(host) }
     }
 
     // MARK: - Raw requests
@@ -290,23 +334,67 @@ public actor ArcGISClient {
         return false
     }
 
+    /// Sends with retries, holding one of the host's slots only while a request is actually in
+    /// flight. Backing off outside the slot matters: a struggling host is exactly the one whose
+    /// requests retry, and sleeping on its slots starves the very requests that might succeed.
     private func send(_ request: URLRequest, url: URL, maxAttempts: Int?, progress: TransferProgressHandler?) async throws -> Data {
-        await acquire(server(for: request))
-        defer { release(server(for: request)) }
-
+        let host = server(for: request)
         var attempt = 1
         while true {
             if Task.isCancelled { throw ArcGISClientError.cancelled }
+            if let wait = retryAfterDelay(host) { try await Task.sleep(for: .seconds(wait)) }
+
+            await acquire(host)
+            let outcome: Result<Data, SendFailure>
             do {
-                return try await performOnce(request, url: url, progress: progress)
-            } catch let error as ArcGISClientError {
-                guard error.isRetryable, attempt < (maxAttempts ?? retry.maxAttempts) else { throw error }
-                let delay = retry.delay(beforeRetry: attempt)
+                outcome = .success(try await performOnce(request, url: url, progress: progress))
+            } catch let failure as SendFailure {
+                outcome = .failure(failure)
+            }
+
+            switch outcome {
+            case .success(let data):
+                noteSuccess(host)
+                release(host)
+                return data
+            case .failure(let failure):
+                release(host)          // free the slot before any backoff
+                if failure.error.isPushback { notePushback(host, retryAfter: failure.retryAfter) }
+                guard failure.error.isRetryable, attempt < (maxAttempts ?? retry.maxAttempts) else { throw failure.error }
+                // The host's own Retry-After beats our guess at a delay.
+                let delay = failure.retryAfter ?? retry.delay(beforeRetry: attempt)
                 if delay > 0 { try await Task.sleep(for: .seconds(delay)) }
                 attempt += 1
             }
         }
     }
+
+    /// A failed attempt plus what the host said about coming back, kept internal so the public
+    /// error enum (which callers pattern-match on) does not grow a case for it.
+    private struct SendFailure: Error {
+        let error: ArcGISClientError
+        let retryAfter: TimeInterval?
+    }
+
+    /// `Retry-After`, as either delay-seconds or an HTTP date. Absurd values are ignored rather
+    /// than trusted: a server asking us to wait an hour gets our own backoff instead.
+    public static func retryAfter(_ header: String?) -> TimeInterval? {
+        guard let header = header?.trimmingCharacters(in: .whitespaces), !header.isEmpty else { return nil }
+        if let seconds = TimeInterval(header) {
+            return seconds > 0 && seconds <= 300 ? seconds : nil
+        }
+        guard let date = httpDateFormatter.date(from: header) else { return nil }
+        let delay = date.timeIntervalSinceNow
+        return delay > 0 && delay <= 300 ? delay : nil
+    }
+
+    private static let httpDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "GMT")
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss 'GMT'"
+        return formatter
+    }()
 
     /// The per-host key of a built request.
     private func server(for request: URLRequest) -> String {
@@ -326,21 +414,23 @@ public actor ArcGISClient {
                 (data, response) = try await transport.perform(request)
             }
         } catch is CancellationError {
-            throw ArcGISClientError.cancelled
+            throw SendFailure(error: .cancelled, retryAfter: nil)
         } catch {
-            throw ArcGISClientError.transport(error.localizedDescription, url: url)
+            throw SendFailure(error: .transport(error.localizedDescription, url: url), retryAfter: nil)
         }
+        let retryAfter = Self.retryAfter(response.value(forHTTPHeaderField: "Retry-After"))
         guard (200..<300).contains(response.statusCode) else {
-            throw ArcGISClientError.http(status: response.statusCode, url: url)
+            throw SendFailure(error: .http(status: response.statusCode, url: url), retryAfter: retryAfter)
         }
         let body = Self.unwrapJSONString(data)
         if let envelope = ArcGISJSON.errorEnvelope(in: body) {
             let message = envelope.error.message ?? "unknown error"
             if let code = envelope.error.code, code == 498 || code == 499 {
-                throw ArcGISClientError.tokenRequired(code: code, message: message, url: url)
+                throw SendFailure(error: .tokenRequired(code: code, message: message, url: url), retryAfter: nil)
             }
-            throw ArcGISClientError.server(code: envelope.error.code, message: message,
-                                           details: envelope.error.details ?? [], url: url)
+            throw SendFailure(error: .server(code: envelope.error.code, message: message,
+                                             details: envelope.error.details ?? [], url: url),
+                              retryAfter: retryAfter)
         }
         return body
     }
@@ -440,8 +530,68 @@ public actor ArcGISClient {
 
     // MARK: - Per-host concurrency cap
 
+    /// This host's learned capacity, opened at one slot on first sight and climbed from there.
+    private func capacity(for host: String) -> HostCapacity {
+        if let existing = capacity[host] { return existing }
+        let fresh = HostCapacity(limit: 1, ceiling: maxConcurrentPerHost)
+        capacity[host] = fresh
+        return fresh
+    }
+
+    /// What a host has been allowed to reach, for the UI and the tests.
+    public func concurrencyLimit(forHost host: String) -> Int { capacity(for: host).limit }
+
+    /// Seeds a host's cap from what a previous run learned, clamped to the current ceiling.
+    /// A remembered cap skips the climb; it never exceeds the user's preference.
+    public func seedConcurrency(_ limit: Int, forHost host: String) {
+        var state = capacity(for: host)
+        state.limit = max(1, min(limit, state.ceiling))
+        state.slowStart = false      // a remembered value is already past the probing phase
+        state.successes = 0
+        capacity[host] = state
+        wake(host)
+    }
+
+    /// A clean response: climb, doubling while still in slow start and additively after.
+    private func noteSuccess(_ host: String) {
+        var state = capacity(for: host)
+        state.retryAfter = nil
+        guard state.limit < state.ceiling else {
+            state.successes = 0
+            capacity[host] = state
+            return
+        }
+        state.successes += 1
+        // Slow start gains a slot per response (so the cap doubles each round); afterwards one
+        // slot per full round of clean responses at the current cap.
+        let needed = state.slowStart ? 1 : state.limit
+        if state.successes >= needed {
+            state.limit = min(state.ceiling, state.limit + 1)
+            state.successes = 0
+        }
+        capacity[host] = state
+        wake(host)
+    }
+
+    /// The host pushed back: halve the cap and leave slow start for good.
+    private func notePushback(_ host: String, retryAfter: TimeInterval?) {
+        var state = capacity(for: host)
+        state.limit = max(1, state.limit / 2)
+        state.slowStart = false
+        state.successes = 0
+        if let retryAfter { state.retryAfter = Date().addingTimeInterval(retryAfter) }
+        capacity[host] = state
+    }
+
+    /// How long this host asked us to wait, if it did and the moment has not passed.
+    private func retryAfterDelay(_ host: String) -> TimeInterval? {
+        guard let until = capacity[host]?.retryAfter else { return nil }
+        let remaining = until.timeIntervalSinceNow
+        return remaining > 0 ? remaining : nil
+    }
+
     private func acquire(_ host: String) async {
-        if inFlight[host, default: 0] < maxConcurrentPerHost {
+        if inFlight[host, default: 0] < capacity(for: host).limit {
             inFlight[host, default: 0] += 1
             return
         }
@@ -452,12 +602,24 @@ public actor ArcGISClient {
     }
 
     private func release(_ host: String) {
-        if var queue = waiters[host], !queue.isEmpty {
+        // Hand the slot straight on only while the cap still allows it: after a halving the
+        // in-flight count can sit above the new limit, and those slots must retire, not pass on.
+        if inFlight[host, default: 0] <= capacity(for: host).limit, var queue = waiters[host], !queue.isEmpty {
             let next = queue.removeFirst()
             waiters[host] = queue
             next.resume()          // slot passes straight to the waiter; inFlight unchanged
         } else {
             inFlight[host, default: 1] -= 1
+        }
+    }
+
+    /// Lets waiters in up to the host's current cap.
+    private func wake(_ host: String) {
+        while inFlight[host, default: 0] < capacity(for: host).limit, var queue = waiters[host], !queue.isEmpty {
+            let next = queue.removeFirst()
+            waiters[host] = queue
+            inFlight[host, default: 0] += 1
+            next.resume()
         }
     }
 }

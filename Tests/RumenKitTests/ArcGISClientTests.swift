@@ -253,7 +253,10 @@ private actor OpenGate {
 }
 
 extension ArcGISClientTests {
-    func testRaisingTheCapWakesWaiters() async throws {
+    /// The preference is a ceiling, not a starting point: a host opens at one slot and earns
+    /// the rest. With every response held open, nothing has succeeded, so nothing has been
+    /// earned — raising the ceiling alone must not let the waiters through.
+    func testRaisingTheCeilingAloneDoesNotOpenTheGate() async throws {
         let transport = try StubTransport(reply: .fixture("s6-root.json"))
         let gate = OpenGate()
         transport.gate = { _ in try await gate.waitUntilOpen() }
@@ -261,15 +264,103 @@ extension ArcGISClientTests {
         let server = self.server
         let tasks = (0..<3).map { _ in Task { _ = try await client.serviceDirectory(server) } }
         try await Task.sleep(for: .milliseconds(200))
-        XCTAssertEqual(transport.count, 1, "one in flight, two waiting behind the cap of 1")
+        XCTAssertEqual(transport.count, 1, "one in flight, two waiting behind the learned cap of 1")
+
         await client.setLimits(maxConcurrentPerHost: 3, retry: RetryPolicy(maxAttempts: 2, baseDelay: 0))
         try await Task.sleep(for: .milliseconds(200))
-        XCTAssertEqual(transport.count, 3, "the raised cap let both waiters through")
+        XCTAssertEqual(transport.count, 1, "the ceiling rose, but no response has proved the host can take more")
+
         let limits = await client.limits
         XCTAssertEqual(limits.maxConcurrentPerHost, 3)
         XCTAssertEqual(limits.retry.maxAttempts, 2)
         await gate.open()
         for task in tasks { _ = try await task.value }
-        XCTAssertEqual(transport.maxConcurrent, 3)
+    }
+
+    /// Clean responses earn slots: the cap doubles each round while in slow start, so a healthy
+    /// host reaches a ceiling of 4 within a handful of requests.
+    func testCleanResponsesClimbToTheCeiling() async throws {
+        let transport = try StubTransport(reply: .fixture("s6-root.json"))
+        let client = client(transport, concurrency: 4)
+        let host = ArcGISURL.origin(of: root)
+        var limit = await client.concurrencyLimit(forHost: host)
+        XCTAssertEqual(limit, 1, "a host starts at one slot")
+
+        for _ in 0..<6 { _ = try await client.serviceDirectory(server) }
+
+        limit = await client.concurrencyLimit(forHost: host)
+        XCTAssertEqual(limit, 4, "six clean responses should have reached the ceiling")
+    }
+
+    /// A host that pushes back loses half its cap.
+    func testPushbackHalvesTheCap() async throws {
+        let fixture = try StubTransport.Reply.fixture("s6-root.json")
+        // Eight clean answers to climb on, then the host starts refusing.
+        let transport = StubTransport { _, index in
+            index <= 8 ? fixture : StubTransport.Reply.json("{}", status: 503)
+        }
+        let client = client(transport, attempts: 1, concurrency: 8)
+        let host = ArcGISURL.origin(of: root)
+        for _ in 0..<8 { _ = try await client.serviceDirectory(server) }
+        let before = await client.concurrencyLimit(forHost: host)
+        XCTAssertEqual(before, 8, "clean responses reach the ceiling")
+
+        _ = try? await client.serviceDirectory(server)
+
+        let after = await client.concurrencyLimit(forHost: host)
+        XCTAssertEqual(after, 4, "503 is the host saying too much; the cap halves")
+    }
+
+    /// A lowered preference clamps a cap that had already climbed above it.
+    func testLoweringTheCeilingClampsALearnedCap() async throws {
+        let transport = try StubTransport(reply: .fixture("s6-root.json"))
+        let client = client(transport, concurrency: 6)
+        let host = ArcGISURL.origin(of: root)
+        for _ in 0..<8 { _ = try await client.serviceDirectory(server) }
+        let climbed = await client.concurrencyLimit(forHost: host)
+        XCTAssertEqual(climbed, 6)
+
+        await client.setLimits(maxConcurrentPerHost: 2, retry: RetryPolicy(maxAttempts: 2, baseDelay: 0))
+        let clamped = await client.concurrencyLimit(forHost: host)
+        XCTAssertEqual(clamped, 2, "the learned cap follows the ceiling down")
+    }
+
+    /// A remembered cap skips the climb, but never outruns the user's ceiling.
+    func testSeedingACapSkipsTheClimbButRespectsTheCeiling() async throws {
+        let transport = try StubTransport(reply: .fixture("s6-root.json"))
+        let client = client(transport, concurrency: 4)
+        let host = ArcGISURL.origin(of: root)
+        await client.seedConcurrency(3, forHost: host)
+        let seeded = await client.concurrencyLimit(forHost: host)
+        XCTAssertEqual(seeded, 3)
+
+        await client.seedConcurrency(99, forHost: host)
+        let clamped = await client.concurrencyLimit(forHost: host)
+        XCTAssertEqual(clamped, 4, "clamped to the ceiling")
+    }
+
+    // MARK: - Retry-After
+
+    func testRetryAfterParsesSecondsAndRejectsNonsense() {
+        XCTAssertEqual(ArcGISClient.retryAfter("5"), 5)
+        XCTAssertEqual(ArcGISClient.retryAfter("  30 "), 30)
+        XCTAssertNil(ArcGISClient.retryAfter(nil))
+        XCTAssertNil(ArcGISClient.retryAfter(""))
+        XCTAssertNil(ArcGISClient.retryAfter("0"), "a zero wait is no wait")
+        XCTAssertNil(ArcGISClient.retryAfter("-5"))
+        XCTAssertNil(ArcGISClient.retryAfter("3600"), "an hour is too long to trust; back off our own way")
+        XCTAssertNil(ArcGISClient.retryAfter("soon"))
+    }
+
+    func testRetryAfterParsesAnHTTPDate() {
+        let soon = Date().addingTimeInterval(20)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "GMT")
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss 'GMT'"
+        let parsed = try? XCTUnwrap(ArcGISClient.retryAfter(formatter.string(from: soon)))
+        XCTAssertEqual(parsed ?? 0, 20, accuracy: 2)
+        XCTAssertNil(ArcGISClient.retryAfter(formatter.string(from: Date().addingTimeInterval(-60))),
+                     "a date in the past is not a wait")
     }
 }

@@ -443,6 +443,7 @@ public actor ArcGISClient {
             if let wait = retryAfterDelay(host) { try await Task.sleep(for: .seconds(wait)) }
 
             await acquire(host)
+            let started = Date()
             let outcome: Result<Data, SendFailure>
             do {
                 outcome = .success(try await performOnce(request, url: url, progress: progress))
@@ -452,7 +453,8 @@ public actor ArcGISClient {
 
             switch outcome {
             case .success(let data):
-                noteSuccess(host)
+                noteSuccess(host, elapsed: -started.timeIntervalSinceNow,
+                            budget: request.timeoutInterval > 0 ? request.timeoutInterval : Self.defaultTimeout)
                 release(host)
                 return data
             case .failure(let failure):
@@ -650,10 +652,13 @@ public actor ArcGISClient {
         wake(host)
     }
 
-    private func noteSuccess(_ host: String) {
+    /// A clean response, and what it cost. Latency is the signal that matters for concurrency:
+    /// adding a slot to a host that is already saturated does not raise throughput, it just puts
+    /// the extra request in a queue, and the queue shows up as time.
+    private func noteSuccess(_ host: String, elapsed: TimeInterval, budget: TimeInterval) {
         var state = capacity(for: host)
         state.retryAfter = nil
-        state.concurrency.succeeded()
+        state.concurrency.succeeded(AdaptiveLimit.Sample(work: 1, elapsed: elapsed, budget: budget))
         capacity[host] = state
         wake(host)
     }

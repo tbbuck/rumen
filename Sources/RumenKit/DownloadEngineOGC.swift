@@ -140,6 +140,9 @@ extension DownloadEngine {
         let path: String
         let bytes: Int
         let error: ArcGISClientError?
+        /// What the request cost, against the budget it had, for the page size to climb on.
+        var elapsed: TimeInterval = 0
+        var budget: TimeInterval = ArcGISClient.defaultTimeout
     }
 
     /// Features from an OGC service into the staging database and out to the chosen format:
@@ -230,12 +233,15 @@ extension DownloadEngine {
                     let client = self.client
                     let root = server.rootURL
                     let seq = chunk.seq
+                    let budget = ArcGISClient.timeout(forFeatures: chunk.limit)
                     group.addTask {
                         try Task.checkCancellation()
+                        let started = Date()
                         do {
                             let data = try await client.fetch(root: root, params: params, server: connection, maxAttempts: Self.attemptsPerChunk)
                             try data.write(to: URL(fileURLWithPath: path))
-                            return WFSPage(seq: seq, path: path, bytes: data.count, error: nil)
+                            return WFSPage(seq: seq, path: path, bytes: data.count, error: nil,
+                                           elapsed: -started.timeIntervalSinceNow, budget: budget)
                         } catch let error as ArcGISClientError {
                             return WFSPage(seq: seq, path: path, bytes: 0, error: error)
                         } catch {
@@ -311,7 +317,7 @@ extension DownloadEngine {
                     done += 1
                     features += Int64(appended)
                     bytes += Int64(page.bytes)
-                    pager.succeeded()
+                    pager.succeeded(AdaptiveLimit.Sample(work: Double(appended), elapsed: page.elapsed, budget: page.budget))
                     report(.running, inFlight: inFlight)
                     try await refill()
                 }

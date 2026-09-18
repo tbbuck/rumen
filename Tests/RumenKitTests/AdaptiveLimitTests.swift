@@ -100,6 +100,126 @@ final class AdaptiveLimitTests: XCTestCase {
         XCTAssertEqual(limit.value, 500, "a raised ceiling is permission to climb, not a jump")
     }
 
+    // MARK: - Not walking back into the cliff
+
+    private func sample(work: Double, seconds: Double, budget: Double = 100) -> AdaptiveLimit.Sample {
+        AdaptiveLimit.Sample(work: work, elapsed: seconds, budget: budget)
+    }
+
+    /// The flaw in judging purely by "did it work": after a backoff the limit climbed one step
+    /// per success, straight back into the value that had just cost a timeout, and round again.
+    /// A refused value is remembered and the climb stops beneath it.
+    func testTheClimbNeverReturnsToAValueThatFailed() {
+        var limit = AdaptiveLimit.pageSize(ceiling: 2_000)
+        for _ in 0..<5 { limit.succeeded() }
+        XCTAssertEqual(limit.value, 2_000)
+
+        limit.pushedBack()
+        XCTAssertEqual(limit.value, 1_000)
+        XCTAssertEqual(limit.knownBad, 2_000)
+
+        // Far more successes than it would take to creep back to 2,000.
+        for _ in 0..<100 { limit.succeeded() }
+        XCTAssertEqual(limit.value, 1_900, "it climbs to just below what failed, and stops")
+        XCTAssertEqual(limit.effectiveCeiling, 1_900)
+    }
+
+    func testRepeatedRefusalsLowerTheCeilingEachTime() {
+        var limit = AdaptiveLimit.pageSize(ceiling: 2_000)
+        for _ in 0..<5 { limit.succeeded() }
+        limit.pushedBack()                      // 2,000 bad, now 1,000
+        for _ in 0..<100 { limit.succeeded() }
+        XCTAssertEqual(limit.value, 1_900)
+
+        limit.pushedBack()                      // 1,900 bad, now 900
+        XCTAssertEqual(limit.knownBad, 1_900)
+        for _ in 0..<100 { limit.succeeded() }
+        XCTAssertEqual(limit.value, 1_800, "the ceiling ratchets down, never back up")
+    }
+
+    // MARK: - Backing off on time rather than on failure
+
+    /// Past half the time budget the climb stops: the next size up would likely go over, and
+    /// going over costs a full timeout and a re-plan.
+    func testARequestNearItsTimeBudgetHoldsTheClimb() {
+        var limit = AdaptiveLimit.pageSize(ceiling: 2_000)
+        limit.succeeded(sample(work: 100, seconds: 60))     // 60% of budget
+        XCTAssertEqual(limit.value, 100, "no climb this close to the edge")
+        XCTAssertFalse(limit.isProbing, "and the doubling phase is over")
+    }
+
+    /// Past three-quarters it gives ground without waiting to be refused.
+    func testARequestVeryNearItsBudgetStepsDown() {
+        var limit = AdaptiveLimit.pageSize(ceiling: 2_000)
+        for _ in 0..<3 { limit.succeeded() }
+        XCTAssertEqual(limit.value, 800)
+
+        limit.succeeded(sample(work: 800, seconds: 80))     // 80% of budget
+        XCTAssertEqual(limit.value, 700, "retreat before the cliff, not after it")
+        XCTAssertNil(limit.knownBad, "nothing was refused, so nothing is known bad")
+    }
+
+    func testAComfortableRequestStillClimbs() {
+        var limit = AdaptiveLimit.pageSize(ceiling: 2_000)
+        limit.succeeded(sample(work: 100, seconds: 10))     // 10% of budget
+        XCTAssertEqual(limit.value, 200)
+    }
+
+    // MARK: - A step has to pay for itself
+
+    /// A bigger page that succeeds can still carry less per second, which "did it work" cannot
+    /// see. The step is given back and not tried again.
+    func testAStepThatCarriesLessPerSecondIsGivenBack() {
+        var limit = AdaptiveLimit.pageSize(ceiling: 2_000)
+        limit.succeeded(sample(work: 100, seconds: 1))      // 100/s at 100
+        XCTAssertEqual(limit.value, 200)
+
+        limit.succeeded(sample(work: 200, seconds: 8))      // 25/s at 200: worse
+        XCTAssertEqual(limit.value, 100, "back to the size that was actually faster")
+        XCTAssertEqual(limit.unprofitable, 200)
+
+        for _ in 0..<50 { limit.succeeded(sample(work: 100, seconds: 1)) }
+        XCTAssertEqual(limit.value, 100, "and it does not creep back up to it")
+    }
+
+    func testAStepThatPaysIsKept() {
+        var limit = AdaptiveLimit.pageSize(ceiling: 2_000)
+        limit.succeeded(sample(work: 100, seconds: 1))      // 100/s
+        XCTAssertEqual(limit.value, 200)
+
+        limit.succeeded(sample(work: 200, seconds: 1))      // 200/s: better
+        XCTAssertEqual(limit.value, 400, "worth it, so carry on climbing")
+        XCTAssertNil(limit.unprofitable)
+    }
+
+    /// Throughput is smoothed and the bar allows a few per cent, so ordinary variation between
+    /// responses does not undo a good size. A real collapse still does — see the test above,
+    /// where throughput halves and the step is given straight back.
+    func testAModestDipDoesNotGiveBackAGoodStep() {
+        var limit = AdaptiveLimit.pageSize(ceiling: 2_000)
+        limit.succeeded(sample(work: 100, seconds: 1))      // 100/s
+        limit.succeeded(sample(work: 200, seconds: 1))      // 200/s, so 150/s smoothed; climbs to 400
+        XCTAssertEqual(limit.value, 400)
+
+        limit.succeeded(sample(work: 400, seconds: 2.8))    // ~143/s: a few per cent off, not a collapse
+        XCTAssertNil(limit.unprofitable, "ordinary variation is not a verdict")
+        XCTAssertEqual(limit.value, 800, "still worth climbing")
+    }
+
+    /// A fast server answers in milliseconds, where the measurement is mostly jitter. Dividing
+    /// by it would have good page sizes thrown away over noise, so such a response counts as a
+    /// success and says nothing about throughput.
+    func testResponsesTooQuickToMeasureDoNotDecideAnything() {
+        var limit = AdaptiveLimit.pageSize(ceiling: 2_000)
+        limit.succeeded(sample(work: 100, seconds: 0.004))
+        XCTAssertEqual(limit.value, 200, "still a success, so still a climb")
+
+        // A wildly different apparent throughput, at a duration too short to mean anything.
+        limit.succeeded(sample(work: 200, seconds: 0.03))
+        XCTAssertNil(limit.unprofitable, "no verdict from an unmeasurable pair")
+        XCTAssertEqual(limit.value, 400)
+    }
+
     // MARK: - Remembering
 
     func testAdoptingARememberedValueSkipsTheClimb() {

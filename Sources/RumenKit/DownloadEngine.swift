@@ -198,6 +198,10 @@ public actor DownloadEngine {
         let page: FeaturePage
         let bytes: Int
         let usedJSON: Bool
+        /// How long the request took, against the budget it was given: the page size climbs on
+        /// this rather than on the bare fact that it came back.
+        let elapsed: TimeInterval
+        let budget: TimeInterval
     }
 
     private enum ChunkOutcome: Sendable {
@@ -306,13 +310,16 @@ public actor DownloadEngine {
                     let hasZ = source.hasZ, hasM = source.hasM
                     let client = self.client
                     let attempts = Self.attemptsPerChunk
+                    let budget = ArcGISClient.timeout(forFeatures: options.pagedCount)
                     group.addTask {
                         try Task.checkCancellation()
+                        let started = Date()
                         do {
                             if !json {
                                 do {
                                     let data = try await client.featuresPBF(connection, layerURL: url, options: options, maxAttempts: attempts)
-                                    return .fetched(FetchedChunk(seq: chunk.seq, page: try PBFDecoder.decode(data), bytes: data.count, usedJSON: false))
+                                    return .fetched(FetchedChunk(seq: chunk.seq, page: try PBFDecoder.decode(data), bytes: data.count,
+                                                                 usedJSON: false, elapsed: -started.timeIntervalSinceNow, budget: budget))
                                 } catch is PBFError {
                                     // Fall through to JSON for this chunk; the run switches transport below.
                                 } catch ArcGISClientError.server(let code, _, _, _) where code != 498 && code != 499 {
@@ -320,7 +327,8 @@ public actor DownloadEngine {
                                 }
                             }
                             let (set, raw) = try await client.features(connection, layerURL: url, options: options, maxAttempts: attempts)
-                            return .fetched(FetchedChunk(seq: chunk.seq, page: FeaturePage(json: set, hasZ: hasZ, hasM: hasM), bytes: raw.count, usedJSON: true))
+                            return .fetched(FetchedChunk(seq: chunk.seq, page: FeaturePage(json: set, hasZ: hasZ, hasM: hasM), bytes: raw.count,
+                                                         usedJSON: true, elapsed: -started.timeIntervalSinceNow, budget: budget))
                         } catch let error as ArcGISClientError {
                             return .failed(seq: chunk.seq, error: error)
                         }
@@ -434,8 +442,10 @@ public actor DownloadEngine {
                     done += 1
                     features += Int64(appended)
                     bytes += Int64(fetched.bytes)
-                    // The server coped with that one, so the next may be bigger.
-                    pager.succeeded()
+                    // Judged on what it cost, not merely on the fact that it arrived: how much of
+                    // its time budget it used, and how many features per second it carried.
+                    pager.succeeded(AdaptiveLimit.Sample(work: Double(appended), elapsed: fetched.elapsed,
+                                                         budget: fetched.budget))
                     report(.running, inFlight: inFlight)
                     try await refill()
                 }

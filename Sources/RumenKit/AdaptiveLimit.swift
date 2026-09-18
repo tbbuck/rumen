@@ -39,6 +39,19 @@ public struct AdaptiveLimit: Sendable, Equatable {
     public private(set) var isProbing: Bool = true
     private var successes: Int = 0
 
+    /// The lowest value that has ever been refused. The climb stops below it rather than walking
+    /// back into it: without this, "it worked" alone would creep up to the failure point again
+    /// after every backoff, so the settled state would be a loop through a timeout.
+    public private(set) var knownBad: Int?
+    /// The lowest value that worked but carried less through per second than the value below it.
+    /// Succeeding is not the same as being worth it.
+    public private(set) var unprofitable: Int?
+    /// Throughput at the current value, smoothed, so one slow response does not decide anything.
+    private var throughput: Double?
+    /// Where we climbed from, and what that was worth, so the next sample can judge the step.
+    private var previousValue: Int?
+    private var throughputBeforeStep: Double?
+
     public init(floor: Int, ceiling: Int, step: Int = 1, cadence: Cadence = .perResponse) {
         self.floor = max(1, floor)
         self.ceiling = max(1, ceiling)
@@ -48,29 +61,117 @@ public struct AdaptiveLimit: Sendable, Equatable {
         self.value = min(self.floor, self.ceiling)
     }
 
-    /// A clean response: climb, doubling while probing and stepping afterwards.
-    public mutating func succeeded() {
-        guard value < ceiling else {
+    /// What one completed request revealed.
+    public struct Sample: Sendable, Equatable {
+        /// Work carried: features for a page size, one for a request whose size is not measured
+        /// in features.
+        public let work: Double
+        public let elapsed: TimeInterval
+        /// The time the request was allowed before it would have been abandoned.
+        public let budget: TimeInterval
+
+        public init(work: Double, elapsed: TimeInterval, budget: TimeInterval) {
+            self.work = work
+            self.elapsed = elapsed
+            self.budget = budget
+        }
+
+        /// Work per second.
+        public var throughput: Double { elapsed > 0 ? work / elapsed : .greatestFiniteMagnitude }
+        /// How much of the time budget the request used: 1.0 is a request that only just landed.
+        public var headroom: Double { budget > 0 ? elapsed / budget : 0 }
+    }
+
+    /// Past this share of the time budget, stop climbing: the request is close enough to the
+    /// edge that the next larger one would likely go over it.
+    static let holdAbove = 0.5
+    /// Past this share, step back down without waiting to be refused. Backing off on time is the
+    /// whole point — a refusal costs a full timeout and a re-plan, a smaller request costs
+    /// almost nothing.
+    static let retreatAbove = 0.75
+    /// How much worse a step may leave throughput before it counts as not worth keeping.
+    static let worthKeeping = 0.95
+    /// Requests quicker than this tell us nothing about throughput: at a few milliseconds the
+    /// measurement is mostly jitter, and dividing by it would have a fast server throwing away
+    /// good page sizes over noise. Such a response still counts as a success.
+    static let measurable: TimeInterval = 0.05
+
+    /// A clean response, with what it revealed. A nil sample means nothing was measured, and the
+    /// limit climbs on success alone as it did before.
+    public mutating func succeeded(_ sample: Sample? = nil) {
+        guard let sample else {
+            climb()
+            return
+        }
+        guard sample.elapsed >= Self.measurable else {
+            // Too quick to measure: a success, but no evidence about throughput, so any pending
+            // verdict on the last step is abandoned rather than decided on noise.
+            throughputBeforeStep = nil
+            previousValue = nil
+            climb()
+            return
+        }
+        // Smoothed, so a single slow response does not overturn a good value.
+        throughput = throughput.map { $0 * 0.5 + sample.throughput * 0.5 } ?? sample.throughput
+
+        // Did the last step pay? A larger page that succeeds can still be slower overall, which
+        // "it worked" can never see.
+        if let before = throughputBeforeStep, let previous = previousValue, let now = throughput {
+            throughputBeforeStep = nil
+            previousValue = nil
+            if now < before * Self.worthKeeping {
+                unprofitable = value
+                value = clamp(previous)
+                successes = 0
+                return
+            }
+        }
+
+        // Close to the time budget: hold, or give ground, before being refused.
+        if sample.headroom >= Self.retreatAbove {
+            isProbing = false
+            successes = 0
+            value = clamp(value - step)
+            return
+        }
+        if sample.headroom >= Self.holdAbove {
+            isProbing = false
+            successes = 0
+            return
+        }
+        climb()
+    }
+
+    private mutating func climb() {
+        guard value < effectiveCeiling else {
             successes = 0
             return
         }
         successes += 1
+        let target: Int
         if isProbing {
-            value = clamp(value * 2)
-            successes = 0
-            return
+            target = clamp(value * 2)
+        } else {
+            let needed = cadence == .perRound ? max(1, value) : 1
+            guard successes >= needed else { return }
+            target = clamp(value + step)
         }
-        let needed = cadence == .perRound ? max(1, value) : 1
-        if successes >= needed {
-            value = clamp(value + step)
-            successes = 0
-        }
+        successes = 0
+        guard target != value else { return }
+        // Remember what we are leaving, so the next sample can say whether it was worth it.
+        previousValue = value
+        throughputBeforeStep = throughput
+        value = target
     }
 
-    /// The server pushed back: halve, and leave the doubling phase for good.
+    /// The server refused: halve, remember the value as bad, and leave the doubling phase.
     public mutating func pushedBack() {
+        knownBad = knownBad.map { Swift.min($0, value) } ?? value
         isProbing = false
         successes = 0
+        previousValue = nil
+        throughputBeforeStep = nil
+        throughput = nil
         value = clamp(value / 2)
     }
 
@@ -91,11 +192,21 @@ public struct AdaptiveLimit: Sendable, Equatable {
         successes = 0
     }
 
-    /// Holds a value inside `floor...ceiling`, rounded down to a whole `step`. The ceiling
-    /// itself is always reachable, even when it is not a multiple of the step — the server
-    /// named that number, so it is worth asking for.
+    /// The highest value still worth trying: the advertised ceiling, held under anything that
+    /// has been refused or has proved slower than the value beneath it.
+    public var effectiveCeiling: Int {
+        var limit = ceiling
+        if let knownBad { limit = Swift.min(limit, knownBad - step) }
+        if let unprofitable { limit = Swift.min(limit, unprofitable - step) }
+        return Swift.max(Swift.min(floor, ceiling), limit)
+    }
+
+    /// Holds a value inside `floor...effectiveCeiling`, rounded down to a whole `step`. The
+    /// ceiling itself is always reachable, even when it is not a multiple of the step — the
+    /// server named that number, so it is worth asking for.
     private func clamp(_ proposed: Int) -> Int {
-        if proposed >= ceiling { return ceiling }
+        let top = effectiveCeiling
+        if proposed >= top { return top }
         let rounded = step > 1 ? (proposed / step) * step : proposed
         return max(min(floor, ceiling), rounded)
     }

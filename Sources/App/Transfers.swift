@@ -359,7 +359,18 @@ private struct RunActions: View {
                 }
                 Button("Remove") { Task { await model.removeDownload(run.id) } }.buttonStyle(LinkButtonStyle())
             case .failed, .cancelled, .planned:
-                Button(run.status == .failed ? "Retry" : "Resume") { Task { await model.resumeDownload(run.id) } }.buttonStyle(LinkButtonStyle())
+                let starting = model.resuming.contains(run.id)
+                Button(starting ? "Starting…" : (run.status == .failed ? "Retry" : "Resume")) {
+                    Task { await model.resumeDownload(run.id) }
+                }
+                .buttonStyle(LinkButtonStyle())
+                .disabled(starting)
+                if let countdown = model.autoRetryCountdown(run.id), !starting {
+                    Caption(countdown)
+                        .help("Failed runs are picked up again on their own, waiting twice as long each time")
+                    Button("Stop") { model.cancelAutoRetry(run.id) }.buttonStyle(LinkButtonStyle())
+                        .help("Leaves the run where it is rather than trying again")
+                }
                 Button("Remove") { Task { await model.removeDownload(run.id) } }.buttonStyle(LinkButtonStyle())
             }
         }

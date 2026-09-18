@@ -134,6 +134,33 @@ final class AppModel {
     private var runStarted: [Int64: Date] = [:]
     var pendingOverwrite: DownloadRequest?
 
+    /// Runs whose resume has been asked for but has not yet reached the engine. Set before the
+    /// first `await`, so the row changes under the pointer instead of looking dead while the
+    /// database is read and the task launched.
+    private(set) var resuming: Set<Int64> = []
+
+    /// A failed run waiting to be picked up again on its own: which attempt this will be, and
+    /// when. Doubling from five seconds, so a server that is briefly unwell is waited out
+    /// without a person watching, and one that is properly broken is not hammered.
+    struct AutoRetry: Equatable {
+        var attempt: Int
+        var dueAt: Date
+    }
+    private(set) var autoRetries: [Int64: AutoRetry] = [:]
+    /// Consecutive automatic attempts per run, kept apart from the pending schedule above because
+    /// it has to outlive the attempt: a run that starts and then fails clears its schedule, and
+    /// if the count went with it the wait would reset to five seconds every time and never double.
+    /// Cleared when a run succeeds, or when a person retries it by hand.
+    private var retryAttempts: [Int64: Int] = [:]
+    /// Ticks once a second while anything is waiting, so the countdown counts down.
+    private var retryTicker: Task<Void, Never>?
+    /// Read by the transfers rows; changing it is what redraws them between progress callbacks.
+    private(set) var tick = Date()
+
+    static let firstRetryDelay: TimeInterval = 5
+    /// Doubling stops here: past a few minutes the wait is no longer the useful part.
+    static let maxRetryDelay: TimeInterval = 600
+
     // MARK: - Startup
 
     /// Opens the app database, migrates it, loads `spatial` for extents, and shows the most
@@ -867,6 +894,18 @@ extension AppModel {
             liveProgress[progress.downloadID] = nil
             liveChunks[progress.downloadID] = nil
             runStarted[progress.downloadID] = nil
+            switch progress.status {
+            case .failed:
+                // Wait it out and try again, so a run left going in the background survives a
+                // server having a bad few minutes without anybody watching it.
+                scheduleAutoRetry(progress.downloadID)
+            case .complete, .cancelled:
+                cancelAutoRetry(progress.downloadID)
+            default:
+                // Paused is deliberate — a token is wanted, or the user asked — so it waits for
+                // a person rather than being picked up again behind their back.
+                cancelAutoRetry(progress.downloadID)
+            }
             if progress.status == .failed, let message = progress.message, message.contains("already exists") {
                 // The output exists: ask before overwriting (SPEC §5.7). Re-run with consent.
                 if let record = try? await database?.download(id: progress.downloadID), let layer = currentLayer, layer.id == record.layerID {
@@ -885,9 +924,19 @@ extension AppModel {
         await reloadRuns()
     }
 
-    func resumeDownload(_ id: Int64) async {
+    /// Picks a run back up. `auto` distinguishes the backoff timer firing from a person clicking,
+    /// which decides whether the attempt count carries on or starts again.
+    func resumeDownload(_ id: Int64, auto: Bool = false) async {
         guard let engine else { return }
         transfersError = nil
+        // Before the first await: the row shows the click landed rather than sitting on "Retry"
+        // while the database is read and the task launched.
+        resuming.insert(id)
+        autoRetries[id] = nil
+        // A person clicking Retry knows something the timer does not — they have fixed the
+        // cookie, or the server is back — so the wait starts again from the beginning.
+        if !auto { retryAttempts[id] = 0 }
+        defer { resuming.remove(id) }
         do {
             _ = try await engine.resume(downloadID: id, overwrite: true, outputDirectory: downloadDirectory) { [weak self] progress in
                 Task { @MainActor in await self?.progressed(progress) }
@@ -896,15 +945,78 @@ extension AppModel {
             await reloadRuns()
         } catch {
             transfersError = String(describing: error)
+            // A resume that would not even start is a failure like any other, and waits its turn.
+            scheduleAutoRetry(id)
         }
     }
 
+    // MARK: - Automatic retry
+
+    /// Queues the next attempt at a failed run: five seconds, then ten, then twenty, doubling to
+    /// a ceiling, so a run left going in the background rides out a server having a bad few
+    /// minutes without anyone watching and without hammering one that is properly broken.
+    private func scheduleAutoRetry(_ id: Int64) {
+        let attempt = (retryAttempts[id] ?? 0) + 1
+        retryAttempts[id] = attempt
+        let delay = min(Self.maxRetryDelay, Self.firstRetryDelay * pow(2, Double(attempt - 1)))
+        autoRetries[id] = AutoRetry(attempt: attempt, dueAt: Date().addingTimeInterval(delay))
+        startRetryTicker()
+    }
+
+    /// How long until this run is picked up again, for the row to show.
+    func autoRetryCountdown(_ id: Int64) -> String? {
+        guard let retry = autoRetries[id] else { return nil }
+        let remaining = retry.dueAt.timeIntervalSince(tick)
+        guard remaining > 0 else { return "Retrying…" }
+        let seconds = Int(remaining.rounded(.up))
+        let text: String
+        if seconds < 60 { text = "\(seconds)s" }
+        else if seconds % 60 == 0 { text = "\(seconds / 60)m" }
+        else { text = "\(seconds / 60)m \(seconds % 60)s" }
+        return "Auto retry in \(text)"
+    }
+
+    /// Stops a run being picked up again — the user cancelled it, removed it, or it finished.
+    func cancelAutoRetry(_ id: Int64) {
+        autoRetries[id] = nil
+        retryAttempts[id] = nil
+        if autoRetries.isEmpty { retryTicker?.cancel(); retryTicker = nil }
+    }
+
+    private func startRetryTicker() {
+        guard retryTicker == nil else { return }
+        retryTicker = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard let self else { return }
+                if await self.retryTick() { return }
+            }
+        }
+    }
+
+    /// One second of the countdown. Returns true when there is nothing left to wait for, so the
+    /// ticker stops rather than spinning for the life of the app.
+    private func retryTick() async -> Bool {
+        tick = Date()
+        let due = autoRetries.filter { $0.value.dueAt <= tick }.map(\.key)
+        for id in due where !resuming.contains(id) {
+            await resumeDownload(id, auto: true)
+        }
+        if autoRetries.isEmpty {
+            retryTicker = nil
+            return true
+        }
+        return false
+    }
+
     func cancelDownload(_ id: Int64) {
+        cancelAutoRetry(id)          // cancelling means cancelling, not "try again in a minute"
         Task { await engine?.cancel(downloadID: id) }
     }
 
     func removeDownload(_ id: Int64) async {
         guard let database else { return }
+        cancelAutoRetry(id)
         do {
             let record = try await database.download(id: id)
             if let staging = record.stagingPath { try? FileManager.default.removeItem(atPath: staging) }

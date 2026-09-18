@@ -16,6 +16,12 @@ engine.
 - **Opens anything in the hierarchy.** A services root, a folder, a MapServer or
   FeatureServer, a single layer, even a `/query` URL someone sent you. It works out where
   that points, registers the server, crawls what it needs, and lands you on the node.
+- **Finds the server behind a proxy.** A URL with no `rest/services` in it is not refused on
+  sight. It is asked what it is, so a council portal that fronts one MapServer at
+  `/planning/api/v1/Map/3` opens as that service, its layers, queries and downloads intact.
+  Only a URL that answers as neither ArcGIS nor OGC is turned away, and it says what both
+  attempts got. A proxy that wraps its answers in a JSON string is unwrapped, and one that
+  routes only `GET` is met with `GET`.
 - **Answers the question that matters first.** Every layer page opens with one sentence:
   *Extractable. PBF, offset paging at 2,000 records per request. 184,212 features in 93
   requests.* Or why not: a raster layer, no Query capability, a server that refused the

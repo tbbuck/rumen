@@ -198,25 +198,18 @@ public enum HTTPMethod: String, Sendable { case get = "GET", post = "POST" }
 public actor ArcGISClient {
     public static let userAgent = "Rumen/0.1 (macOS)"
 
-    /// What one host has shown it can actually take, discovered rather than assumed.
-    ///
-    /// Slow start: the cap opens at 1 and gains a slot per clean response, so it doubles each
-    /// round and reaches the ceiling in a handful of requests. The first time the host pushes
-    /// back the cap halves and the climb turns additive — one slot per `limit` clean responses
-    /// — which is where it stays, because a box that has said no once will say it again.
-    ///
-    /// Probing upward from 1 costs a healthy server almost nothing (the early requests are the
-    /// ones that would have run anyway), while starting at the ceiling costs a weak one a
-    /// timeout per request before anything learns. The asymmetry is the whole argument.
+    /// What one host has shown it can actually take. The climb, the halving and the ceiling all
+    /// live in `AdaptiveLimit`, which answers the same question for a download's page size —
+    /// deliberately, because both are "how hard can I lean on this box" and the box is the same
+    /// one whether the request is ArcGIS or OGC.
     struct HostCapacity: Sendable {
-        var limit = 1
-        var ceiling: Int
-        /// Clean responses since the cap last changed.
-        var successes = 0
-        /// True until the host first pushes back: the fast, doubling phase.
-        var slowStart = true
+        var concurrency: AdaptiveLimit
         /// When the host asked us to come back later (`Retry-After`), the earliest time to try.
         var retryAfter: Date?
+
+        init(ceiling: Int) {
+            concurrency = .concurrency(ceiling: ceiling)
+        }
     }
 
     private let transport: HTTPTransport
@@ -248,10 +241,9 @@ public actor ArcGISClient {
         // exclusivity violation, and traps at runtime.
         for host in Array(capacity.keys) {
             var state = capacity[host] ?? HostCapacity(ceiling: self.maxConcurrentPerHost)
-            state.ceiling = self.maxConcurrentPerHost
             // A lowered ceiling takes effect at once for new requests; those already in flight
             // finish and their slots retire rather than passing on (see `release`).
-            state.limit = min(state.limit, self.maxConcurrentPerHost)
+            state.concurrency.setCeiling(self.maxConcurrentPerHost)
             capacity[host] = state
         }
         for host in Array(waiters.keys) { wake(host) }
@@ -533,52 +525,34 @@ public actor ArcGISClient {
     /// This host's learned capacity, opened at one slot on first sight and climbed from there.
     private func capacity(for host: String) -> HostCapacity {
         if let existing = capacity[host] { return existing }
-        let fresh = HostCapacity(limit: 1, ceiling: maxConcurrentPerHost)
+        let fresh = HostCapacity(ceiling: maxConcurrentPerHost)
         capacity[host] = fresh
         return fresh
     }
 
-    /// What a host has been allowed to reach, for the UI and the tests.
-    public func concurrencyLimit(forHost host: String) -> Int { capacity(for: host).limit }
+    /// What a host has been allowed to reach, for the UI, the record, and the tests.
+    public func concurrencyLimit(forHost host: String) -> Int { capacity(for: host).concurrency.value }
 
     /// Seeds a host's cap from what a previous run learned, clamped to the current ceiling.
     /// A remembered cap skips the climb; it never exceeds the user's preference.
     public func seedConcurrency(_ limit: Int, forHost host: String) {
         var state = capacity(for: host)
-        state.limit = max(1, min(limit, state.ceiling))
-        state.slowStart = false      // a remembered value is already past the probing phase
-        state.successes = 0
+        state.concurrency.adopt(limit)
         capacity[host] = state
         wake(host)
     }
 
-    /// A clean response: climb, doubling while still in slow start and additively after.
     private func noteSuccess(_ host: String) {
         var state = capacity(for: host)
         state.retryAfter = nil
-        guard state.limit < state.ceiling else {
-            state.successes = 0
-            capacity[host] = state
-            return
-        }
-        state.successes += 1
-        // Slow start gains a slot per response (so the cap doubles each round); afterwards one
-        // slot per full round of clean responses at the current cap.
-        let needed = state.slowStart ? 1 : state.limit
-        if state.successes >= needed {
-            state.limit = min(state.ceiling, state.limit + 1)
-            state.successes = 0
-        }
+        state.concurrency.succeeded()
         capacity[host] = state
         wake(host)
     }
 
-    /// The host pushed back: halve the cap and leave slow start for good.
     private func notePushback(_ host: String, retryAfter: TimeInterval?) {
         var state = capacity(for: host)
-        state.limit = max(1, state.limit / 2)
-        state.slowStart = false
-        state.successes = 0
+        state.concurrency.pushedBack()
         if let retryAfter { state.retryAfter = Date().addingTimeInterval(retryAfter) }
         capacity[host] = state
     }
@@ -591,7 +565,7 @@ public actor ArcGISClient {
     }
 
     private func acquire(_ host: String) async {
-        if inFlight[host, default: 0] < capacity(for: host).limit {
+        if inFlight[host, default: 0] < capacity(for: host).concurrency.value {
             inFlight[host, default: 0] += 1
             return
         }
@@ -604,7 +578,7 @@ public actor ArcGISClient {
     private func release(_ host: String) {
         // Hand the slot straight on only while the cap still allows it: after a halving the
         // in-flight count can sit above the new limit, and those slots must retire, not pass on.
-        if inFlight[host, default: 0] <= capacity(for: host).limit, var queue = waiters[host], !queue.isEmpty {
+        if inFlight[host, default: 0] <= capacity(for: host).concurrency.value, var queue = waiters[host], !queue.isEmpty {
             let next = queue.removeFirst()
             waiters[host] = queue
             next.resume()          // slot passes straight to the waiter; inFlight unchanged
@@ -615,7 +589,7 @@ public actor ArcGISClient {
 
     /// Lets waiters in up to the host's current cap.
     private func wake(_ host: String) {
-        while inFlight[host, default: 0] < capacity(for: host).limit, var queue = waiters[host], !queue.isEmpty {
+        while inFlight[host, default: 0] < capacity(for: host).concurrency.value, var queue = waiters[host], !queue.isEmpty {
             let next = queue.removeFirst()
             waiters[host] = queue
             inFlight[host, default: 0] += 1

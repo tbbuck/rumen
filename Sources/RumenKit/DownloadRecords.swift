@@ -202,6 +202,13 @@ extension AppDatabase {
         try query("UPDATE download SET staging_path = ? WHERE id = ?;", [.string(path), .int(id)])
     }
 
+    /// Records a change of strategy made while planning — an OID list that the server would not
+    /// supply the ids for, falling back to paging — so a resume picks up the strategy that was
+    /// actually used rather than the one first chosen.
+    public func setDownloadStrategy(id: Int64, strategy: Assessment.Strategy) throws {
+        try query("UPDATE download SET strategy = ? WHERE id = ?;", [.string(strategy.rawValue), .int(id)])
+    }
+
     public func setDownloadOutput(id: Int64, path: String, sha256: String, featureCount: Int64, invalidGeometries: Int64,
                                   bytes: Int64, finishedAt: Date = Date()) throws {
         try query("""

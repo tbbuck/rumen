@@ -168,14 +168,59 @@ public actor DownloadEngine {
             let hi = AttributeValue(attributes["max_oid"]).int64 ?? -1
             return .oidRange(min: lo, max: hi)
         case .oidList:
-            let ids = try await client.objectIDs(connection, layerURL: url, where: whereClause)
+            // The preferred strategy, but it rests on the server actually handing over its ids.
+            // When it will not, or there are more than we will hold, paging is the fallback —
+            // slower, but a slow download beats a refused one.
+            let ids: [Int64]
+            do {
+                ids = try await client.objectIDs(connection, layerURL: url, where: whereClause)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as ArcGISClientError where error == .cancelled {
+                throw CancellationError()
+            } catch {
+                guard let fallback = try await fallbackWork(from: strategy, downloadID: downloadID, layerID: layerID,
+                                                            connection: connection, url: url, oidField: oidField,
+                                                            whereClause: whereClause) else {
+                    throw error
+                }
+                return fallback
+            }
+            guard !ids.isEmpty else {
+                // No ids and no error: the layer is empty, or the server answered `returnIdsOnly`
+                // with nothing useful. Either way there is nothing to chunk on.
+                return try await fallbackWork(from: strategy, downloadID: downloadID, layerID: layerID,
+                                              connection: connection, url: url, oidField: oidField,
+                                              whereClause: whereClause) ?? .oidList([])
+            }
             guard ids.count <= DownloadPlanner.objectIDListCap else {
-                try await db.setDownloadStatus(id: downloadID, status: .failed,
-                                               error: DownloadError.tooManyObjectIDs(ids.count).description)
-                throw DownloadError.tooManyObjectIDs(ids.count)
+                guard let fallback = try await fallbackWork(from: strategy, downloadID: downloadID, layerID: layerID,
+                                                            connection: connection, url: url, oidField: oidField,
+                                                            whereClause: whereClause) else {
+                    try await db.setDownloadStatus(id: downloadID, status: .failed,
+                                                   error: DownloadError.tooManyObjectIDs(ids.count).description)
+                    throw DownloadError.tooManyObjectIDs(ids.count)
+                }
+                return fallback
             }
             return .oidList(ids.sorted())
         }
+    }
+
+    /// What to do instead when the preferred strategy cannot be carried out: offset paging where
+    /// the layer supports it, OID ranges where it supports statistics, and nothing otherwise.
+    private func fallbackWork(from strategy: Assessment.Strategy, downloadID: Int64, layerID: Int64,
+                              connection: ServerConnection, url: URL, oidField: String,
+                              whereClause: String) async throws -> ChunkFeed.Work? {
+        guard strategy == .oidList else { return nil }
+        let layer = try await db.layer(id: layerID)
+        let next: Assessment.Strategy
+        if layer.supportsPagination == true { next = .offset }
+        else if layer.supportsStatistics == true { next = .oidRange }
+        else { return nil }
+        try await db.setDownloadStrategy(id: downloadID, strategy: next)
+        return try await work(strategy: next, downloadID: downloadID, layerID: layerID, connection: connection,
+                              url: url, oidField: oidField, whereClause: whereClause)
     }
 
     // MARK: - Running

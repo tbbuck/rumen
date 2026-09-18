@@ -22,6 +22,8 @@ private final class StubLayer: @unchecked Sendable {
     /// Every nth request has its connection dropped instantly, as a flaky hop does. 0 = never.
     var dropEveryNth = 0
     var dropped = 0
+    /// returnIdsOnly answers with an error, as a server that will not list its ids does.
+    var refuseIdList = false
     var seenFailures: Set<Int> = []
     var requestLog: [String] = []
 
@@ -53,6 +55,7 @@ private final class StubLayer: @unchecked Sendable {
         })
         if params["returnCountOnly"] == "true" { return .json(#"{"count":\#(featureCount)}"#) }
         if params["returnIdsOnly"] == "true" {
+            if refuseIdList { return .json(#"{"error":{"code":400,"message":"returnIdsOnly is not supported","details":[]}}"#) }
             return .json(#"{"objectIdFieldName":"OBJECTID","objectIds":[\#((1...featureCount).map(String.init).joined(separator: ","))]}"#)
         }
         if params["outStatistics"] != nil {
@@ -185,8 +188,13 @@ final class DownloadEngineTests: XCTestCase {
         try? FileManager.default.removeItem(at: scratch)
     }
 
-    private func request() -> DownloadRequest {
-        DownloadRequest(layerID: layerID, outputDirectory: scratch.appendingPathComponent("out"))
+    /// A download of the stub layer. `strategy` pins one: an OID list is now what a layer with an
+    /// object ID field gets by default, so the tests that are about the offset-paging mechanics —
+    /// its splitting, its short pages, its resume — have to ask for offset paging by name.
+    private func request(strategy: Assessment.Strategy? = nil) -> DownloadRequest {
+        var request = DownloadRequest(layerID: layerID, outputDirectory: scratch.appendingPathComponent("out"))
+        request.manualStrategy = strategy
+        return request
     }
 
     private func readBack(_ path: String) throws -> (count: Int, valid: Bool, geo: String, columns: [String]) {
@@ -203,7 +211,7 @@ final class DownloadEngineTests: XCTestCase {
     // MARK: - Happy path, PBF, offset paging
 
     func testOffsetPagingDownloadsEverythingViaPBF() async throws {
-        let planned = try await engine.start(request())
+        let planned = try await engine.start(request(strategy: .offset))
         XCTAssertEqual(planned.strategy, .offset)
         XCTAssertEqual(planned.transport, .pbf)
 
@@ -249,7 +257,7 @@ final class DownloadEngineTests: XCTestCase {
 
     func testJSONFallbackWhenPBFIsRejected() async throws {
         stub.rejectPBF = true
-        let planned = try await engine.start(request())
+        let planned = try await engine.start(request(strategy: .offset))
         let record = try await engine.wait(downloadID: planned.id)
         XCTAssertEqual(record.status, .complete, record.error ?? "")
         XCTAssertEqual(try readBack(try XCTUnwrap(record.outputPath)).count, 51)
@@ -267,7 +275,7 @@ final class DownloadEngineTests: XCTestCase {
 
     func testShortPageClaimingMoreFails() async throws {
         stub.lieAboutMore = true
-        let planned = try await engine.start(request())
+        let planned = try await engine.start(request(strategy: .offset))
         let record = try await engine.wait(downloadID: planned.id)
         XCTAssertEqual(record.status, .failed)
         XCTAssertTrue(record.error?.contains("yet said more remain") == true, record.error ?? "")
@@ -275,7 +283,7 @@ final class DownloadEngineTests: XCTestCase {
 
     func testTokenExpiryPausesTheRun() async throws {
         stub.tokenExpiredAtOffset = 30
-        let planned = try await engine.start(request())
+        let planned = try await engine.start(request(strategy: .offset))
         let record = try await engine.wait(downloadID: planned.id)
         XCTAssertEqual(record.status, .paused)
         XCTAssertTrue(record.error?.contains("token is required") == true, record.error ?? "")
@@ -284,7 +292,7 @@ final class DownloadEngineTests: XCTestCase {
 
     func testFailedRunResumesWithoutRefetchingDoneChunks() async throws {
         stub.alwaysFailOffsets = [30]
-        let planned = try await engine.start(request())
+        let planned = try await engine.start(request(strategy: .offset))
         let failed = try await engine.wait(downloadID: planned.id)
         XCTAssertEqual(failed.status, .failed)
         let afterFailure = try await db.chunks(downloadID: planned.id)
@@ -316,7 +324,7 @@ final class DownloadEngineTests: XCTestCase {
                 try await held.waitUntilOpen()   // Task.sleep inside throws once the run is cancelled
             }
         }
-        let planned = try await engine.start(request())
+        let planned = try await engine.start(request(strategy: .offset))
         // Let the first pages land, then cancel while later ones are held open.
         for _ in 0..<200 {
             let done = try await db.chunks(downloadID: planned.id).filter { $0.status == .done }.count
@@ -354,7 +362,7 @@ final class DownloadEngineTests: XCTestCase {
     func testOIDRangeStrategy() async throws {
         stub.paging = false
         try await recrawlLayer()
-        let planned = try await engine.start(request())
+        let planned = try await engine.start(request(strategy: .oidRange))
         XCTAssertEqual(planned.strategy, .oidRange)
         let record = try await engine.wait(downloadID: planned.id)
         let chunks = try await db.chunks(downloadID: planned.id)
@@ -384,7 +392,7 @@ final class DownloadEngineTests: XCTestCase {
         // stub ignores except for passing it through — the count still drives the plan.
         try await db.query("UPDATE field SET domain_json = ? WHERE name = 'POP2000';",
                            [.string(#"{"type":"codedValue","codedValues":[{"code":1000,"name":"One thousand"},{"code":2000,"name":"Two thousand"}]}"#)])
-        var r = request()
+        var r = request(strategy: .offset)
         r.domainLabels = true
         r.whereClause = "POP2000 > 0"
         let record = try await engine.wait(downloadID: try await engine.start(r).id)
@@ -439,7 +447,7 @@ extension DownloadEngineTests {
         try await recrawlLayer()
         await engine.setConcurrency(1)
 
-        let planned = try await engine.start(request())
+        let planned = try await engine.start(request(strategy: .offset))
         let record = try await engine.wait(downloadID: planned.id)
         XCTAssertEqual(record.status, .complete, record.error ?? "")
         XCTAssertEqual(record.featureCount, 3_000)
@@ -458,12 +466,12 @@ extension DownloadEngineTests {
         try await recrawlLayer()
         await engine.setConcurrency(1)
 
-        let first = try await engine.start(request())
+        let first = try await engine.start(request(strategy: .offset))
         _ = try await engine.wait(downloadID: first.id)
         let firstChunks = try await db.chunks(downloadID: first.id)
         XCTAssertEqual(firstChunks.map(\.limit), [100, 200, 400, 800, 1_500], "the first run climbs")
 
-        var again = request()
+        var again = request(strategy: .offset)
         again.overwrite = true
         let second = try await engine.start(again)
         let record = try await engine.wait(downloadID: second.id)
@@ -484,7 +492,7 @@ extension DownloadEngineTests {
         await engine.setConcurrency(1)
 
         let reports = ProgressLog()
-        let planned = try await engine.start(request()) { reports.append($0) }
+        let planned = try await engine.start(request(strategy: .offset)) { reports.append($0) }
         let record = try await engine.wait(downloadID: planned.id)
         XCTAssertEqual(record.status, .complete, record.error ?? "")
 
@@ -521,7 +529,7 @@ extension DownloadEngineTests {
         try await recrawlLayer()
         await engine.setConcurrency(1)
 
-        let planned = try await engine.start(request())
+        let planned = try await engine.start(request(strategy: .offset))
         let record = try await engine.wait(downloadID: planned.id)
         XCTAssertEqual(record.status, .complete, record.error ?? "")
         XCTAssertEqual(record.featureCount, 3_000, "every feature still arrives")
@@ -534,6 +542,29 @@ extension DownloadEngineTests {
         XCTAssertLessThan(chunks.count, 10, "and the request count did not explode")
     }
 
+    /// An OID list is the preference, not a requirement: a server that will not hand over its
+    /// ids must not turn a download that used to work into one that fails.
+    func testAServerThatWillNotListItsIDsFallsBackToPaging() async throws {
+        stub.refuseIdList = true
+        try await recrawlLayer()
+
+        // The layer's metadata still says an OID list is preferable...
+        let layer = try await db.layer(id: layerID)
+        let service = try await db.service(id: layer.serviceID)
+        XCTAssertEqual(Extractability.assess(layer: layer, service: service).strategy, .oidList)
+
+        // ...but the ids cannot be had, so the plan falls back before the run begins, and the
+        // record says which strategy actually ran so a resume agrees with it.
+        let planned = try await engine.start(request())
+        XCTAssertEqual(planned.strategy, .offset)
+        let record = try await engine.wait(downloadID: planned.id)
+        XCTAssertEqual(record.status, .complete, record.error ?? "")
+        XCTAssertEqual(record.featureCount, 51, "every feature still arrives")
+
+        let chunks = try await db.chunks(downloadID: planned.id)
+        XCTAssertEqual(chunks.map(\.kind), Array(repeating: .offset, count: chunks.count))
+    }
+
     /// Splitting answers "that was too much to ask for" and nothing else. A bad field name is
     /// not about size, and halving the request would only make the server refuse it twice.
     func testAFailureThatIsNotAboutSizeIsNotSplit() async throws {
@@ -541,7 +572,7 @@ extension DownloadEngineTests {
         try await recrawlLayer()
         await engine.setConcurrency(1)
 
-        let planned = try await engine.start(request())
+        let planned = try await engine.start(request(strategy: .offset))
         let record = try await engine.wait(downloadID: planned.id)
         XCTAssertEqual(record.status, .failed)
         XCTAssertTrue(record.error?.contains("Invalid field") == true, record.error ?? "")
@@ -559,7 +590,7 @@ extension DownloadEngineTests {
         stub.pageSize = 200
         stub.refuseLimitAbove = 40          // the single request for 51 is refused; its halves fit
         try await recrawlLayer()
-        let planned = try await engine.start(request())
+        let planned = try await engine.start(request(strategy: .offset))
         let record = try await engine.wait(downloadID: planned.id)
         XCTAssertEqual(record.status, .complete, record.error ?? "")
         XCTAssertEqual(record.featureCount, 51)
@@ -575,7 +606,7 @@ extension DownloadEngineTests {
         stub.pageSize = 30
         stub.refuseLimitAbove = 10          // 30 → 15 (below the 50 floor: cannot split) → failed
         try await recrawlLayer()
-        let planned = try await engine.start(request())
+        let planned = try await engine.start(request(strategy: .offset))
         let record = try await engine.wait(downloadID: planned.id)
         XCTAssertEqual(record.status, .failed)
         XCTAssertTrue(record.error?.contains("Error performing query operation") == true, record.error ?? "")

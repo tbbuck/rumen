@@ -22,17 +22,29 @@ final class ExtractabilityTests: XCTestCase {
                     supportsPagination: paging, supportsStatistics: statistics, fetchedAt: crawled ? Date() : nil)
     }
 
-    func testHappyPathPBFOffsetPaging() {
+    /// A layer with an object ID field gets an OID list, whatever else it supports: asking for
+    /// named rows beats asking for a window into a sorted result. Measured against Cornwall's
+    /// planning polygons, 1,000 ids came back in 0.9s where 2,000 rows by offset took 37.8s.
+    func testHappyPathPrefersAnOIDList() {
         let a = Extractability.assess(layer: layer(10, service: 1), service: service(1, "A", .featureServer))
         XCTAssertEqual(a.verdict, true)
         XCTAssertEqual(a.transport, .pbf)
-        XCTAssertEqual(a.strategy, .offset)
-        XCTAssertEqual(a.pageSize, 2000)
+        XCTAssertEqual(a.strategy, .oidList, "even though the layer advertises pagination")
+        XCTAssertEqual(a.pageSize, 1000, "capped: Esri's guidance is that ids past a thousand per request cost more than they save")
         XCTAssertFalse(a.viaTwin)
-        XCTAssertEqual(a.reason, "PBF, offset paging at 2,000 records per request.")
-        XCTAssertEqual(a.requestCount(features: 184_212), 93)
-        XCTAssertEqual(a.countSentence(features: 184_212), "184,212 features in 93 requests.")
+        XCTAssertEqual(a.reason, "PBF, OID list chunking at 1,000 records per request.")
+        XCTAssertEqual(a.requestCount(features: 184_212), 185)
+        XCTAssertEqual(a.countSentence(features: 184_212), "184,212 features in 185 requests.")
         XCTAssertEqual(a.countSentence(features: 1), "1 feature in 1 request.")
+    }
+
+    /// Paging is what a layer with no object ID field falls back to.
+    func testOffsetPagingIsTheFallbackWithoutAnObjectID() {
+        let a = Extractability.assess(layer: layer(10, service: 1, oid: nil), service: service(1, "A", .featureServer))
+        XCTAssertEqual(a.verdict, true)
+        XCTAssertEqual(a.strategy, .offset)
+        XCTAssertEqual(a.pageSize, 2000, "and it keeps the server's own advertised page size")
+        XCTAssertEqual(a.reason, "PBF, offset paging at 2,000 records per request.")
     }
 
     func testUncrawledIsUnknown() {
@@ -67,7 +79,7 @@ final class ExtractabilityTests: XCTestCase {
     func testTransportChoice() {
         let json = Extractability.assess(layer: layer(10, service: 1, formats: "JSON, AMF"), service: service(1, "A", .mapServer))
         XCTAssertEqual(json.transport, .json)
-        XCTAssertEqual(json.reason, "JSON, offset paging at 2,000 records per request.")
+        XCTAssertEqual(json.reason, "JSON, OID list chunking at 1,000 records per request.")
         let missing = Extractability.assess(layer: layer(10, service: 1, formats: nil), service: service(1, "A", .mapServer, formats: nil))
         XCTAssertEqual(missing.transport, .json, "no advertised formats means classic JSON")
         let geo = Extractability.assess(layer: layer(10, service: 1, formats: "geoJSON"), service: service(1, "A", .mapServer))
@@ -75,16 +87,25 @@ final class ExtractabilityTests: XCTestCase {
         XCTAssertTrue(geo.reason.contains("only GEOJSON"), geo.reason)
     }
 
+    /// An object ID field wins outright; without one, paging then statistics; without any of
+    /// them there is nothing to chunk on.
     func testStrategyLadder() {
-        let range = Extractability.assess(layer: layer(10, service: 1, paging: false, statistics: true), service: service(1, "A", .mapServer))
-        XCTAssertEqual(range.strategy, .oidRange)
+        let withOID = Extractability.assess(layer: layer(10, service: 1, paging: false, statistics: true), service: service(1, "A", .mapServer))
+        XCTAssertEqual(withOID.strategy, .oidList, "an object ID field beats statistics")
+        XCTAssertEqual(withOID.reason, "PBF, OID list chunking at 1,000 records per request.")
+
+        let paging = Extractability.assess(layer: layer(10, service: 1, paging: true, statistics: true, oid: nil), service: service(1, "A", .mapServer))
+        XCTAssertEqual(paging.strategy, .offset, "no object ID field: paging next")
+
+        let range = Extractability.assess(layer: layer(10, service: 1, paging: false, statistics: true, oid: nil), service: service(1, "A", .mapServer))
+        XCTAssertEqual(range.strategy, .oidRange, "then statistics")
         XCTAssertEqual(range.reason, "PBF, OID range chunking at 2,000 records per request.")
-        let list = Extractability.assess(layer: layer(10, service: 1, paging: nil, statistics: nil), service: service(1, "A", .mapServer))
-        XCTAssertEqual(list.strategy, .oidList)
+
         let noOID = Extractability.assess(layer: layer(10, service: 1, paging: false, statistics: false, oid: nil), service: service(1, "A", .mapServer))
         XCTAssertEqual(noOID.verdict, false)
         XCTAssertTrue(noOID.reason.contains("no object ID field"))
-        let fallbackPage = Extractability.assess(layer: layer(10, service: 1, maxRecordCount: nil), service: service(1, "A", .mapServer))
+
+        let fallbackPage = Extractability.assess(layer: layer(10, service: 1, maxRecordCount: nil, oid: nil), service: service(1, "A", .mapServer))
         XCTAssertEqual(fallbackPage.pageSize, 1000, "service maxRecordCount when the layer has none")
     }
 
@@ -99,8 +120,8 @@ final class ExtractabilityTests: XCTestCase {
         XCTAssertEqual(a.sourceLayerID, 20)
         XCTAssertEqual(a.layerID, 10)
         XCTAssertEqual(a.transport, .pbf)
-        XCTAssertEqual(a.strategy, .offset)
-        XCTAssertEqual(a.reason, "PBF through the FeatureServer twin, offset paging at 2,000 records per request.")
+        XCTAssertEqual(a.strategy, .oidList)
+        XCTAssertEqual(a.reason, "PBF through the FeatureServer twin, OID list chunking at 1,000 records per request.")
     }
 
     func testTwinNotUsedWhenOwnIsAsGood() {
@@ -141,8 +162,8 @@ final class ExtractabilityTests: XCTestCase {
         }
         let a = Extractability.assess(layer: record(census, id: 1), service: service(1, "Census", .mapServer))
         XCTAssertEqual(a.verdict, true)
-        XCTAssertEqual(a.reason, "PBF, offset paging at 1,000 records per request.")
+        XCTAssertEqual(a.reason, "PBF, OID list chunking at 1,000 records per request.")
         let b = Extractability.assess(layer: record(trailheads, id: 2), service: service(1, "Trailheads", .featureServer))
-        XCTAssertEqual(b.reason, "PBF, offset paging at 2,000 records per request.")
+        XCTAssertEqual(b.reason, "PBF, OID list chunking at 1,000 records per request.")
     }
 }

@@ -77,7 +77,7 @@ public enum Extractability {
         guard viaTwin.verdict == true else { return own }
         let twinBetter = own.verdict != true
             || (viaTwin.transport == .pbf && own.transport != .pbf)
-            || (viaTwin.strategy == .offset && own.strategy != .offset)
+            || rank(viaTwin.strategy) > rank(own.strategy)
         guard twinBetter else { return own }
         return Assessment(verdict: true,
                           reason: Self.how(transport: viaTwin.transport!, strategy: viaTwin.strategy!,
@@ -112,17 +112,48 @@ public enum Extractability {
         else {
             return Assessment(verdict: false, reason: "The layer advertises only \(formats.sorted().joined(separator: ", ")) for queries; JSON or PBF is needed.", layerID: id)
         }
-        // Strategy ladder.
-        let pageSize = layer.maxRecordCount ?? service.maxRecordCount ?? 1000
+        // Strategy ladder. An OID list first whenever the layer has an object ID field, because
+        // it asks the server for named rows rather than for a window into a sorted result:
+        // measured against Cornwall's planning polygons, 1,000 ids came back in 0.9 s where
+        // 2,000 rows by `resultOffset` took 37.8 s for the same fields — the offset form makes
+        // the server order and skip its way to the page every time, and that cost grows with
+        // depth. Fetching every id first is one cheap request (458,534 of them in 1.9 s there).
+        //
+        // Paging is the fallback, not the preference, for a layer with no object ID field — and
+        // the download engine falls back to it too if the ids cannot actually be had.
         let strategy: Assessment.Strategy
-        if layer.supportsPagination == true { strategy = .offset }
+        if layer.objectIdField != nil { strategy = .oidList }
+        else if layer.supportsPagination == true { strategy = .offset }
         else if layer.supportsStatistics == true { strategy = .oidRange }
-        else { strategy = .oidList }
-        if strategy != .offset && layer.objectIdField == nil {
+        else {
             return Assessment(verdict: false, reason: "The layer has no paging support and no object ID field to chunk on.", layerID: id)
         }
+        let pageSize = pageSize(for: strategy, layer: layer, service: service)
         return Assessment(verdict: true, reason: how(transport: transport, strategy: strategy, pageSize: pageSize, viaTwin: false),
                           transport: transport, strategy: strategy, pageSize: pageSize, layerID: id)
+    }
+
+    /// How much a strategy is worth, for choosing between a layer and its FeatureServer twin.
+    /// An OID list asks for named rows; offset paging makes the server order and skip its way to
+    /// each page; OID ranges do the same through a where clause and cannot be checked for
+    /// truncation as cheaply.
+    static func rank(_ strategy: Assessment.Strategy?) -> Int {
+        switch strategy {
+        case .oidList: 3
+        case .offset: 2
+        case .oidRange: 1
+        case .single, nil: 0
+        }
+    }
+
+    /// The server's advertised page size, except for an OID list, where Esri's own guidance is
+    /// that performance falls away past about a thousand ids in one request — the list travels in
+    /// the request body and the server looks each one up.
+    static let objectIDsPerRequest = 1_000
+
+    static func pageSize(for strategy: Assessment.Strategy, layer: LayerRecord, service: ServiceRecord) -> Int {
+        let advertised = layer.maxRecordCount ?? service.maxRecordCount ?? 1000
+        return strategy == .oidList ? min(advertised, objectIDsPerRequest) : advertised
     }
 
     /// "PBF through the FeatureServer twin, offset paging at 2,000 records per request."

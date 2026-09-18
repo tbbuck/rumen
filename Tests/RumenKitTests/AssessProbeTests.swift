@@ -65,7 +65,7 @@ final class AssessProbeTests: XCTestCase {
         XCTAssertEqual(assessment.verdict, true)
         XCTAssertTrue(assessment.viaTwin, "PBF + paging on the FeatureServer beats JSON-only on the MapServer")
         XCTAssertEqual(assessment.transport, .pbf)
-        XCTAssertEqual(assessment.reason, "PBF through the FeatureServer twin, offset paging at 1,000 records per request.")
+        XCTAssertEqual(assessment.reason, "PBF through the FeatureServer twin, OID list chunking at 1,000 records per request.")
         let paths = transport.requests.dropFirst(before).compactMap { $0.url?.path }
         XCTAssertTrue(paths.contains("/arcgis/rest/services/Wildfire/FeatureServer"), "the twin service was crawled")
 

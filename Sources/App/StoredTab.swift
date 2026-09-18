@@ -76,7 +76,7 @@ private struct StoredFileHeader: View {
                     Text(run.outputPath ?? "").font(.sheetMono(12)).foregroundStyle(Palette.ink)
                         .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                     Button("Show in Finder") { model.reveal(run.outputPath) }.buttonStyle(LinkButtonStyle(size: 12.5))
-                    Button("Map") { Task { await model.showStoredMap(run) } }.buttonStyle(LinkButtonStyle(size: 12.5))
+                    AsyncButton("Map", busy: "Opening…") { await model.showStoredMap(run) }.buttonStyle(LinkButtonStyle(size: 12.5))
                 }
                 Spacer()
                 if session.runs.count > 1 {
@@ -124,7 +124,7 @@ private struct ExportsSection: View {
             HStack(spacing: 18) {
                 SectionHeading("Exports")
                 ForEach(ExportFormat.reexportable, id: \.self) { format in
-                    Button("Export as \(format.label)") { Task { await session.reexport(format) } }
+                    AsyncButton("Export as \(format.label)", busy: "Writing…") { await session.reexport(format) }
                         .buttonStyle(LinkButtonStyle(size: 12.5))
                         .disabled(session.exporting != nil || !session.selectedExists)
                         .help("Write \(format.label) beside the stored file, \(format.geometryNote); the server is not contacted")
@@ -189,7 +189,7 @@ private struct ScratchBox: View {
                     .background(Palette.bg, in: RoundedRectangle(cornerRadius: 7))
                     .overlay(RoundedRectangle(cornerRadius: 7).stroke(Palette.line2, lineWidth: 1))
                     .frame(maxWidth: 720)
-                Button("Run") { Task { await session.run() } }
+                AsyncButton("Run", busy: "Running…") { await session.run() }
                     .buttonStyle(PrimaryButtonStyle(small: true))
                     .keyboardShortcut(.return, modifiers: .command)
                     .disabled(session.isRunning || !session.selectedExists)

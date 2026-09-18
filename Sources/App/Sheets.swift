@@ -21,7 +21,7 @@ struct AddServerSheet: View {
                 TextField(pending.rootURL.host ?? "Name", text: $friendlyName)
                     .textFieldStyle(SheetFieldStyle())
                     .accessibilityLabel("Friendly name")
-                    .onSubmit(add)
+                    .onSubmit { Task { await add() } }
             }
             Button(advanced ? "Hide advanced" : "Advanced…") { advanced.toggle() }.buttonStyle(LinkButtonStyle(size: 12.5))
             if advanced {
@@ -30,7 +30,7 @@ struct AddServerSheet: View {
             HStack {
                 Spacer()
                 Button("Cancel") { model.pendingAdd = nil }.buttonStyle(LinkButtonStyle())
-                Button("Add", action: add).buttonStyle(PrimaryButtonStyle())
+                AsyncButton("Add", busy: "Adding…", action: add).buttonStyle(PrimaryButtonStyle())
             }
         }
         .padding(22)
@@ -41,8 +41,8 @@ struct AddServerSheet: View {
         .onAppear { friendlyName = pending.rootURL.host ?? "" }
     }
 
-    private func add() {
-        Task { await model.addServer(pending, friendlyName: friendlyName, cookie: cookie, origin: origin, referer: referer) }
+    private func add() async {
+        await model.addServer(pending, friendlyName: friendlyName, cookie: cookie, origin: origin, referer: referer)
     }
 }
 
@@ -69,11 +69,9 @@ struct ServerSettingsSheet: View {
             HStack {
                 Spacer()
                 Button("Cancel") { model.settingsServer = nil }.buttonStyle(LinkButtonStyle())
-                Button("Save") {
-                    Task {
-                        await model.saveSettings(server, name: name.isEmpty ? server.host : name, origin: origin, referer: referer, cookie: cookie)
-                        model.settingsServer = nil
-                    }
+                AsyncButton("Save", busy: "Saving…") {
+                    await model.saveSettings(server, name: name.isEmpty ? server.host : name, origin: origin, referer: referer, cookie: cookie)
+                    model.settingsServer = nil
                 }
                 .buttonStyle(PrimaryButtonStyle())
             }

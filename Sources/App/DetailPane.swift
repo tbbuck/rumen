@@ -34,7 +34,7 @@ struct DetailPane: View {
                     DirectoryPage(title: node.name, subtitle: "Folder on \(model.currentServer?.friendlyName ?? "")\(listed).",
                                   nodes: node.children, error: node.lastError,
                                   isRetrying: model.loadingNodes.contains(node.id),
-                                  retry: { Task { await model.retryFolder(path) } })
+                                  retry: { await model.retryFolder(path) })
                 }
             case .service(let id)?:
                 if let service = model.currentService, let node = model.tree?.find(.service(id)) {
@@ -98,7 +98,7 @@ private struct DirectoryPage: View {
     /// A folder whose listing failed: the server's message, and Retry (M8).
     var error: String? = nil
     var isRetrying = false
-    var retry: (() -> Void)? = nil
+    var retry: (@MainActor () async -> Void)? = nil
 
     var body: some View {
         ScrollView {
@@ -115,7 +115,7 @@ private struct DirectoryPage: View {
                     if isRetrying {
                         HStack(spacing: 8) { ProgressView().controlSize(.small); Caption("Listing again…") }
                     } else if let retry {
-                        Button("Retry", action: retry).buttonStyle(LinkButtonStyle())
+                        AsyncButton("Retry", busy: "Listing…", action: retry).buttonStyle(LinkButtonStyle())
                     }
                 }
             }
@@ -267,14 +267,14 @@ private struct ServicePage: View {
                 }
                 HStack(spacing: 4) {
                     Caption(subtitle)
-                    Button("refresh") { Task { await model.refreshCurrent() } }.buttonStyle(LinkButtonStyle(size: 12.5))
+                    AsyncButton("refresh", busy: "refreshing…") { await model.refreshCurrent() }.buttonStyle(LinkButtonStyle(size: 12.5))
                     Caption(".")
                 }
             }
             if let error = model.nodeErrors[node.id] {
                 VStack(alignment: .leading, spacing: 8) {
                     ErrorText(message: error)
-                    Button("Retry") { Task { await model.refreshCurrent() } }.buttonStyle(LinkButtonStyle())
+                    AsyncButton("Retry", busy: "Retrying…") { await model.refreshCurrent() }.buttonStyle(LinkButtonStyle())
                 }
             } else if model.loadingNodes.contains(node.id) {
                 HStack(spacing: 8) {
@@ -421,8 +421,8 @@ private struct StartPage: View {
                         .textFieldStyle(SheetFieldStyle(mono: true))
                         .accessibilityLabel("URL to open")
                         .frame(maxWidth: 560)
-                        .onSubmit { open() }
-                    Button("Open") { open() }
+                        .onSubmit { Task { await open() } }
+                    AsyncButton("Open", busy: "Opening…") { await open() }
                         .buttonStyle(PrimaryButtonStyle(small: true))
                         .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
@@ -433,10 +433,10 @@ private struct StartPage: View {
         }
     }
 
-    private func open() {
+    private func open() async {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        Task { await model.openText(text) }
+        await model.openText(text)
     }
 }
 
@@ -489,9 +489,7 @@ private struct StartServerRow: View {
     }
 
     private var openButton: some View {
-        Button {
-            Task { await model.selectServer(server.id) }
-        } label: {
+        AsyncButton { opening in
             HStack(spacing: 12) {
                 Image(systemName: "server.rack").font(.system(size: 13)).foregroundStyle(Palette.muted).frame(width: 18)
                 VStack(alignment: .leading, spacing: 2) {
@@ -499,13 +497,22 @@ private struct StartServerRow: View {
                     Text(server.rootURL.absoluteString).font(.sheetMono(11.5)).foregroundStyle(Palette.muted).lineLimit(1)
                 }
                 Spacer(minLength: 12)
-                Caption(summary, size: 11.5, color: Palette.muted2).lineLimit(1)
+                // Opening a server is a crawl, not a navigation: the row says so where it
+                // would otherwise say when it was last visited.
+                if opening {
+                    ProgressView().controlSize(.small)
+                    Caption("Opening…", size: 11.5, color: Palette.accent)
+                } else {
+                    Caption(summary, size: 11.5, color: Palette.muted2).lineLimit(1)
+                }
             }
             .padding(.horizontal, 8)
             .frame(minHeight: 46)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(hovered ? Palette.line.opacity(0.55) : .clear, in: RoundedRectangle(cornerRadius: 6))
             .contentShape(Rectangle())
+        } action: {
+            await model.selectServer(server.id)
         }
         .buttonStyle(.plain)
         .hoverTracking($hovered, hand: true)

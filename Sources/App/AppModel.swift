@@ -139,6 +139,11 @@ final class AppModel {
     /// database is read and the task launched.
     private(set) var resuming: Set<Int64> = []
 
+    /// Downloads asked for but not yet planned. A run only reaches the list once the server has
+    /// answered what there is to fetch — an OID list of a large layer is a real request — so
+    /// until then the transfers say a download is being prepared rather than nothing at all.
+    private(set) var preparing = 0
+
     /// A failed run waiting to be picked up again on its own: which attempt this will be, and
     /// when. Doubling from five seconds, so a server that is briefly unwell is waited out
     /// without a person watching, and one that is properly broken is not hammered.
@@ -871,12 +876,16 @@ extension AppModel {
     func startDownload(_ request: DownloadRequest) async {
         guard let engine, let database else { return }
         transfersError = nil
+        // Both before the first `await`: the drawer opens where the run will appear, and says
+        // it is being prepared, rather than nothing happening until the server has answered.
+        showTransfers = true
+        preparing += 1
+        defer { preparing -= 1 }
         do {
             let record = try await engine.start(request) { [weak self] progress in
                 Task { @MainActor in await self?.progressed(progress) }
             }
             runStarted[record.id] = Date()
-            showTransfers = true
             await reloadRuns()
             _ = database
         } catch DownloadError.notExtractable(let reason) {

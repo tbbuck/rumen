@@ -112,22 +112,22 @@ private struct QueryActions: View {
 
     var body: some View {
         HStack(spacing: 18) {
-            Button("Preview") { Task { await session.preview() } }.buttonStyle(PrimaryButtonStyle(small: true))
-            Button("Count") { Task { await session.count() } }.buttonStyle(LinkButtonStyle())
-            Button("Extent") { Task { await session.extent() } }.buttonStyle(LinkButtonStyle())
+            AsyncButton("Preview", busy: "Running…") { await session.preview() }.buttonStyle(PrimaryButtonStyle(small: true))
+            AsyncButton("Count", busy: "Counting…") { await session.count() }.buttonStyle(LinkButtonStyle())
+            AsyncButton("Extent", busy: "Measuring…") { await session.extent() }.buttonStyle(LinkButtonStyle())
                 .disabled(session.canExtent != nil).help(session.canExtent ?? "The bounding box of the matching features")
             NativeMenu(title: "Distinct", size: 13, color: session.canDistinct == nil ? NSPalette.accent : NSPalette.muted2,
                        items: session.fields.map { field in .init(field.name) { Task { await session.distinct(field: field.name) } } })
             .inline().hoverLabel()
             .disabled(session.canDistinct != nil).help(session.canDistinct ?? "Distinct values of one field")
-            Button("Statistics") { Task { await session.statistics() } }.buttonStyle(LinkButtonStyle())
+            AsyncButton("Statistics", busy: "Summarising…") { await session.statistics() }.buttonStyle(LinkButtonStyle())
                 .disabled(session.canStatistics != nil).help(session.canStatistics ?? "Min, max, mean, count of every numeric and date field")
             if session.isRunning {
                 ProgressView().controlSize(.small)
             }
             Spacer()
             if session.canPageForward {
-                Button("Next page") { Task { await session.nextPage() } }.buttonStyle(LinkButtonStyle())
+                AsyncButton("Next page", busy: "Loading…") { await session.nextPage() }.buttonStyle(LinkButtonStyle())
             }
         }
         .disabled(session.isRunning)

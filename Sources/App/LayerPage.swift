@@ -66,7 +66,7 @@ private struct LayerHeader: View {
             Text(layer.name).font(.sheetDisplay(24)).foregroundStyle(Palette.ink).tracking(-0.24)
             HStack(spacing: 4) {
                 Caption(subtitle)
-                Button("refresh") { Task { await model.refreshCurrent() } }.buttonStyle(LinkButtonStyle(size: 12.5))
+                AsyncButton("refresh", busy: "refreshing…") { await model.refreshCurrent() }.buttonStyle(LinkButtonStyle(size: 12.5))
                 Caption(".")
             }
         }
@@ -217,7 +217,7 @@ private struct ExtractionStatement: View {
                     if model.probing {
                         ProgressView().controlSize(.mini)
                     } else {
-                        Button("count now") { Task { await model.probeCurrentLayer() } }.buttonStyle(LinkButtonStyle(size: 15))
+                        AsyncButton("count now", busy: "counting…") { await model.probeCurrentLayer() }.buttonStyle(LinkButtonStyle(size: 15))
                         Text(".").font(.sheetUI(15)).foregroundStyle(Palette.ink)
                     }
                 }
@@ -229,7 +229,7 @@ private struct ExtractionStatement: View {
             HStack(spacing: 18) {
                 if service.type == .wms, verdict != .extractable {
                     // A picture is the WMS layer's one download when it has no features to give (M10).
-                    Button("Save as PNG image") { Task { await model.savePictureOfCurrentLayer(as: .png) } }
+                    AsyncButton("Save as PNG image", busy: "Saving…") { await model.savePictureOfCurrentLayer(as: .png) }
                         .buttonStyle(PrimaryButtonStyle())
                         .help("One GetMap of the layer's extent, with a world file beside it, to \(model.downloadDirectory.lastPathComponent)")
                     Button("Choose the picture format") { model.layerTab = .download }.buttonStyle(LinkButtonStyle())
@@ -237,17 +237,17 @@ private struct ExtractionStatement: View {
                 } else if service.type == .wmts {
                     Button("Preview on the map") { model.layerTab = .map }.buttonStyle(PrimaryButtonStyle())
                 } else if verdict == .extractable {
-                    Button("Download as \(model.preferences.defaultFormat.label)") { Task { await model.downloadCurrentLayerWithDefaults() } }
+                    AsyncButton("Download as \(model.preferences.defaultFormat.label)", busy: "Starting…") { await model.downloadCurrentLayerWithDefaults() }
                         .buttonStyle(PrimaryButtonStyle())
                         .help("Every feature, in \(model.preferences.outWkid(for: layer) == 4326 ? "WGS 84" : "the native spatial reference"), to \(model.downloadDirectory.lastPathComponent). Preferences (⌘,) set the defaults.")
                     Button("Change format or spatial reference") { model.layerTab = .download }.buttonStyle(LinkButtonStyle())
                     Button("Preview a sample on the map") { model.layerTab = .map }.buttonStyle(LinkButtonStyle())
                     if service.type == .wms {
-                        Button("Save a picture instead") { Task { await model.savePictureOfCurrentLayer(as: .png) } }.buttonStyle(LinkButtonStyle())
+                        AsyncButton("Save a picture instead", busy: "Saving…") { await model.savePictureOfCurrentLayer(as: .png) }.buttonStyle(LinkButtonStyle())
                             .help("One GetMap of the layer's extent as PNG, with a world file beside it")
                     }
                 } else if verdict == .notExtractable, let twin = layer.siblingLayerID {
-                    Button("Use the FeatureServer twin") { Task { await model.select(.layer(twin)) } }.buttonStyle(LinkButtonStyle())
+                    AsyncButton("Use the FeatureServer twin", busy: "Opening…") { await model.select(.layer(twin)) }.buttonStyle(LinkButtonStyle())
                 }
             }
         }

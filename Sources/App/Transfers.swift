@@ -145,6 +145,10 @@ struct TransfersStrip: View {
                 Text(run.stats).font(.sheetMono(11)).foregroundStyle(Palette.muted).lineLimit(1)
                 Spacer()
                 Button("Show all \(model.runs.count)") { model.showTransfers = true }.buttonStyle(LinkButtonStyle(size: 12.5))
+            } else if model.preparing > 0 {
+                ProgressView().controlSize(.small)
+                Caption("Preparing a download…", size: 12.5)
+                Spacer()
             } else {
                 StatusDot(color: Palette.muted2)
                 Caption("Nothing moving", size: 12.5, color: Palette.muted2)
@@ -180,7 +184,7 @@ struct TransfersDrawer: View {
                 Caption(summary, size: 12.5)
                 Spacer()
                 if model.runs.contains(where: { $0.status != .running }) {
-                    Button("Clear finished") { Task { await model.clearFinishedDownloads() } }.buttonStyle(LinkButtonStyle(size: 12.5))
+                    AsyncButton("Clear finished", busy: "Clearing…") { await model.clearFinishedDownloads() }.buttonStyle(LinkButtonStyle(size: 12.5))
                         .help("Remove every run that is not running; files on disk are kept")
                 }
                 Button {
@@ -206,11 +210,15 @@ struct TransfersDrawer: View {
                 // A plain stack: a lazy one wraps each row in a nameless cell of its own, and the
                 // list is a few dozen rows at most.
                 VStack(spacing: 0) {
+                    if model.preparing > 0 {
+                        PreparingRow(count: model.preparing)
+                        Rectangle().fill(Palette.line).frame(height: 1)
+                    }
                     ForEach(model.runs) { run in
                         RunRow(run: run)
                         Rectangle().fill(Palette.line).frame(height: 1)
                     }
-                    if model.runs.isEmpty {
+                    if model.runs.isEmpty, model.preparing == 0 {
                         Caption("No transfers yet. Start one from a layer's Download tab.").padding(16)
                     }
                 }
@@ -231,6 +239,26 @@ struct TransfersDrawer: View {
         if running > 0 { s += ", \(running) running" }
         if inFlight > 0, let host = model.currentServer?.host { s += ", \(inFlight) request\(inFlight == 1 ? "" : "s") in flight to \(host)" }
         return s
+    }
+}
+
+/// A download asked for but not yet planned. Planning asks the server what there is to fetch —
+/// for an OID list of a large layer, a request of its own — and that is where the wait between
+/// clicking Start and a run appearing comes from. The row holds the place meanwhile.
+private struct PreparingRow: View {
+    let count: Int
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ProgressView().controlSize(.small)
+            Text(count == 1 ? "Preparing a download" : "Preparing \(count) downloads")
+                .font(.sheetUI(13.5, .bold)).foregroundStyle(Palette.ink)
+            Caption("asking the server what there is to fetch")
+            Spacer()
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -343,21 +371,24 @@ private struct RunActions: View {
             case .complete:
                 Button("Show in Finder") { model.reveal(run.record.outputPath) }.buttonStyle(LinkButtonStyle())
                 if !run.record.format.isRaster {   // a picture has no rows to open and nothing to re-export
-                    Button("Re-export") { Task { await model.showStored(run.record) } }.buttonStyle(LinkButtonStyle())
+                    AsyncButton("Re-export", busy: "Opening…") { await model.showStored(run.record) }.buttonStyle(LinkButtonStyle())
                         .help("Open the stored file: its rows, a SQL scratch box, and export as GeoJSON or CSV without the server")
-                    Button("Map") { Task { await model.showStoredMap(run.record) } }.buttonStyle(LinkButtonStyle())
+                    AsyncButton("Map", busy: "Opening…") { await model.showStoredMap(run.record) }.buttonStyle(LinkButtonStyle())
                 }
             case .paused:
                 // A run pauses when the server answers a request with 498 or 499 mid-run. Token
                 // sign-in is not built (backlog), so the way through is to try again, or to set
                 // the server's Cookie first when the server is behind a session wall.
-                Button("Resume") { Task { await model.resumeDownload(run.id) } }.buttonStyle(PrimaryButtonStyle(small: true))
+                let starting = model.resuming.contains(run.id)
+                Button(starting ? "Starting…" : "Resume") { Task { await model.resumeDownload(run.id) } }
+                    .buttonStyle(PrimaryButtonStyle(small: true))
+                    .disabled(starting)
                     .help("Picks up where it stopped; nothing already fetched is refetched")
                 if let server = run.server {
                     Button("Settings…") { model.settingsServer = server }.buttonStyle(LinkButtonStyle())
                         .help("The server asked for a token. For a server behind a login, set its Cookie here, then resume.")
                 }
-                Button("Remove") { Task { await model.removeDownload(run.id) } }.buttonStyle(LinkButtonStyle())
+                AsyncButton("Remove", busy: "Removing…") { await model.removeDownload(run.id) }.buttonStyle(LinkButtonStyle())
             case .failed, .cancelled, .planned:
                 let starting = model.resuming.contains(run.id)
                 Button(starting ? "Starting…" : (run.status == .failed ? "Retry" : "Resume")) {
@@ -371,7 +402,7 @@ private struct RunActions: View {
                     Button("Stop") { model.cancelAutoRetry(run.id) }.buttonStyle(LinkButtonStyle())
                         .help("Leaves the run where it is rather than trying again")
                 }
-                Button("Remove") { Task { await model.removeDownload(run.id) } }.buttonStyle(LinkButtonStyle())
+                AsyncButton("Remove", busy: "Removing…") { await model.removeDownload(run.id) }.buttonStyle(LinkButtonStyle())
             }
         }
     }
@@ -384,15 +415,15 @@ private struct RemoveRunButton: View {
     @State private var hovered = false
 
     var body: some View {
-        Button {
-            Task { await model.removeDownload(run.id) }
-        } label: {
-            Image(systemName: "xmark")
+        AsyncButton { removing in
+            Image(systemName: removing ? "hourglass" : "xmark")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(hovered ? Palette.ink : Palette.muted2)
                 .frame(width: 22, height: 22)
                 .background(hovered ? Palette.line : .clear, in: RoundedRectangle(cornerRadius: 5))
                 .contentShape(Rectangle())
+        } action: {
+            await model.removeDownload(run.id)
         }
         .buttonStyle(.plain)
         .hoverTracking($hovered, hand: run.status != .running)

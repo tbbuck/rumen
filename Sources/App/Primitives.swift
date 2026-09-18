@@ -313,3 +313,46 @@ struct ProgressBar: View {
         .accessibilityRepresentation { ProgressView("Progress", value: max(0, min(1, fraction))) }
     }
 }
+
+// MARK: - Asynchronous actions
+
+/// A button whose work is asynchronous and may take a moment — a server asked something, a
+/// file read, a download planned. The click changes what the button says and stops it taking
+/// another, and it comes back when the work ends.
+///
+/// The flip happens inside the click, before the first `await`, so the button answers in the
+/// frame it was clicked in however long the work runs afterwards. A flag set inside the async
+/// function cannot do that: the click has already returned, and the button sits there looking
+/// untouched while a slow server is asked something.
+///
+/// The busy word is given rather than derived from the title, because the right one belongs to
+/// the action: "Starting…", "Refreshing…", "Counting…".
+struct AsyncButton<Label: View>: View {
+    private let label: (Bool) -> Label
+    private let action: @MainActor () async -> Void
+    @State private var running = false
+
+    /// A label built from whether the work is running, for buttons that are more than a word.
+    init(@ViewBuilder label: @escaping (Bool) -> Label, action: @escaping @MainActor () async -> Void) {
+        self.label = label
+        self.action = action
+    }
+
+    var body: some View {
+        Button {
+            guard !running else { return }
+            running = true
+            Task { await action(); running = false }
+        } label: {
+            label(running)
+        }
+        .disabled(running)
+    }
+}
+
+extension AsyncButton where Label == Text {
+    /// The common case: a title, and what it says while the work runs.
+    init(_ title: String, busy: String, action: @escaping @MainActor () async -> Void) {
+        self.init(label: { running in Text(running ? busy : title) }, action: action)
+    }
+}

@@ -23,7 +23,7 @@ struct MapTab: View {
                 Spacer()
                 SourceMenu(session: session)
                 if session.source == .sample, !session.isRaster {
-                    Button("Draw a fresh sample") { Task { await session.load() } }.buttonStyle(LinkButtonStyle(size: 12.5))
+                    AsyncButton("Draw a fresh sample", busy: "Drawing…") { await session.load() }.buttonStyle(LinkButtonStyle(size: 12.5))
                 }
             }
             if case .stored = session.source {
@@ -32,7 +32,7 @@ struct MapTab: View {
                         .textFieldStyle(SheetFieldStyle(mono: true))
                         .onSubmit { Task { await session.load() } }
                         .frame(maxWidth: 560)
-                    Button("Apply") { Task { await session.load() } }.buttonStyle(PrimaryButtonStyle(small: true))
+                    AsyncButton("Apply", busy: "Applying…") { await session.load() }.buttonStyle(PrimaryButtonStyle(small: true))
                 }
             }
             if let error = session.error { ErrorText(message: error) }

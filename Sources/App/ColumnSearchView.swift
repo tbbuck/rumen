@@ -191,7 +191,10 @@ private struct DeepCrawlPrompt: View {
             Text(sentence)
                 .font(.sheetUI(12.5)).foregroundStyle(Palette.ink)
             if !allServers {
-                Button("crawl them now") { Task { await model.deepCrawlCurrentServer(); await model.runColumnSearch() } }
+                AsyncButton("crawl them now", busy: "crawling…") {
+                    await model.deepCrawlCurrentServer()
+                    await model.runColumnSearch()
+                }
                     .buttonStyle(LinkButtonStyle(size: 12.5))
                     .disabled(model.deepCrawlStatus != nil)
                 Text(".").font(.sheetUI(12.5)).foregroundStyle(Palette.ink)

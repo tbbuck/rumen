@@ -190,7 +190,6 @@ private struct ErrorBanner: View {
     let message: String
     let retry: (@MainActor () async -> Void)?
     let dismiss: () -> Void
-    @State private var retrying = false
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
@@ -202,15 +201,7 @@ private struct ErrorBanner: View {
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if let retry {
-                if retrying {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Button("Retry") {
-                        retrying = true
-                        Task { await retry(); retrying = false }
-                    }
-                    .buttonStyle(LinkButtonStyle(size: 12.5))
-                }
+                AsyncButton("Retry", busy: "Retrying…", action: retry).buttonStyle(LinkButtonStyle(size: 12.5))
             }
             Button("Dismiss", action: dismiss).buttonStyle(LinkButtonStyle(size: 12.5))
         }

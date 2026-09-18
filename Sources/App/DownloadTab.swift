@@ -110,7 +110,7 @@ struct DownloadTab: View {
             }
         }
         HStack(spacing: 18) {
-            Button(isPicture ? "Save picture" : "Start download") { start() }
+            AsyncButton(isPicture ? "Save picture" : "Start download", busy: isPicture ? "Saving…" : "Starting…") { await start() }
                 .buttonStyle(PrimaryButtonStyle())
                 .disabled(!(verdict == .extractable || useManual || isPicture))
                 .help(isPicture ? "One GetMap of the layer's extent, written as \(format.label)"
@@ -134,7 +134,7 @@ struct DownloadTab: View {
                         if run.status == .complete {
                             Button("Show in Finder") { model.reveal(run.record.outputPath) }.buttonStyle(LinkButtonStyle(size: 12))
                             if !run.record.format.isRaster {
-                                Button("Stored") { Task { await model.showStored(run.record) } }.buttonStyle(LinkButtonStyle(size: 12))
+                                AsyncButton("Stored", busy: "Opening…") { await model.showStored(run.record) }.buttonStyle(LinkButtonStyle(size: 12))
                                     .help("The file's rows, a SQL scratch box, and re-export")
                             }
                         }
@@ -147,7 +147,7 @@ struct DownloadTab: View {
         }
     }
 
-    private func start() {
+    private func start() async {
         var request = DownloadRequest(layerID: layer.id, outputDirectory: model.downloadDirectory)
         let trimmed = whereClause.trimmingCharacters(in: .whitespacesAndNewlines)
         request.whereClause = isOGC || trimmed.isEmpty ? "1=1" : whereClause
@@ -158,7 +158,7 @@ struct DownloadTab: View {
             request.manualStrategy = manualStrategy
             request.manualPageSize = max(1, manualPageSize)
         }
-        Task { await model.startDownload(request) }
+        await model.startDownload(request)
     }
 }
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Regenerate Sources/ArcGISKit/Proto/FeatureCollection.pb.swift from the vendored Esri proto.
+# Regenerate Sources/RumenKit/Proto/FeatureCollection.pb.swift from the vendored Esri proto.
 # Needs `protoc` and `protoc-gen-swift` (brew install protobuf swift-protobuf). The generated
 # file is committed so normal builds and CI need neither tool.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PROTO_DIR="$ROOT/Sources/ArcGISKit/Proto"
+PROTO_DIR="$ROOT/Sources/RumenKit/Proto"
 protoc \
   --proto_path="$PROTO_DIR" \
   --swift_out="$PROTO_DIR" \

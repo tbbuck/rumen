@@ -1,4 +1,4 @@
-// ArcGIS Explorer app icon. Every design decision is in this file; icon-lib.mjs holds
+// Rumen app icon. Every design decision is in this file; icon-lib.mjs holds
 // the mechanics.
 //
 //   node design/icon/build-icons.mjs design/icon/concepts.mjs <preview-dir> [renders-dir]

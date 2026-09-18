@@ -1,8 +1,8 @@
 import Foundation
-import ArcGISKit
+import RumenKit
 
 /// Where this process keeps its state. By default that is the per-user Application Support
-/// folder and `~/Documents/ArcGIS Explorer` for downloads. `--home <dir>` moves the database,
+/// folder and `~/Documents/Rumen` for downloads. `--home <dir>` moves the database,
 /// the staging folder and the default download folder under one directory, so the UI tests
 /// and scripted captures run against a scratch copy and never touch the real one. The DuckDB
 /// extension folder stays per user: it is a cache, and refetching `spatial` per run is waste.
@@ -25,6 +25,6 @@ enum AppPaths {
     static var defaultDownloads: URL {
         if isScratch { return home.appendingPathComponent("Downloads", isDirectory: true) }
         return FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("ArcGIS Explorer", isDirectory: true)
+            .appendingPathComponent("Rumen", isDirectory: true)
     }
 }

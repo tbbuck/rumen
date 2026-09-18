@@ -1,5 +1,5 @@
 import SwiftUI
-import ArcGISKit
+import RumenKit
 
 /// The path bar: host segment, one segment per level, a mono tail, and an edit mode that
 /// takes any pasted ArcGIS URL. Fills the title bar.

@@ -35,8 +35,8 @@ jobs:
         run: |
           xcodegen generate
           xcodebuild \
-            -project ArcGISExplorer.xcodeproj \
-            -scheme ArcGISExplorer \
+            -project Rumen.xcodeproj \
+            -scheme Rumen \
             -configuration Release \
             -derivedDataPath build/DerivedData \
             CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \

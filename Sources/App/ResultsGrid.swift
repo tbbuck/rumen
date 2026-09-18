@@ -1,6 +1,6 @@
 import SwiftUI
 import AppKit
-import ArcGISKit
+import RumenKit
 
 /// A virtualised results grid backed by `NSTableView` (ported from DuckLake Explorer). Headers
 /// show the column name over its type; cells are Fira Code; numeric columns right-align;

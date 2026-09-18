@@ -3,8 +3,8 @@
 //   node design/icon/export-app-icon.mjs <concepts.mjs> <key> <out-dir>
 //
 // Writes <out-dir>/AppIcon.icon (the Icon Composer bundle Xcode compiles),
-// <out-dir>/ArcGISExplorer-icon.svg (flat master) and
-// <out-dir>/ArcGISExplorer-icon-small.svg (the 32/16px master), replacing what is there.
+// <out-dir>/Rumen-icon.svg (flat master) and
+// <out-dir>/Rumen-icon-small.svg (the 32/16px master), replacing what is there.
 // scripts/render-app-icon.sh turns the two masters into the legacy .icns.
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -32,6 +32,6 @@ const out = resolve(outDir);
 await mkdir(out, { recursive: true });
 await rm(join(out, 'AppIcon.icon'), { recursive: true, force: true });
 const bundle = await lib.writeIconBundle({ ...concept, bundle: 'AppIcon' }, out);
-await writeFile(join(out, 'ArcGISExplorer-icon.svg'), lib.flatMaster(concept));
-await writeFile(join(out, 'ArcGISExplorer-icon-small.svg'), lib.flatMaster({ ...concept, fill: concept.small.fill ?? concept.fill }, concept.small.layers));
-console.log(`exported "${key}" to ${bundle}, ArcGISExplorer-icon.svg and ArcGISExplorer-icon-small.svg in ${out}`);
+await writeFile(join(out, 'Rumen-icon.svg'), lib.flatMaster(concept));
+await writeFile(join(out, 'Rumen-icon-small.svg'), lib.flatMaster({ ...concept, fill: concept.small.fill ?? concept.fill }, concept.small.layers));
+console.log(`exported "${key}" to ${bundle}, Rumen-icon.svg and Rumen-icon-small.svg in ${out}`);

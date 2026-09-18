@@ -1,5 +1,5 @@
 import SwiftUI
-import ArcGISKit
+import RumenKit
 
 /// Pasted URL → resolved node preview + friendly name → Add.
 struct AddServerSheet: View {

@@ -1,7 +1,7 @@
 import SwiftUI
 import WebKit
 import OSLog
-import ArcGISKit
+import RumenKit
 
 /// What the map shows: the layer's extent (dashed), features (sample, stored, or query), and
 /// the graticule the sheet margins are labelled against. `fitToken` bumps to re-fit;
@@ -230,7 +230,7 @@ struct GeoMapView: NSViewRepresentable {
             return String(decoding: data, as: UTF8.self)
         }
 
-        private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "ArcGISExplorer", category: "map")
+        private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Rumen", category: "map")
 
         func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
             if message.name == "log" {

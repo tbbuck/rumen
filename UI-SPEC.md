@@ -1,4 +1,4 @@
-# ArcGIS Explorer — UI component spec (Sheet on Directory → SwiftUI)
+# Rumen — UI component spec (Sheet on Directory → SwiftUI)
 
 > Status: **Accepted** · 2026-09-16 · Companion to [SPEC.md](./SPEC.md) and
 > [DESIGN-TOKENS.md](./DESIGN-TOKENS.md). Maps the chosen design — the **Sheet**
@@ -37,7 +37,7 @@ margins.
 
 ## Shell
 
-- **`ArcGISExplorerApp: App`** — `@main` + `WindowGroup` + `Settings`; owns menu
+- **`RumenApp: App`** — `@main` + `WindowGroup` + `Settings`; owns menu
   `Commands` (Open URL ⌘L, Find column ⌘F, Refresh ⌘R, Transfers ⌘⇧T). *Entry point.*
 - **`AppModel` (`@Observable`)** — known servers, current node (server / folder /
   service / layer), open tab, transfers, column search state, appearance override.

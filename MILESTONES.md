@@ -1,4 +1,4 @@
-# ArcGIS Explorer — Milestones
+# Rumen — Milestones
 
 > Status: **Draft** · 2026-09-16 · See [SPEC.md](./SPEC.md) for the full spec.
 
@@ -11,8 +11,8 @@ commit per logical unit.
 ---
 ## Status — 2026-09-16
 
-- **M0 complete.** `ArcGISCore` package (CDuckDB + DuckDBKit with Appender, prepared
-  statements, and the migration runner; ArcGISKit with the initial schema and the
+- **M0 complete.** `RumenCore` package (CDuckDB + DuckDBKit with Appender, prepared
+  statements, and the migration runner; RumenKit with the initial schema and the
   `AppDatabase` actor), vendored Esri proto with generated Swift, xcodegen app that opens and
   migrates the database on launch, CI workflow.
 - **M1 headless half complete** (no UI spec needed): URL normaliser, `ArcGISClient`
@@ -149,9 +149,9 @@ commit per logical unit.
   tested). **Packaging** as in DuckLake Explorer: `scripts/bundle-duckdb-engine.sh` copies
   `libduckdb` into `Contents/Frameworks` and rewrites the install name and rpath;
   `scripts/release.sh` builds Release, bundles, signs with Developer ID and the hardened
-  runtime under `Config/ArcGISExplorer.entitlements` (`disable-library-validation` only),
+  runtime under `Config/Rumen.entitlements` (`disable-library-validation` only),
   runs the signed binary's `--selftest` (a packaged build points DuckDB's default
-  configuration at `~/Library/Application Support/ArcGIS Explorer/duckdb-extensions`, so
+  configuration at `~/Library/Application Support/Rumen/duckdb-extensions`, so
   `INSTALL spatial` lands there and every engine finds it), notarises, staples, and packages
   the DMG; `release.yml` does the same on a `v*` tag. Verified on this Mac: the signature
   verifies, the self-test fetched `spatial` v1.5.5 into the per-user folder and reprojected
@@ -184,7 +184,7 @@ commit per logical unit.
   WFS 1.0 and 2.0, WMTS 1.0), the probe, assessment, and the download shapes; 203 tests.
   **Also:** Apple's accessibility audit as a UI test target against a scratch home
   (`--home`) and a loopback ArcGIS server synthesised in the test process, and a launch
-  metric (see `Tests/ArcGISExplorerUITests`). It runs on the test VM, since XCUITest takes
+  metric (see `Tests/RumenUITests`). It runs on the test VM, since XCUITest takes
   the keyboard. Every finding the audit passes over is attached as a screenshot with the
   element outlined, and `ReferenceAuditTests` runs the same audit over Apple's own apps
   (Font Book, System Settings, TextEdit, Weather) so a finding can be told the framework's
@@ -196,14 +196,14 @@ commit per logical unit.
 ## M0 — Scaffold & engine  *(de-risk the toolchain)* — ✅ done 2026-09-16
 **Goal:** a building, testing, signed-ad-hoc app with a migrated DuckDB app database.
 - **Deliverables**
-  - `Package.swift` (`ArcGISCore`: `CDuckDB`, `DuckDBKit`, `ArcGISKit`, tests) and
+  - `Package.swift` (`RumenCore`: `CDuckDB`, `DuckDBKit`, `RumenKit`, tests) and
     `project.yml` (xcodegen app target, macOS 26, Swift 6, ad-hoc signing), mirroring
     DuckLake Explorer; `.gitignore` for generated project, build dirs, and the
     MapTiler local xcconfig.
   - `DuckDBKit` copied from DuckLake Explorer, plus an **Appender** wrapper and a
     **migration runner** over numbered SQL files with a `schema_migrations` table.
   - `0001_initial.sql` creating the SPEC §7.2 schema; the app opens or creates
-    `~/Library/Application Support/ArcGIS Explorer/explorer.duckdb` on launch and
+    `~/Library/Application Support/Rumen/explorer.duckdb` on launch and
     migrates it.
   - `claude-scripts/build_app.sh`; `.github/workflows/ci.yml` on `macos-26`.
   - SwiftProtobuf dependency wired; Esri `FeatureCollection.proto` vendored with

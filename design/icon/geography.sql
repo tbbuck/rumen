@@ -43,7 +43,7 @@ COPY (
   FROM parts
   WHERE ST_Area(geom) > 0.5
   ORDER BY area DESC
-) TO '/Users/tom/Code/Claude/arcgis-explorer/design/icon/geography.json' (FORMAT JSON, ARRAY true);
+) TO '/Users/tom/Code/Claude/rumen/design/icon/geography.json' (FORMAT JSON, ARRAY true);
 
 -- Bold: closing 0.14, opening 0.08, simplify 0.05.
 COPY (
@@ -57,4 +57,4 @@ COPY (
   FROM parts
   WHERE ST_Area(geom) > 0.5
   ORDER BY area DESC
-) TO '/Users/tom/Code/Claude/arcgis-explorer/design/icon/geography-bold.json' (FORMAT JSON, ARRAY true);
+) TO '/Users/tom/Code/Claude/rumen/design/icon/geography-bold.json' (FORMAT JSON, ARRAY true);

@@ -8,11 +8,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-MASTER="$ROOT/Resources/AppIcon/ArcGISExplorer-icon.svg"
-SMALL="$ROOT/Resources/AppIcon/ArcGISExplorer-icon-small.svg"
-ICNS="$ROOT/Resources/AppIcon/ArcGISExplorer.icns"
+MASTER="$ROOT/Resources/AppIcon/Rumen-icon.svg"
+SMALL="$ROOT/Resources/AppIcon/Rumen-icon-small.svg"
+ICNS="$ROOT/Resources/AppIcon/Rumen.icns"
 WORK="$(mktemp -d)"
-ICONSET="$WORK/ArcGISExplorer.iconset"
+ICONSET="$WORK/Rumen.iconset"
 mkdir -p "$ICONSET"
 
 # point size : scale. Renders at or below 32px use the hand-tuned small art.

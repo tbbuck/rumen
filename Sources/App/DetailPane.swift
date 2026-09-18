@@ -1,5 +1,5 @@
 import SwiftUI
-import ArcGISKit
+import RumenKit
 
 /// Right of the tree: the page for the selected node, or the invitation when nothing is.
 struct DetailPane: View {

@@ -1,13 +1,17 @@
-# ArcGIS Explorer
+# Rumen
 
-**Get the data out of any ArcGIS REST server, without ArcGIS.**
+**Get the whole layer out of any map server, without their software.**
 
-Paste a URL, see what the server really holds, get a straight answer to "can I extract
-this layer?", poke at it with read-only queries, and pull it down in full as GeoParquet
-(or GeoJSON, or CSV) through the fastest transport the server offers. WMS, WFS and WMTS
-endpoints open too, at a minimum: what is there, what it looks like, and a download where
-the protocol has one. A native macOS app in Swift and SwiftUI, with DuckDB as its spatial
-engine.
+Paste a URL — ArcGIS REST, WMS, WFS or WMTS — and see what the server really holds, get a
+straight answer to "can I extract this layer?", poke at it with read-only queries, and pull
+it down in full as GeoParquet (or GeoJSON, or CSV) through the fastest transport the server
+offers. A native macOS app in Swift and SwiftUI, with DuckDB as its spatial engine.
+
+ArcGIS is the deep path: the whole hierarchy, querying, PBF, and paging chosen per layer.
+OGC endpoints open alongside it — what is there, what it looks like, and a download where
+the protocol has one.
+
+*A rumen is the stomach that lets a cow digest what nothing else can.*
 
 ![The layer page: the server tree on the left, a layer's extractability verdict, facts and fields on the right](docs/layer-page.png)
 
@@ -65,13 +69,13 @@ planned but not built yet; OAuth is not in scope.
 
 ## Install
 
-Download the DMG from the [latest release](https://github.com/tbbuck/arcgis-explorer/releases/latest),
+Download the DMG from the [latest release](https://github.com/tbbuck/rumen/releases/latest),
 drag the app to Applications, and open it. The app is signed with a Developer ID and
 notarised, so macOS shows only its usual "downloaded from the internet" prompt.
 
 Requirements: macOS 26 on Apple silicon. Nothing else to install: DuckDB is bundled, and
 the `spatial` extension is fetched once on first launch into
-`~/Library/Application Support/ArcGIS Explorer/duckdb-extensions` (this needs the network).
+`~/Library/Application Support/Rumen/duckdb-extensions` (this needs the network).
 
 ### Basemap tiles
 
@@ -88,8 +92,10 @@ still works, over a blank background, and says so.
 
 ## Using it
 
-1. Press ⌘L, or click the path bar, and paste any ArcGIS REST URL. A new server is
-   registered with a friendly name and listed to the bottom of its folders.
+1. Press ⌘L, or click the path bar, and paste any map-server URL: ArcGIS REST, WMS, WFS or
+   WMTS. The URL is asked what it is rather than assumed, so a council portal that fronts a
+   MapServer behind its own path opens as that service. A new server is registered with a
+   friendly name and listed to the bottom of its folders.
 2. The tree on the left is the server: folders, services, layers, tables, each with a small
    locator showing where its extent sits within the server's data. Arrow keys, Home and End,
    type-ahead, and Return all work. Drag the tree's right edge to resize it.
@@ -105,7 +111,7 @@ still works, over a blank background, and says so.
 5. ⌘F searches columns. ⌘, opens Preferences: download folder, default format and spatial
    reference, domain labels, requests per host, retry limit, appearance.
 
-Files land in `~/Documents/ArcGIS Explorer/<server>/<service>/<layer>.parquet` by default,
+Files land in `~/Documents/Rumen/<server>/<service>/<layer>.parquet` by default,
 and an existing file is never overwritten without asking.
 
 ## Building from source
@@ -117,7 +123,7 @@ and an existing file is never overwritten without asking.
 
 ```
 swift test                                   # the engine and kit, headless
-xcodegen generate && open ArcGISExplorer.xcodeproj
+xcodegen generate && open Rumen.xcodeproj
 ```
 
 For basemap tiles in a development build, create the untracked `Config/maptiler.local.xcconfig`
@@ -139,11 +145,14 @@ and attaches the DMG to a GitHub Release; the secrets it needs are listed at the
 
 ## Architecture in a paragraph
 
-`ArcGISCore` is a Swift package with no UI: `SQLiteKit` (the app database and its numbered
+`RumenCore` is a Swift package with no UI: `SQLiteKit` (the app database and its numbered
 SQL migrations), `DuckDBKit` (a thin wrapper over DuckDB's C API with an appender and
-prepared statements), and `ArcGISKit` (URL normalisation, the REST client, the crawler,
-the extractability rules, the PBF and JSON decoders, geometry to WKB, the download planner
-and engine, the exporter). The app target is SwiftUI, dropping to AppKit for the server
+prepared statements), and `RumenKit` (URL normalisation, the ArcGIS REST client and the OGC
+client beside it, the crawlers, the extractability rules, the PBF and JSON decoders,
+geometry to WKB, the download planner and engine, the exporter). Both protocols share one
+set of tables and one download pipeline, so a WFS type resumes exactly as a FeatureServer
+layer does; the `ArcGIS`-prefixed files are the Esri half, `OGC.swift` and its neighbours
+the other. The app target is SwiftUI, dropping to AppKit for the server
 tree (`NSOutlineView`), the results grid (`NSTableView`), and the map (MapLibre GL in a
 `WKWebView`). Network and database access live behind actors; the app database is SQLite,
 and DuckDB is only ever the spatial and data engine.
@@ -163,6 +172,6 @@ title bar: the same paper-and-magenta language on blue slate.
 - [MapLibre GL JS](https://maplibre.org) (BSD-3) with [MapTiler](https://www.maptiler.com) basemaps.
 - [SwiftProtobuf](https://github.com/apple/swift-protobuf) (Apache-2.0), and Esri's
   `FeatureCollection.proto` from the [arcgis-pbf](https://github.com/Esri/arcgis-pbf)
-  repository (Apache-2.0), vendored under `Sources/ArcGISKit/Proto`.
+  repository (Apache-2.0), vendored under `Sources/RumenKit/Proto`.
 - The [Cabin](https://fonts.google.com/specimen/Cabin) and
   [Fira Code](https://github.com/tonsky/FiraCode) typefaces (SIL Open Font License), bundled.

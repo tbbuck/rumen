@@ -1,6 +1,6 @@
 import Foundation
 import Observation
-import ArcGISKit
+import RumenKit
 
 /// A re-export whose target file already exists, awaiting consent (SPEC §5.7).
 struct PendingReexport: Equatable {

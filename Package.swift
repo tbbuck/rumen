@@ -1,15 +1,17 @@
 // swift-tools-version: 6.0
 import PackageDescription
 
-// ArcGISCore: the headless engine + kit layer, testable with `swift test`.
+// RumenCore: the headless engine + kit layer, testable with `swift test`.
 //
 // - SQLiteKit wraps the system SQLite: the app database (metadata cache, download
 //   bookkeeping) and the migration runner. Boring storage for boring data.
 // - CDuckDB / DuckDBKit wrap the locally-installed libduckdb (Homebrew, v1.5.5) via its C
 //   API — copied from DuckLake Explorer, plus an Appender and prepared statements. DuckDB
 //   is the spatial and data engine: extent reprojection, download staging, export, map.
-// - ArcGISKit holds everything ArcGIS: URL normalisation, REST client, crawler, PBF
-//   decoding, extractability, download planning, and the app database. No UI, no AppKit.
+// - RumenKit is the whole engine: URL normalisation, the ArcGIS REST client and the OGC
+//   (WMS/WFS/WMTS) client, the crawlers, PBF and JSON decoding, extractability, download
+//   planning, export, and the app database. No UI, no AppKit. The ArcGIS-prefixed files
+//   are the Esri protocol layer; OGC.swift and its neighbours are the other one.
 //
 // The macOS app (see project.yml) links the products. Homebrew's dylib has an absolute
 // install name, so no rpath is needed for local development; scripts/bundle-duckdb-engine.sh
@@ -17,12 +19,12 @@ import PackageDescription
 let duckdbLib = "/opt/homebrew/opt/duckdb/lib"
 
 let package = Package(
-    name: "ArcGISCore",
+    name: "RumenCore",
     platforms: [.macOS("26.0")],
     products: [
         .library(name: "SQLiteKit", targets: ["SQLiteKit"]),
         .library(name: "DuckDBKit", targets: ["DuckDBKit"]),
-        .library(name: "ArcGISKit", targets: ["ArcGISKit"]),
+        .library(name: "RumenKit", targets: ["RumenKit"]),
     ],
     dependencies: [
         // Esri PBF FeatureCollection decoding (SPEC §5.6). Generated Swift is committed.
@@ -43,7 +45,7 @@ let package = Package(
             ]
         ),
         .target(
-            name: "ArcGISKit",
+            name: "RumenKit",
             dependencies: [
                 "SQLiteKit",
                 "DuckDBKit",
@@ -63,6 +65,6 @@ let package = Package(
         ),
         .testTarget(name: "SQLiteKitTests", dependencies: ["SQLiteKit"]),
         .testTarget(name: "DuckDBKitTests", dependencies: ["DuckDBKit"]),
-        .testTarget(name: "ArcGISKitTests", dependencies: ["ArcGISKit"]),
+        .testTarget(name: "RumenKitTests", dependencies: ["RumenKit"]),
     ]
 )

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Build → bundle engine → Developer ID sign (hardened runtime) → self-test → notarize →
-# staple → DMG. Produces a distributable, notarized "ArcGIS Explorer.dmg" whose app runs on a
+# staple → DMG. Produces a distributable, notarized "Rumen.dmg" whose app runs on a
 # clean Mac with no Homebrew or DuckDB installed (M9, as in DuckLake Explorer).
 #
 # Requirements:
@@ -23,12 +23,12 @@
 set -euo pipefail
 
 R="$(cd "$(dirname "$0")/.." && pwd)"
-SCHEME=ArcGISExplorer
+SCHEME=Rumen
 CONFIG=Release
-APP_NAME="ArcGIS Explorer"
+APP_NAME="Rumen"
 IDENTITY="${CODESIGN_IDENTITY:-Developer ID Application}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-arcgis-notary}"
-ENTITLEMENTS="$R/Config/ArcGISExplorer.entitlements"
+ENTITLEMENTS="$R/Config/Rumen.entitlements"
 
 BUILD_DIR="${BUILD_DIR:-$R/build}"
 DDP="$BUILD_DIR/DerivedData"
@@ -41,7 +41,7 @@ mkdir -p "$BUILD_DIR"
 
 echo "==> 1/6  Generate + build ($CONFIG)"
 xcodegen generate
-xcodebuild -project ArcGISExplorer.xcodeproj -scheme "$SCHEME" -configuration "$CONFIG" \
+xcodebuild -project Rumen.xcodeproj -scheme "$SCHEME" -configuration "$CONFIG" \
   -derivedDataPath "$DDP" -quiet clean build
 
 echo "==> 2/6  Bundle libduckdb"

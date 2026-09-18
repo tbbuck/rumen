@@ -72,5 +72,5 @@ jobs:
       - name: Attach DMG to the GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: build/ArcGIS Explorer.dmg
+          files: build/Rumen.dmg
           fail_on_unmatched_files: true

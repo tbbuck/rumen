@@ -1,4 +1,4 @@
-name: ArcGISExplorer
+name: Rumen
 options:
   bundleIdPrefix: com.moomoomoo
   deploymentTarget:
@@ -20,11 +20,11 @@ settings:
     CURRENT_PROJECT_VERSION: "1"
 
 packages:
-  ArcGISCore:
+  RumenCore:
     path: .
 
 targets:
-  ArcGISExplorer:
+  Rumen:
     type: application
     platform: macOS
     sources:
@@ -37,10 +37,10 @@ targets:
         buildPhase: resources
         type: file
     dependencies:
-      - package: ArcGISCore
+      - package: RumenCore
         product: DuckDBKit
-      - package: ArcGISCore
-        product: ArcGISKit
+      - package: RumenCore
+        product: RumenKit
     # MapTiler key comes from Config/maptiler.xcconfig (+ untracked …local.xcconfig); no key
     # is committed. It flows MAPTILER_API_KEY → Info.plist MapTilerAPIKey → MapConfig (M6).
     configFiles:
@@ -48,8 +48,8 @@ targets:
       Release: Config/maptiler.xcconfig
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.moomoomoo.ArcGISExplorer
-        PRODUCT_NAME: ArcGIS Explorer
+        PRODUCT_BUNDLE_IDENTIFIER: com.moomoomoo.Rumen
+        PRODUCT_NAME: Rumen
         # Manual Info.plist (not generated) so the custom MapTilerAPIKey key can be filled by
         # build-setting substitution from $(MAPTILER_API_KEY).
         GENERATE_INFOPLIST_FILE: NO
@@ -69,11 +69,11 @@ targets:
   # Apple's accessibility audit and a launch-time metric, driven through XCUITest against a
   # scratch home (`--home`) and a loopback ArcGIS server the tests synthesise. Run with
   # claude-scripts/ui_test.sh or from Xcode.
-  ArcGISExplorerUITests:
+  RumenUITests:
     type: bundle.ui-testing
     platform: macOS
     sources:
-      - Tests/ArcGISExplorerUITests
+      - Tests/RumenUITests
       # The palette test reads the tokens from the code and the design doc; carried in the
       # bundle so the test also runs on a Mac that has no checkout. Xcode will not copy a
       # Swift source as a resource, so the script below carries it as Theme.txt.
@@ -89,26 +89,26 @@ targets:
         outputFiles:
           - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Theme.txt
     dependencies:
-      - target: ArcGISExplorer
+      - target: Rumen
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.moomoomoo.ArcGISExplorerUITests
+        PRODUCT_BUNDLE_IDENTIFIER: com.moomoomoo.RumenUITests
         GENERATE_INFOPLIST_FILE: YES
         # The runner is sandboxed by Xcode; the tests' loopback server needs the network server side.
-        CODE_SIGN_ENTITLEMENTS: Config/ArcGISExplorerUITests.entitlements
+        CODE_SIGN_ENTITLEMENTS: Config/RumenUITests.entitlements
 
 schemes:
-  ArcGISExplorer:
+  Rumen:
     build:
       targets:
-        ArcGISExplorer: all
-        ArcGISExplorerUITests: [test]
+        Rumen: all
+        RumenUITests: [test]
     run:
       config: Debug
     test:
       config: Debug
       targets:
-        - ArcGISExplorerUITests
+        - RumenUITests
     profile:
       config: Release
     analyze:

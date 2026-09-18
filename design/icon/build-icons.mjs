@@ -39,4 +39,4 @@ for (const c of concepts) {
 await lib.writeConcepts(concepts, here);
 const renders = rendersDir ? await lib.loadRenders(concepts, rendersDir) : null;
 await lib.buildPreview(concepts, previewDir, mod.lede ?? '', renders);
-console.log(`wrote ${concepts.length} concept SVGs and ${bundles} bundles to ${here}, icon-preview.html and arcgis-explorer-icon.html to ${previewDir}${renders ? ' (with actool renders)' : ''}`);
+console.log(`wrote ${concepts.length} concept SVGs and ${bundles} bundles to ${here}, icon-preview.html and rumen-icon.html to ${previewDir}${renders ? ' (with actool renders)' : ''}`);

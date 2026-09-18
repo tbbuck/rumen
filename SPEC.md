@@ -1,4 +1,4 @@
-# ArcGIS Explorer — Specification
+# Rumen — Specification
 
 > Status: **Draft** · 2026-09-16 · Target DuckDB **v1.5.5+** · macOS **26+**
 
@@ -179,7 +179,7 @@ For a selected layer or table:
 **Transport**
 - `f=pbf` when the layer advertises `PBF`; decoded by a SwiftProtobuf-generated
   decoder from Esri's `FeatureCollection.proto` (`arcgis-pbf` repo, Apache-2.0,
-  vendored under `Sources/ArcGISKit/Proto/`). Geometry is dequantised with the
+  vendored under `Sources/RumenKit/Proto/`). Geometry is dequantised with the
   response `transform` (scale, translate, upper-left origin with Y flipped).
 - `f=json` (Esri JSON) otherwise, or when PBF decoding fails for a layer (recorded
   as a per-layer preference so the fallback sticks).
@@ -269,7 +269,7 @@ Coded-value domains are exported as the raw code; an opt-in option (off by defau
   column, in the chosen SR. GeoPackage, FlatGeobuf, and a plain DuckDB file are the same
   one-line additions if ever wanted (the GDAL drivers are present); not offered in v1.
 - Output location: a user-chosen directory (default
-  `~/Documents/ArcGIS Explorer/`), laid out `<server friendly name>/<service>/
+  `~/Documents/Rumen/`), laid out `<server friendly name>/<service>/
   <layer>.<ext>`. Existing files are never overwritten without confirmation.
 - **Exports and downloads never live inside the app database.** The app DB holds
   only the `download` record with the output path and a content hash.
@@ -404,14 +404,14 @@ protocol has one. No filtering, no querying.
 ## 7. Architecture
 
 ### 7.1 Modules
-- **`ArcGISCore`** (SPM package at the repo root, `swift test`-able headlessly):
+- **`RumenCore`** (SPM package at the repo root, `swift test`-able headlessly):
   - **`SQLiteKit`**: a thin wrapper over the system SQLite (WAL journal, prepared
     statements, typed values) and the **migration runner**. The app database lives here.
   - `CDuckDB` system module + **`DuckDBKit`**: copied from DuckLake Explorer as the
     starting point, plus an **Appender** wrapper and prepared statements. DuckDB is the
     spatial and data engine only: extent reprojection, download staging, export, map.
     Extracting a shared package across the two apps is a later, optional refactor.
-  - **`ArcGISKit`**: URL normalisation, REST DTOs, the client (headers, retries,
+  - **`RumenKit`**: URL normalisation, REST DTOs, the client (headers, retries,
     error envelopes, token refresh), the crawler, extractability rules, the PBF
     decoder, Esri JSON and PBF → WKB conversion, strategy selection, and the
     download planner/executor. No UI, no AppKit.
@@ -420,9 +420,9 @@ protocol has one. No filtering, no querying.
   `AppModel`, panes, sheets, preferences.
 
 ### 7.2 App database (SQLite, one file)
-Located at `~/Library/Application Support/ArcGIS Explorer/explorer.sqlite`, WAL journal
+Located at `~/Library/Application Support/Rumen/explorer.sqlite`, WAL journal
 mode. Timestamps are INTEGER microseconds since the Unix epoch; booleans INTEGER 0/1. Schema is
-owned by numbered SQL migration files in `Sources/ArcGISKit/Migrations/`
+owned by numbered SQL migration files in `Sources/RumenKit/Migrations/`
 (`0001_initial.sql`, …), applied in order by the runner and recorded in
 `schema_migrations`. **No ad-hoc DDL anywhere else.**
 
@@ -497,9 +497,9 @@ owned by `AppDatabase`). DuckDB never holds app state.
 - Release (M9): `scripts/release.sh` builds Release, bundles `libduckdb` into
   `Contents/Frameworks` (`scripts/bundle-duckdb-engine.sh`, rewriting the install name and
   rpath so Homebrew is not needed), signs with Developer ID and the hardened runtime under
-  `Config/ArcGISExplorer.entitlements` (only `disable-library-validation`, for the
+  `Config/Rumen.entitlements` (only `disable-library-validation`, for the
   DuckDB-signed extension), runs the signed binary's `--selftest` (which installs `spatial`
-  into `~/Library/Application Support/ArcGIS Explorer/duckdb-extensions` on a clean Mac and
+  into `~/Library/Application Support/Rumen/duckdb-extensions` on a clean Mac and
   reprojects a point), notarises and staples, and packages a DMG. `.github/workflows/
   release.yml` runs it on a `v*` tag and attaches the DMG to a GitHub Release; the secrets it
   needs are listed at the top of the file. `SKIP_NOTARIZE=1` runs everything but the
@@ -509,7 +509,7 @@ owned by `AppDatabase`). DuckDB never holds app state.
   `protoc`.
 
 ## 8. Testing strategy
-- **Unit** (in `Tests/ArcGISKitTests`, no network): URL normalisation table;
+- **Unit** (in `Tests/RumenKitTests`, no network): URL normalisation table;
   extractability rules over recorded layer JSON (Feature, Group, Raster, table,
   no-Query, PBF/JSON variants); strategy selection over capability combinations;
   PBF decode of recorded responses, including dequantisation against the same

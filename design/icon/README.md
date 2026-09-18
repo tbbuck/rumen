@@ -18,11 +18,11 @@ scripts/render-app-icon.sh                                                      
 | File | Role |
 |---|---|
 | `concepts.mjs` | **The design and every decision in it**: palette, the sheet, flap, grid and extent geometry, the layers (bottom first) and a hand-tuned `small` variant for 32px and below. Locator, unbuilt, lives here too. |
-| `export-app-icon.mjs` | CLI: `node design/icon/export-app-icon.mjs <concepts.mjs> <key> <out-dir>`. Writes the chosen concept as `AppIcon.icon`, `ArcGISExplorer-icon.svg` and `ArcGISExplorer-icon-small.svg` for the app. |
+| `export-app-icon.mjs` | CLI: `node design/icon/export-app-icon.mjs <concepts.mjs> <key> <out-dir>`. Writes the chosen concept as `AppIcon.icon`, `Rumen-icon.svg` and `Rumen-icon-small.svg` for the app. |
 | `<key>.svg`, `<key>-small.svg` | Flat masters (1024px, squircle tile baked in), generated for review. The `-small` master is the 32/16px art. |
 | `bundles/<Name>.icon/` | Icon Composer bundle derived from the same layers, generated for review: `icon.json` + one full-canvas SVG per layer under `Assets/`. `flatOnly` layers (soft shadows, which may use `blur`) are left out because the group shadow does that job. Delete the folder before a build that renames layers. |
 | `icon-lib.mjs` | The mechanics: Apple's squircle tile, the 1024px flat-master wrapper, lon/lat → tile-px projection, clip-free drawing helpers (dashes, rings, grids, ticks, ribbons and Chaikin smoothing as filled paths; Sutherland–Hodgman clipping to convex shapes), the layered-concept → flat master + bundle derivation, and the preview-page builder. |
-| `build-icons.mjs` | CLI: `node design/icon/build-icons.mjs design/icon/concepts.mjs <preview-dir> [renders-dir]`. Writes the SVGs and bundles here and `icon-preview.html` (standalone) + `arcgis-explorer-icon.html` (Artifact fragment) to the preview dir; with a renders dir it embeds the actool output too. |
+| `build-icons.mjs` | CLI: `node design/icon/build-icons.mjs design/icon/concepts.mjs <preview-dir> [renders-dir]`. Writes the SVGs and bundles here and `icon-preview.html` (standalone) + `rumen-icon.html` (Artifact fragment) to the preview dir; with a renders dir it embeds the actool output too. |
 | `geography.sql`, `geography.json`, `geography-bold.json` | DuckDB spatial + httpfs query against Overture Maps division areas: Great Britain and Ireland as land polygons, generalised to logo grade at two strengths. Committed output. Derived from OpenStreetMap (ODbL): a "Contains OpenStreetMap data" credit belongs in About if it ships. |
 
 Review tooling outside the repo (ignored, under `claude-scripts/`):

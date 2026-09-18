@@ -1,6 +1,6 @@
 import SwiftUI
 import AppKit
-import ArcGISKit
+import RumenKit
 
 /// Replaces the layer page while the search field has text (SPEC §5.8): options, results,
 /// and a banner naming what the results cannot see. Double-click navigates and clears.

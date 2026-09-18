@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Bundle libduckdb into a built "ArcGIS Explorer.app" and rewrite install names so the app needs
+# Bundle libduckdb into a built "Rumen.app" and rewrite install names so the app needs
 # no Homebrew at runtime. Idempotent: safe to run repeatedly on the same bundle.
 #
 # Only libduckdb is bundled. The spatial extension is NOT: a .duckdb_extension carries a
@@ -11,7 +11,7 @@
 #
 # It does NOT codesign; signing and notarization live in scripts/release.sh.
 #
-#   Usage: scripts/bundle-duckdb-engine.sh "/path/to/ArcGIS Explorer.app"
+#   Usage: scripts/bundle-duckdb-engine.sh "/path/to/Rumen.app"
 #
 # Optional override (CI or non-standard installs):
 #   DUCKDB_LIB=/abs/libduckdb.dylib   pin the source dylib explicitly

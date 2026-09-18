@@ -17,7 +17,7 @@ enum EngineSupport {
         let bundledLibrary = Bundle.main.bundleURL.appendingPathComponent("Contents/Frameworks/libduckdb.dylib")
         guard FileManager.default.fileExists(atPath: bundledLibrary.path) else { return nil }
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let directory = support.appendingPathComponent("ArcGIS Explorer/duckdb-extensions", isDirectory: true)
+        let directory = support.appendingPathComponent("Rumen/duckdb-extensions", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory.path
     }
@@ -38,7 +38,7 @@ enum EngineSupport {
 /// Mac), and reprojects one point through the CRS registry, then exits. Run the signed binary
 /// directly so library validation is enforced:
 ///
-///   "ArcGIS Explorer.app/Contents/MacOS/ArcGIS Explorer" --selftest
+///   "Rumen.app/Contents/MacOS/Rumen" --selftest
 ///
 /// Exits 0 on success, 1 on failure, with the engine's own message on stderr.
 enum SelfTest {

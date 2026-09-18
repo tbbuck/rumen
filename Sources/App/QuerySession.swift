@@ -1,6 +1,6 @@
 import Foundation
 import Observation
-import ArcGISKit
+import RumenKit
 
 /// The Query tab's state for one layer: the options, the last result, paging, history.
 /// Read-only against the server by construction — it only ever calls `query`.

@@ -1,6 +1,6 @@
 import SwiftUI
 import AppKit
-import ArcGISKit
+import RumenKit
 
 /// What the outline mirrors from the model, read in SwiftUI so a change reaches `updateNSView`.
 struct TreeState: Equatable {

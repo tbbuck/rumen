@@ -1,6 +1,6 @@
 import Foundation
 import Observation
-import ArcGISKit
+import RumenKit
 
 /// The Map tab's state for one layer: what is drawn (a server sample, a stored download, or
 /// the query preview), the extent, the graticule for the current viewport, and the feature

@@ -1,5 +1,5 @@
 import SwiftUI
-import ArcGISKit
+import RumenKit
 
 /// The window: title bar with the path bar, then the tree beside the page, then the
 /// transfers strip — the Directory layout.
@@ -41,7 +41,7 @@ struct ExplorerView: View {
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.showTransfers)
         .background(Palette.bg)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("ArcGIS Explorer")
+        .accessibilityLabel("Rumen")
         .ignoresSafeArea(.container, edges: .top)
         .onAppear { FieldFocus.install(); TitleBarZoom.install(model: model); HostingViews.install(model: model); FieldFocus.clearInitialFocus() }
         .sheet(item: $model.pendingAdd) { pending in
@@ -276,7 +276,7 @@ enum FieldFocus {
 /// The AppKit view that hosts a window's SwiftUI content sits in the accessibility tree as a
 /// nameless group between the window and the app's own named root, and the audit reported
 /// each one as an element without a description (Apple's own SwiftUI apps show the same).
-/// AppKit keeps it an element, so it is named for what it holds: "ArcGIS Explorer window",
+/// AppKit keeps it an element, so it is named for what it holds: "Rumen window",
 /// "Preferences window", "Add a server sheet". Every window that becomes key is covered:
 /// the main window, each sheet, and Preferences.
 @MainActor
@@ -306,7 +306,7 @@ final class HostingViews: NSObject {
             let which = model?.pendingAdd != nil ? "Add a server" : model?.settingsServer != nil ? "Server settings" : nil
             content.setAccessibilityLabel(which.map { "\($0) sheet" } ?? "Sheet")
         } else {
-            content.setAccessibilityLabel(window.title.isEmpty ? "ArcGIS Explorer window" : "\(window.title) window")
+            content.setAccessibilityLabel(window.title.isEmpty ? "Rumen window" : "\(window.title) window")
         }
     }
 }

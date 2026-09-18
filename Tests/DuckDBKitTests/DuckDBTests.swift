@@ -78,7 +78,7 @@ final class DuckDBTests: XCTestCase {
 
     /// A file-backed database persists across opens.
     func testFileDatabasePersists() throws {
-        let path = NSTemporaryDirectory() + "arcgis-explorer-\(UUID().uuidString).duckdb"
+        let path = NSTemporaryDirectory() + "rumen-\(UUID().uuidString).duckdb"
         defer { try? FileManager.default.removeItem(atPath: path) }
         do {
             let db = try DuckDB(path: path)

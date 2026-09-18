@@ -1,4 +1,4 @@
-# ArcGIS Explorer — Sheet design tokens
+# Rumen — Sheet design tokens
 
 > Status: **Accepted** · 2026-09-16 · The exact palette, type, spacing and effect
 > values behind the **Sheet** design language, as prototyped on the design canvas

@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 import AppKit
 import Observation
-import ArcGISKit
+import RumenKit
 import SQLiteKit
 
 /// One visible tree row: a node plus its indent. Indents follow DESIGN-TOKENS: folders and
@@ -141,6 +141,9 @@ final class AppModel {
     /// do with a broken app database but say so.
     func start() async {
         do {
+            // Before anything creates the new support folder: carry across an install that
+            // still keeps its state under the old name. A scratch home has nothing to adopt.
+            if !AppPaths.isScratch { try AppDatabase.adoptLegacySupportDirectory() }
             try EngineSupport.install()   // before any DuckDB opens: the packaged build's extension folder
             let db = try AppDatabase(path: AppPaths.database.path)
             try await db.migrate()

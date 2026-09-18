@@ -48,12 +48,16 @@ struct TransferRun: Identifiable, Equatable {
     /// Split chunks are replaced by their halves, so they do not count.
     var chunksPlanned: Int { chunks.filter { $0 != .split }.count }
 
-    /// "138 of 207 requests, 4.2k features/s, 1:40 left" while running; a summary otherwise.
+    /// "138 of 207 requests, 3 × 800 @ 2.4s, 4.2k features/s, 1:40 left" while running; a
+    /// summary otherwise. The middle part is what the run is currently asking of the server —
+    /// requests in flight, features per request, and how long the last one took — so a slow rate
+    /// can be read against what produced it.
     var stats: String {
         switch status {
         case .running:
             guard let p = progress else { return "Starting…" }
             var parts = ["\(p.chunksDone.grouped) of \(p.chunksTotal.grouped) requests"]
+            if let shape = Self.shape(p) { parts.append(shape) }
             if let started = startedRunningAt {
                 let elapsed = Date().timeIntervalSince(started)
                 if elapsed > 1, p.features > 0 {
@@ -80,6 +84,24 @@ struct TransferRun: Identifiable, Equatable {
         case .planned:
             return "Planned, not started."
         }
+    }
+
+    /// "3 × 800 @ 2.4s": requests in flight, features per request, and the last request's time.
+    /// Each part is left out when there is nothing to say — a WFS fetched in one request has no
+    /// page size, and nothing has a latency until the first request comes back.
+    static func shape(_ p: DownloadProgress) -> String? {
+        var shape = ""
+        if let concurrency = p.concurrency, let pageSize = p.pageSize {
+            shape = "\(concurrency) × \(pageSize.grouped)"
+        } else if let pageSize = p.pageSize {
+            shape = "\(pageSize.grouped) per request"
+        } else if let concurrency = p.concurrency {
+            shape = "\(concurrency) at a time"
+        }
+        guard let latency = p.latency else { return shape.isEmpty ? nil : shape }
+        let time = latency < 10 ? "\(latency.formatted(.number.precision(.fractionLength(1))))s"
+                                : "\(Int(latency.rounded()))s"
+        return shape.isEmpty ? time : "\(shape) @ \(time)"
     }
 
     static func clock(_ seconds: Double) -> String {

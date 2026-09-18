@@ -211,11 +211,16 @@ extension DownloadEngine {
         var failed = 0
         var features = chunks.filter { $0.status == .done }.reduce(Int64(0)) { $0 + ($1.count ?? 0) }
         var bytes = record.bytes ?? 0
+        let host = ArcGISURL.origin(of: server.rootURL)
+        var lastLatency: TimeInterval?
+        var hostWidth: Int?
         func report(_ status: DownloadStatus, inFlight: Int, message: String? = nil) {
             let issued = chunks.filter { $0.status != .split }.count
             progress(DownloadProgress(downloadID: id, status: status, chunksDone: done,
                                       chunksTotal: issued + feed.remainingRequests(at: pager.value),
-                                      chunksInFlight: inFlight, chunksFailed: failed, features: features, bytes: bytes, message: message))
+                                      chunksInFlight: inFlight, chunksFailed: failed, features: features, bytes: bytes,
+                                      message: message, pageSize: record.strategy == .single ? nil : pager.value,
+                                      concurrency: hostWidth, latency: lastLatency))
         }
         report(.running, inFlight: 0)
 
@@ -318,6 +323,8 @@ extension DownloadEngine {
                     features += Int64(appended)
                     bytes += Int64(page.bytes)
                     pager.succeeded(AdaptiveLimit.Sample(work: Double(appended), elapsed: page.elapsed, budget: page.budget))
+                    lastLatency = page.elapsed
+                    hostWidth = await client.concurrencyLimit(forHost: host)
                     report(.running, inFlight: inFlight)
                     try await refill()
                 }

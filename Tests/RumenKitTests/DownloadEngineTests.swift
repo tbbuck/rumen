@@ -117,6 +117,14 @@ private final class StubLayer: @unchecked Sendable {
     }
 }
 
+/// Progress arrives from the engine's own task, so collect it under a lock.
+private final class ProgressLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = [DownloadProgress]()
+    func append(_ p: DownloadProgress) { lock.withLock { storage.append(p) } }
+    var all: [DownloadProgress] { lock.withLock { storage } }
+}
+
 final class DownloadEngineTests: XCTestCase {
 
     private var scratch: URL!
@@ -454,6 +462,31 @@ extension DownloadEngineTests {
         let secondChunks = try await db.chunks(downloadID: second.id)
         XCTAssertEqual(secondChunks.map(\.limit), [2_000, 1_000],
                        "the second run opens at what the host was last seen to manage")
+    }
+
+    /// The transfers drawer shows what the run is currently asking of the server, so a slow rate
+    /// can be read against what produced it rather than being a mystery.
+    func testProgressReportsWhatIsBeingAskedOfTheServer() async throws {
+        stub.pageSize = 2_000
+        stub.featureCount = 3_000
+        try await recrawlLayer()
+        await engine.setConcurrency(1)
+
+        let reports = ProgressLog()
+        let planned = try await engine.start(request()) { reports.append($0) }
+        let record = try await engine.wait(downloadID: planned.id)
+        XCTAssertEqual(record.status, .complete, record.error ?? "")
+
+        let afterAChunk = reports.all.filter { $0.status == .running && $0.chunksDone > 0 }
+        let last = try XCTUnwrap(afterAChunk.last)
+        XCTAssertEqual(last.pageSize, 2_000, "the size it climbed to, not the floor it opened at")
+        XCTAssertNotNil(last.concurrency, "what the host is currently allowed")
+        let latency = try XCTUnwrap(last.latency)
+        XCTAssertGreaterThanOrEqual(latency, 0)
+
+        // The size is reported as it moves, not only at the end.
+        let sizes = afterAChunk.compactMap(\.pageSize)
+        XCTAssertGreaterThan(Set(sizes).count, 1, "the reported size follows the climb")
     }
 
     /// Splitting answers "that was too much to ask for" and nothing else. A bad field name is

@@ -35,6 +35,13 @@ public struct DownloadProgress: Sendable, Equatable {
     public let features: Int64
     public let bytes: Int64
     public let message: String?
+    /// Features asked for per request right now — the climbing page size, not the server's
+    /// advertised ceiling.
+    public var pageSize: Int? = nil
+    /// Requests in flight the host is currently allowed.
+    public var concurrency: Int? = nil
+    /// How long the last request took, so the two numbers above can be read against it.
+    public var latency: TimeInterval? = nil
 }
 
 /// Plans and runs downloads (SPEC §5.6): probes, picks chunks, fetches them in parallel with
@@ -284,11 +291,15 @@ public actor DownloadEngine {
         // The request count is not known while the page size is still moving, so the total is
         // what has been handed out plus an estimate of what is left at the size in force. It
         // firms up within a few requests, as the size settles.
+        var lastLatency: TimeInterval?
+        var hostWidth: Int?
         func report(_ status: DownloadStatus, inFlight: Int, message: String? = nil) {
             let issued = chunks.filter { $0.status != .split }.count
             progress(DownloadProgress(downloadID: id, status: status, chunksDone: done,
                                       chunksTotal: issued + feed.remainingRequests(at: pager.value),
-                                      chunksInFlight: inFlight, chunksFailed: failed, features: features, bytes: bytes, message: message))
+                                      chunksInFlight: inFlight, chunksFailed: failed, features: features, bytes: bytes,
+                                      message: message, pageSize: pager.value, concurrency: hostWidth,
+                                      latency: lastLatency))
         }
         report(.running, inFlight: 0)
 
@@ -446,6 +457,8 @@ public actor DownloadEngine {
                     // its time budget it used, and how many features per second it carried.
                     pager.succeeded(AdaptiveLimit.Sample(work: Double(appended), elapsed: fetched.elapsed,
                                                          budget: fetched.budget))
+                    lastLatency = fetched.elapsed
+                    hostWidth = await client.concurrencyLimit(forHost: host)
                     report(.running, inFlight: inFlight)
                     try await refill()
                 }

@@ -277,9 +277,34 @@ public actor Crawler {
                 progress?(.layer(name: definition.name))
             }
         }
-        for record in summaries where !stored.contains(record.layerID) {
-            try Task.checkCancellation()
-            try await crawlLayer(layerID: record.id, connection: conn, serviceURL: service.url, progress: progress)
+        // The per-layer fallback, for a service whose bulk `layers` endpoint is missing or
+        // incomplete. This used to be strictly sequential, so a MapServer with a hundred layers
+        // — the shape most likely to lack the bulk endpoint in the first place, since it is the
+        // older servers that do — cost a hundred round trips end to end. They go out together
+        // now, bounded by what the host has shown it can take rather than by a number here.
+        let remaining = summaries.filter { !stored.contains($0.layerID) }
+        guard !remaining.isEmpty else { return }
+        let host = ArcGISURL.origin(of: service.url)
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            var pending = remaining[...]
+            var inFlight = 0
+            func fill() async {
+                let width = max(1, await client.concurrencyLimit(forHost: host))
+                while inFlight < width, let record = pending.popFirst() {
+                    group.addTask { [self] in
+                        try await crawlLayer(layerID: record.id, connection: conn, serviceURL: service.url,
+                                             progress: progress)
+                    }
+                    inFlight += 1
+                }
+            }
+            await fill()
+            while inFlight > 0 {
+                _ = try await group.next()
+                inFlight -= 1
+                try Task.checkCancellation()
+                await fill()
+            }
         }
     }
 
@@ -312,14 +337,21 @@ public actor Crawler {
     /// Services crawled within `skipFresh` are skipped, so re-running after a cancel resumes
     /// where it stopped rather than starting over.
     @discardableResult
-    public func deepCrawl(serverID: Int64, skipFresh: TimeInterval = 3600, concurrency: Int = 4,
+    public func deepCrawl(serverID: Int64, skipFresh: TimeInterval = 3600,
                           progress: (@Sendable (CrawlEvent) -> Void)? = nil) async throws -> [CrawlEvent] {
         try await shallowCrawl(serverID: serverID, progress: progress)
+        let server = try await db.server(id: serverID)
+        let host = ArcGISURL.origin(of: server.rootURL)
         let cutoff = Date().addingTimeInterval(-skipFresh)
         let services = try await db.services(serverID: serverID).filter { service in
             service.type.hasLayers && (service.fetchedAt.map { $0 < cutoff } ?? true)
         }
-        let width = max(1, concurrency)
+        // What this used to declare as a fixed 4 is now the host's own discovered limit, read
+        // afresh on every refill so a crawl of 3,900 services widens as the server proves it can
+        // cope and narrows the moment it cannot.
+        if let remembered = try await db.capacity(host: host)?.concurrency {
+            await client.seedConcurrency(remembered, forHost: host)
+        }
         var failures = [CrawlEvent]()
         try await withThrowingTaskGroup(of: CrawlEvent?.self) { group in
             var pending = services[...]
@@ -341,16 +373,23 @@ public actor Crawler {
                 }
                 inFlight += 1
             }
-            while inFlight < width, let next = pending.popFirst() { enqueue(next) }
+            func fill() async {
+                let width = max(1, await client.concurrencyLimit(forHost: host))
+                while inFlight < width, let next = pending.popFirst() { enqueue(next) }
+            }
+            await fill()
             while inFlight > 0 {
                 guard let outcome = try await group.next() else { break }
                 inFlight -= 1
                 if let failure = outcome { failures.append(failure) }
                 try Task.checkCancellation()
-                while inFlight < width, let next = pending.popFirst() { enqueue(next) }
+                await fill()
             }
         }
         try await db.markDeepCrawl(serverID: serverID)
+        // A crawl is the longest conversation this app has with a server, so it is the best
+        // evidence of what the host will take. It has nothing to say about a page size.
+        try? await db.recordCapacity(host: host, concurrency: await client.concurrencyLimit(forHost: host))
         return failures
     }
 

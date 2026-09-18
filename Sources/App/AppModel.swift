@@ -479,7 +479,9 @@ final class AppModel {
         deepCrawlStatus = "Listing services…"
         defer { deepCrawlStatus = nil }
         do {
-            let failures = try await crawler.deepCrawl(serverID: server.id, concurrency: preferences.concurrency) { [weak self] event in
+            // No width passed: the preference is already the client's per-host ceiling, and the
+            // crawl widens towards it as the server proves it can cope.
+            let failures = try await crawler.deepCrawl(serverID: server.id) { [weak self] event in
                 Task { @MainActor in
                     guard let self else { return }
                     switch event {

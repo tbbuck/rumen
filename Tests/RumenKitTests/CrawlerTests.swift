@@ -208,6 +208,43 @@ private final class EventLog: @unchecked Sendable {
 }
 
 extension CrawlerTests {
+    /// The Wildfire service has no bulk `layers` endpoint, so its three layer definitions are
+    /// fetched one request each. That fallback used to run strictly sequentially — worst on
+    /// exactly the older servers that lack the bulk endpoint, where a hundred-layer MapServer
+    /// meant a hundred round trips end to end.
+    func testThePerLayerFallbackFetchesInParallel() async throws {
+        let opened = try await crawler.open(root)
+        let services = try await db.services(serverID: opened.server.id)
+        let service = try XCTUnwrap(services.first { $0.name == "Wildfire" && $0.type == .featureServer })
+        let before = transport.maxConcurrent
+        // The stub answers instantly, so nothing ever overlaps in wall-clock time however
+        // parallel it is; a delay is what makes the difference observable at all.
+        transport.delay = .milliseconds(30)
+        defer { transport.delay = .zero }
+
+        try await crawler.crawlService(serviceID: service.id)
+
+        XCTAssertGreaterThan(transport.maxConcurrent, before,
+                             "the layer definitions should go out together, not one after another")
+        let layers = try await db.layers(serviceID: service.id)
+        XCTAssertEqual(layers.filter(\.isCrawled).count, layers.count, "and all of them still land")
+    }
+
+    /// A crawl is the longest conversation the app has with a server, so what it learns about
+    /// the host is worth keeping for the next one.
+    func testADeepCrawlRecordsWhatTheHostCouldTake() async throws {
+        let opened = try await crawler.open(root)
+        let host = ArcGISURL.origin(of: opened.server.rootURL)
+        let before = try await db.capacity(host: host)
+        XCTAssertNil(before, "nothing known before the first crawl")
+
+        _ = try await crawler.deepCrawl(serverID: opened.server.id)
+
+        let after = try await db.capacity(host: host)
+        XCTAssertNotNil(after?.concurrency, "the crawl recorded what the host sustained")
+        XCTAssertNil(after?.pageSize, "a crawl has no opinion on a download's page size")
+    }
+
     func testDeepCrawlSkipsFreshServicesSoItResumes() async throws {
         let opened = try await crawler.open(root)
         _ = try await crawler.deepCrawl(serverID: opened.server.id)
@@ -298,7 +335,7 @@ extension CrawlerTests {
     func testDeepCrawlRunsServicesInParallel() async throws {
         let opened = try await crawler.open(root)
         transport.delay = .milliseconds(15)
-        let failures = try await crawler.deepCrawl(serverID: opened.server.id, concurrency: 4)
+        let failures = try await crawler.deepCrawl(serverID: opened.server.id)
         XCTAssertEqual(failures.count, 1)
         XCTAssertGreaterThan(transport.maxConcurrent, 1, "service crawls overlap")
         XCTAssertLessThanOrEqual(transport.maxConcurrent, 4, "never beyond the client's per-host cap")

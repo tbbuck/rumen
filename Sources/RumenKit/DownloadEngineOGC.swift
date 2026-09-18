@@ -344,6 +344,7 @@ extension DownloadEngine {
                     bytes += Int64(page.bytes)
                     pager.succeeded(AdaptiveLimit.Sample(work: Double(appended), elapsed: page.elapsed, budget: page.budget))
                     lastLatency = page.elapsed
+                    try await refill()          // before reporting, or a busy run reads as 0 in flight
                     report(.running, inFlight: inFlight)
                     try await refill()
                 }

@@ -146,14 +146,16 @@ public enum Extractability {
         }
     }
 
-    /// The server's advertised page size, except for an OID list, where Esri's own guidance is
-    /// that performance falls away past about a thousand ids in one request — the list travels in
-    /// the request body and the server looks each one up.
-    static let objectIDsPerRequest = 1_000
-
+    /// The server's advertised page size, whatever the strategy.
+    ///
+    /// An OID list was briefly capped at a thousand ids per request, on Esri's guidance that
+    /// performance falls away past that. Measured, it does not: Cornwall's planning polygons
+    /// serve 2,000 ids in 0.4s. The cap was also a declaration of the kind this app has spent
+    /// its effort replacing — `AdaptiveLimit` discovers the size a server is actually happy
+    /// with, and backs off when a larger page stops paying for itself, which is a better answer
+    /// than a number from a document.
     static func pageSize(for strategy: Assessment.Strategy, layer: LayerRecord, service: ServiceRecord) -> Int {
-        let advertised = layer.maxRecordCount ?? service.maxRecordCount ?? 1000
-        return strategy == .oidList ? min(advertised, objectIDsPerRequest) : advertised
+        layer.maxRecordCount ?? service.maxRecordCount ?? 1000
     }
 
     /// "PBF through the FeatureServer twin, offset paging at 2,000 records per request."

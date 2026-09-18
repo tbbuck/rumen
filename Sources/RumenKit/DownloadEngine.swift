@@ -302,7 +302,9 @@ public actor DownloadEngine {
         if let manual = requests[id]?.manualPageSize {
             pager = AdaptiveLimit(floor: manual, ceiling: manual)
         } else {
-            pager = .pageSize(ceiling: source.maxRecordCount ?? 1000)
+            // Through the same function the verdict used, so the size the page claims and the
+            // size the run asks for cannot drift apart.
+            pager = .pageSize(ceiling: Extractability.pageSize(for: record.strategy, layer: source, service: service))
             // What this host coped with last time, so the climb is not repeated from scratch on
             // every run. It is a starting point: the layer's ceiling still bounds it, and a
             // refusal still takes it straight back down.
@@ -530,8 +532,11 @@ public actor DownloadEngine {
                     pager.succeeded(AdaptiveLimit.Sample(work: Double(appended), elapsed: fetched.elapsed,
                                                          budget: fetched.budget))
                     lastLatency = fetched.elapsed
-                    report(.running, inFlight: inFlight)
+                    // Refill first: reporting between a chunk finishing and the next going out
+                    // shows nothing in flight, so a run at full tilt reads as "0/1" and looks
+                    // stalled.
                     try await refill()
+                    report(.running, inFlight: inFlight)
                 }
                 return useJSON && !startedAsJSON
             }

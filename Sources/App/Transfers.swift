@@ -114,11 +114,15 @@ struct TransferRun: Identifiable, Equatable {
         return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
     }
 
-    /// "ONS: Census / states, where 1=1, WGS 84, GeoParquet" — or the output path once done.
+    /// "ONS: Census / states, WGS 84, GeoParquet" — or the output path once done. A where clause
+    /// appears only when it is actually filtering: `1=1` is how "everything" is spelled to a
+    /// server, and repeating it on every row says nothing.
     var targetLine: String {
         if status == .complete, let path = record.outputPath { return path }
         let sr = record.outWkid == 4326 ? "WGS 84" : "EPSG:\(record.outWkid)"
-        return "\(serverName): \(serviceName) / \(layerName), where \(record.whereClause), \(sr), \(record.format.label)"
+        let clause = record.whereClause.trimmingCharacters(in: .whitespacesAndNewlines)
+        let filter = (clause.isEmpty || clause == "1=1") ? "" : "where \(clause), "
+        return "\(serverName): \(serviceName) / \(layerName), \(filter)\(sr), \(record.format.label)"
     }
 }
 

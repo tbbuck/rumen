@@ -93,6 +93,7 @@ extension AppDatabase {
             try query("DELETE FROM layer WHERE service_id IN (SELECT id FROM service WHERE server_id = ?);", [.int(id)])
             try query("DELETE FROM service WHERE server_id = ?;", [.int(id)])
             try query("DELETE FROM folder WHERE server_id = ?;", [.int(id)])
+            try query("DELETE FROM server_capacity WHERE server_id = ?;", [.int(id)])
             try query("DELETE FROM server WHERE id = ?;", [.int(id)])
             try execScript("COMMIT;")
         } catch {
@@ -563,9 +564,9 @@ extension AppDatabase {
     }
 }
 
-// MARK: - Learned host capacity
+// MARK: - Learned server capacity
 
-/// What a host sustained last time, as a starting point rather than a promise.
+/// What a server sustained last time, as a starting point rather than a promise.
 public struct ServerCapacity: Sendable, Equatable {
     public let concurrency: Int?
     public let pageSize: Int?
@@ -577,10 +578,15 @@ public struct ServerCapacity: Sendable, Equatable {
 }
 
 extension AppDatabase {
-    /// What the host was last seen to cope with, if this app has met it before.
-    public func capacity(host: String) throws -> ServerCapacity? {
-        guard let row = try query("SELECT concurrency, page_size FROM server_capacity WHERE host = ?;",
-                                  [.string(host)]).rows.first else { return nil }
+    /// What this server was last seen to cope with, if a run has finished against it before.
+    ///
+    /// The registered server, not the host: `services-eu1.arcgis.com` is one machine to DNS and
+    /// thousands of unrelated organisations to everyone else, and one tenant's slow layer has no
+    /// business deciding how another tenant's download opens. Requests in flight are still
+    /// counted per origin while a run is going, so the box is treated no less gently.
+    public func capacity(serverID: Int64) throws -> ServerCapacity? {
+        guard let row = try query("SELECT concurrency, page_size FROM server_capacity WHERE server_id = ?;",
+                                  [.int(serverID)]).rows.first else { return nil }
         let concurrency = row.first?.intValue
         let pageSize = row.count > 1 ? row[1].intValue : nil
         guard concurrency != nil || pageSize != nil else { return nil }
@@ -589,17 +595,17 @@ extension AppDatabase {
 
     /// Records what a finished run settled on. Either number may be left out, so a run that
     /// learned nothing about one of them does not overwrite what another run knew.
-    public func recordCapacity(host: String, concurrency: Int? = nil, pageSize: Int? = nil) throws {
+    public func recordCapacity(serverID: Int64, concurrency: Int? = nil, pageSize: Int? = nil) throws {
         guard concurrency != nil || pageSize != nil else { return }
         try query("""
-            INSERT INTO server_capacity (host, concurrency, page_size, updated_at)
+            INSERT INTO server_capacity (server_id, concurrency, page_size, updated_at)
             VALUES (?, ?, ?, datetime('now'))
-            ON CONFLICT (host) DO UPDATE SET
+            ON CONFLICT (server_id) DO UPDATE SET
                 concurrency = coalesce(excluded.concurrency, server_capacity.concurrency),
                 page_size   = coalesce(excluded.page_size, server_capacity.page_size),
                 updated_at  = excluded.updated_at;
             """,
-            [.string(host), concurrency.map { SQLBind.int(Int64($0)) } ?? .null,
+            [.int(serverID), concurrency.map { SQLBind.int(Int64($0)) } ?? .null,
              pageSize.map { SQLBind.int(Int64($0)) } ?? .null])
     }
 }

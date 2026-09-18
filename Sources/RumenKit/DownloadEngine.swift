@@ -305,10 +305,10 @@ public actor DownloadEngine {
             // Through the same function the verdict used, so the size the page claims and the
             // size the run asks for cannot drift apart.
             pager = .pageSize(ceiling: Extractability.pageSize(for: record.strategy, layer: source, service: service))
-            // What this host coped with last time, so the climb is not repeated from scratch on
+            // What this server coped with last time, so the climb is not repeated from scratch on
             // every run. It is a starting point: the layer's ceiling still bounds it, and a
             // refusal still takes it straight back down.
-            if let remembered = try await db.capacity(host: host) {
+            if let remembered = try await db.capacity(serverID: server.id) {
                 if let size = remembered.pageSize { pager.adopt(size) }
                 if let slots = remembered.concurrency { await client.seedConcurrency(slots, forHost: host) }
             }
@@ -546,9 +546,9 @@ public actor DownloadEngine {
                 try await db.setLayerTransport(layerID: source.id, transport: Assessment.Transport.json.rawValue)
             }
             // What the run settled on, for the next one to start from. Recorded only when the
-            // size was free to move: a size the user pinned says nothing about the host.
+            // size was free to move: a size the user pinned says nothing about the server.
             if requests[id]?.manualPageSize == nil {
-                try? await db.recordCapacity(host: host, concurrency: await client.concurrencyLimit(forHost: host),
+                try? await db.recordCapacity(serverID: server.id, concurrency: await client.concurrencyLimit(forHost: host),
                                              pageSize: pager.value)
             }
         } catch is CancellationError {

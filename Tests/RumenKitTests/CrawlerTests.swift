@@ -247,17 +247,16 @@ extension CrawlerTests {
     }
 
     /// A crawl is the longest conversation the app has with a server, so what it learns about
-    /// the host is worth keeping for the next one.
-    func testADeepCrawlRecordsWhatTheHostCouldTake() async throws {
+    /// that server is worth keeping for the next one.
+    func testADeepCrawlRecordsWhatTheServerCouldTake() async throws {
         let opened = try await crawler.open(root)
-        let host = ArcGISURL.origin(of: opened.server.rootURL)
-        let before = try await db.capacity(host: host)
+        let before = try await db.capacity(serverID: opened.server.id)
         XCTAssertNil(before, "nothing known before the first crawl")
 
         _ = try await crawler.deepCrawl(serverID: opened.server.id)
 
-        let after = try await db.capacity(host: host)
-        XCTAssertNotNil(after?.concurrency, "the crawl recorded what the host sustained")
+        let after = try await db.capacity(serverID: opened.server.id)
+        XCTAssertNotNil(after?.concurrency, "the crawl recorded what the server sustained")
         XCTAssertNil(after?.pageSize, "a crawl has no opinion on a download's page size")
     }
 

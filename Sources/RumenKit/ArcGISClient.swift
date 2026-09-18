@@ -104,9 +104,16 @@ public enum ArcGISClientError: Error, CustomStringConvertible, Equatable {
         }
     }
 
-    /// Whether this failure is the host saying "too much": the signal that drives the per-host
-    /// concurrency back down. A 404 or a bad where clause says nothing about capacity, so it
-    /// does not count — only overload, timeouts, and the gateway errors a struggling box emits.
+    /// Whether this failure is the host saying "too much": the signal that shrinks a page size
+    /// and drives the per-host concurrency back down. A 404 or a bad where clause says nothing
+    /// about capacity, so it does not count.
+    ///
+    /// A `transport` failure is deliberately *not* here, because the case alone cannot say. A
+    /// connection that dies after ninety seconds is a server that could not build what was asked
+    /// for; one that dies in sixty milliseconds is a flaky hop, and treating the two alike is how
+    /// a page size ends up pinned at its floor on a server that was never asked for too much.
+    /// `ArcGISClient.isPushback(_:after:)` decides, because only it knows how long the attempt
+    /// took.
     var isPushback: Bool {
         switch self {
         case .http(let status, _): return status == 408 || status == 429 || (500...504).contains(status)
@@ -116,13 +123,15 @@ public enum ArcGISClientError: Error, CustomStringConvertible, Equatable {
             // operation") is the usual answer to a page the server could not build in time.
             if let code, code == 429 || (500...504).contains(code) { return true }
             return message.lowercased().contains("timeout") || message.lowercased().contains("timed out")
-        case .transport(let message, _):
-            // A timed-out or dropped connection is the commonest way an overloaded server says no.
-            let text = message.lowercased()
-            return text.contains("timed out") || text.contains("timeout")
-                || text.contains("connection lost") || text.contains("network connection was lost")
-        case .tokenRequired, .decoding, .cancelled: return false
+        case .transport, .tokenRequired, .decoding, .cancelled: return false
         }
+    }
+
+    /// True when this is a connection that failed without the server ever getting to work: it
+    /// tells us nothing except to try again.
+    var isTransport: Bool {
+        if case .transport = self { return true }
+        return false
     }
 }
 
@@ -290,6 +299,24 @@ public actor ArcGISClient {
     /// capabilities document.
     public static let defaultTimeout: TimeInterval = 120
 
+    /// A connection that fails inside this long never reached the server's work: it is a flaky
+    /// hop, not a verdict on the request. Retried promptly and at no cost to any limit, because
+    /// the attempt cost nothing either.
+    public static let flakyFailure: TimeInterval = 5
+
+    /// Extra attempts a request may have when its failures are instant. They are cheap — a few
+    /// tens of milliseconds each — and against a server that drops a noticeable share of
+    /// connections outright, two attempts is not enough to get a chunk through.
+    public static let flakyRetries = 4
+
+    /// Whether a failed attempt of this duration is the server saying "too much". A transport
+    /// failure only counts when it lasted long enough to have been the server struggling; an
+    /// instant one is a dropped connection and means nothing about the request.
+    public static func isPushback(_ error: ArcGISClientError, after elapsed: TimeInterval) -> Bool {
+        if error.isTransport { return elapsed >= flakyFailure }
+        return error.isPushback
+    }
+
     /// How long to wait for a page of `count` features.
     ///
     /// A flat timeout is wrong in both directions. A request for 2,000 features from a slow box
@@ -438,6 +465,9 @@ public actor ArcGISClient {
     private func send(_ request: URLRequest, url: URL, maxAttempts: Int?, progress: TransferProgressHandler?) async throws -> Data {
         let host = server(for: request)
         var attempt = 1
+        /// Instant connection failures counted separately: they cost nothing, so they get their
+        /// own allowance rather than burning the one meant for a server that is struggling.
+        var flakyAttempts = 0
         while true {
             if Task.isCancelled { throw ArcGISClientError.cancelled }
             if let wait = retryAfterDelay(host) { try await Task.sleep(for: .seconds(wait)) }
@@ -459,7 +489,21 @@ public actor ArcGISClient {
                 return data
             case .failure(let failure):
                 release(host)          // free the slot before any backoff
-                if failure.error.isPushback { notePushback(host, retryAfter: failure.retryAfter) }
+                let elapsed = -started.timeIntervalSinceNow
+
+                // A connection that died instantly never reached the server's work. Try again
+                // promptly, and leave every limit where it was: the request was not too large
+                // and the host is not overloaded, the hop was simply unreliable. Shrinking a page
+                // over this is how a run ends up asking for a hundredth of what the server will
+                // happily serve, and making twenty times as many requests to do it.
+                if failure.error.isTransport, elapsed < Self.flakyFailure, flakyAttempts < Self.flakyRetries {
+                    flakyAttempts += 1
+                    continue
+                }
+
+                if Self.isPushback(failure.error, after: elapsed) {
+                    notePushback(host, retryAfter: failure.retryAfter)
+                }
                 guard failure.error.isRetryable, attempt < (maxAttempts ?? retry.maxAttempts) else { throw failure.error }
                 // The host's own Retry-After beats our guess at a delay.
                 let delay = failure.retryAfter ?? retry.delay(beforeRetry: attempt)

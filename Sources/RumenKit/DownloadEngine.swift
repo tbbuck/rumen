@@ -213,11 +213,17 @@ public actor DownloadEngine {
 
     private enum ChunkOutcome: Sendable {
         case fetched(FetchedChunk)
-        case failed(seq: Int, error: ArcGISClientError)
+        /// `elapsed` decides what the failure meant: a connection gone in milliseconds is a flaky
+        /// hop, one gone after a minute is a server that could not build the page.
+        case failed(seq: Int, error: ArcGISClientError, elapsed: TimeInterval)
     }
 
     /// Engine requests retry less than the interactive client: a refused chunk is split instead.
     static let attemptsPerChunk = 2
+    /// How many times a chunk may be put back for a connection that died instantly. Higher than
+    /// the above because these cost milliseconds and say nothing about the request; a server
+    /// dropping a noticeable share of connections needs several goes to get every chunk through.
+    static let attemptsPerFlakyChunk = 8
 
     private func run(_ id: Int64, progress: @escaping @Sendable (DownloadProgress) -> Void) async throws -> DownloadRecord {
         var record = try await db.download(id: id)
@@ -341,7 +347,7 @@ public actor DownloadEngine {
                             return .fetched(FetchedChunk(seq: chunk.seq, page: FeaturePage(json: set, hasZ: hasZ, hasM: hasM), bytes: raw.count,
                                                          usedJSON: true, elapsed: -started.timeIntervalSinceNow, budget: budget))
                         } catch let error as ArcGISClientError {
-                            return .failed(seq: chunk.seq, error: error)
+                            return .failed(seq: chunk.seq, error: error, elapsed: -started.timeIntervalSinceNow)
                         }
                     }
                     inFlight += 1
@@ -376,7 +382,7 @@ public actor DownloadEngine {
                     inFlight -= 1
                     let fetched: FetchedChunk
                     switch next {
-                    case .failed(let seq, let error):
+                    case .failed(let seq, let error, let elapsed):
                         if case .cancelled = error { throw CancellationError() }
                         attempts[seq, default: 0] += 1
                         if case .tokenRequired = error {
@@ -385,11 +391,27 @@ public actor DownloadEngine {
                             group.cancelAll()
                             throw error
                         }
+                        // A connection that died instantly, after the client had already used its
+                        // own allowance of quick retries: the chunk goes back on the queue exactly
+                        // as it was. Nothing about it was wrong, and asking for less would only
+                        // mean more requests to be unlucky with.
+                        if error.isTransport, elapsed < ArcGISClient.flakyFailure,
+                           (attempts[seq] ?? 0) < Self.attemptsPerFlakyChunk,
+                           let index = chunks.firstIndex(where: { $0.seq == seq }) {
+                            try await db.updateChunk(downloadID: id, seq: seq, status: .pending, count: nil,
+                                                     attempts: attempts[seq] ?? 1, error: error.description)
+                            pending.append(chunks[index])
+                            report(.running, inFlight: inFlight, message: "request \(seq + 1) dropped on connect; trying again")
+                            try await refill()
+                            continue
+                        }
+
                         // Splitting is the answer to "that was too much to ask for", and only to
                         // that. A 404, a bad where clause or a broken service says nothing about
                         // size, and halving chunks down to the floor over it only multiplies the
                         // requests a struggling server has to refuse.
-                        if error.isPushback, let index = chunks.firstIndex(where: { $0.seq == seq }),
+                        if ArcGISClient.isPushback(error, after: elapsed),
+                           let index = chunks.firstIndex(where: { $0.seq == seq }),
                            let halves = DownloadPlanner.split(chunks[index], pageSize: pager.value, firstSeq: nextSeq) {
                             nextSeq += 2
                             // Every chunk still to come shrinks too. Without this each one pays

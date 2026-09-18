@@ -248,9 +248,11 @@ extension DownloadEngine {
                             return WFSPage(seq: seq, path: path, bytes: data.count, error: nil,
                                            elapsed: -started.timeIntervalSinceNow, budget: budget)
                         } catch let error as ArcGISClientError {
-                            return WFSPage(seq: seq, path: path, bytes: 0, error: error)
+                            return WFSPage(seq: seq, path: path, bytes: 0, error: error,
+                                           elapsed: -started.timeIntervalSinceNow, budget: budget)
                         } catch {
-                            return WFSPage(seq: seq, path: path, bytes: 0, error: .transport(String(describing: error), url: root))
+                            return WFSPage(seq: seq, path: path, bytes: 0, error: .transport(String(describing: error), url: root),
+                                           elapsed: -started.timeIntervalSinceNow, budget: budget)
                         }
                     }
                     inFlight += 1
@@ -287,9 +289,24 @@ extension DownloadEngine {
                             group.cancelAll()
                             throw error
                         }
+                        // A connection that died instantly goes back on the queue unchanged: it
+                        // says nothing about the request, and asking for less would only mean
+                        // more requests to be unlucky with. See the ArcGIS engine.
+                        if error.isTransport, page.elapsed < ArcGISClient.flakyFailure,
+                           (attempts[page.seq] ?? 0) < Self.attemptsPerFlakyChunk,
+                           let index = chunks.firstIndex(where: { $0.seq == page.seq }) {
+                            try await db.updateChunk(downloadID: id, seq: page.seq, status: .pending, count: nil,
+                                                     attempts: attempts[page.seq] ?? 1, error: error.description)
+                            pending.append(chunks[index])
+                            report(.running, inFlight: inFlight, message: "request \(page.seq + 1) dropped on connect; trying again")
+                            try await refill()
+                            continue
+                        }
+
                         // Only a refusal about size is answered by asking for less; see the
                         // ArcGIS engine for why halving over anything else is just more load.
-                        if error.isPushback, let index = chunks.firstIndex(where: { $0.seq == page.seq }),
+                        if ArcGISClient.isPushback(error, after: page.elapsed),
+                           let index = chunks.firstIndex(where: { $0.seq == page.seq }),
                            let halves = DownloadPlanner.split(chunks[index], pageSize: pager.value, firstSeq: nextSeq) {
                             nextSeq += 2
                             pager.pushedBack()

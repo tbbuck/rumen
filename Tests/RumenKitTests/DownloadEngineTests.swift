@@ -19,6 +19,9 @@ private final class StubLayer: @unchecked Sendable {
     var rejectPBF = false
     var refuseLimitAbove: Int? = nil        // pages asking for more than this get a 500 envelope
     var badRequestAtOffset: Int? = nil      // a page that fails for a reason that is not about size
+    /// Every nth request has its connection dropped instantly, as a flaky hop does. 0 = never.
+    var dropEveryNth = 0
+    var dropped = 0
     var seenFailures: Set<Int> = []
     var requestLog: [String] = []
 
@@ -36,6 +39,14 @@ private final class StubLayer: @unchecked Sendable {
     /// Answers a query request from its form body.
     func reply(_ body: String) throws -> StubTransport.Reply {
         lock.withLock { requestLog.append(body) }
+        if dropEveryNth > 0 {
+            let drop = lock.withLock { () -> Bool in
+                dropped += 1
+                return dropped % dropEveryNth == 0
+            }
+            // As the connection dying does: no HTTP response at all, and instantly.
+            if drop { throw URLError(.networkConnectionLost) }
+        }
         let params = Dictionary(uniqueKeysWithValues: body.split(separator: "&").map { pair -> (String, String) in
             let kv = pair.split(separator: "=", maxSplits: 1).map { String($0).removingPercentEncoding ?? String($0) }
             return (kv[0], kv.count > 1 ? kv[1] : "")
@@ -495,6 +506,32 @@ extension DownloadEngineTests {
         // The size is reported as it moves, not only at the end.
         let sizes = afterAChunk.compactMap(\.pageSize)
         XCTAssertGreaterThan(Set(sizes).count, 1, "the reported size follows the climb")
+    }
+
+    /// Cornwall's planning server drops a share of connections outright — instantly, with no
+    /// response — and serves the rest in about a second. That flakiness used to be read as the
+    /// page being too big: the size halved to its floor, `knownBad` pinned it there, and the run
+    /// then made twenty times as many requests, every one of them another chance to be dropped.
+    ///
+    /// A connection that dies instantly must cost the page size nothing.
+    func testConnectionsThatDieInstantlyDoNotShrinkThePage() async throws {
+        stub.pageSize = 2_000
+        stub.featureCount = 3_000
+        stub.dropEveryNth = 3            // a third of connections dropped on connect
+        try await recrawlLayer()
+        await engine.setConcurrency(1)
+
+        let planned = try await engine.start(request())
+        let record = try await engine.wait(downloadID: planned.id)
+        XCTAssertEqual(record.status, .complete, record.error ?? "")
+        XCTAssertEqual(record.featureCount, 3_000, "every feature still arrives")
+
+        let chunks = try await db.chunks(downloadID: planned.id)
+        XCTAssertTrue(chunks.filter { $0.status == .split }.isEmpty,
+                      "nothing was split: no server ever said the page was too big")
+        XCTAssertEqual(chunks.compactMap(\.limit).max(), 1_500,
+                       "the size still climbed; a dropped connection is not a verdict on it")
+        XCTAssertLessThan(chunks.count, 10, "and the request count did not explode")
     }
 
     /// Splitting answers "that was too much to ask for" and nothing else. A bad field name is

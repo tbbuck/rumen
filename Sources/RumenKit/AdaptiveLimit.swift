@@ -48,9 +48,14 @@ public struct AdaptiveLimit: Sendable, Equatable {
     public private(set) var unprofitable: Int?
     /// Throughput at the current value, smoothed, so one slow response does not decide anything.
     private var throughput: Double?
-    /// Where we climbed from, and what that was worth, so the next sample can judge the step.
+    /// Where we climbed from, and what that was worth, so the next samples can judge the step.
     private var previousValue: Int?
     private var throughputBeforeStep: Double?
+    /// Responses gathered at the new value since the step, awaiting the verdict.
+    private var stepSamples: Int = 0
+    private var stepThroughput: Double = 0
+    /// Clean responses since arriving at a ceiling that `unprofitable` is holding down.
+    private var atCeiling: Int = 0
 
     public init(floor: Int, ceiling: Int, step: Int = 1, cadence: Cadence = .perResponse) {
         self.floor = max(1, floor)
@@ -69,11 +74,17 @@ public struct AdaptiveLimit: Sendable, Equatable {
         public let elapsed: TimeInterval
         /// The time the request was allowed before it would have been abandoned.
         public let budget: TimeInterval
+        /// The value in force when this request *went out*. Responses arrive from requests that
+        /// left at several different values — that is what having several in flight means — and
+        /// a response that left before the last step knows nothing about it. Nil means the
+        /// caller cannot say, and the sample is taken at face value.
+        public let at: Int?
 
-        public init(work: Double, elapsed: TimeInterval, budget: TimeInterval) {
+        public init(work: Double, elapsed: TimeInterval, budget: TimeInterval, at: Int? = nil) {
             self.work = work
             self.elapsed = elapsed
             self.budget = budget
+            self.at = at
         }
 
         /// Work per second.
@@ -94,11 +105,33 @@ public struct AdaptiveLimit: Sendable, Equatable {
     /// already answered, and answered properly, by whether the last increase improved throughput.
     static let retreatAbove = 0.75
     /// How much worse a step may leave throughput before it counts as not worth keeping.
-    static let worthKeeping = 0.95
+    ///
+    /// Wide on purpose. The two measurements are taken minutes apart, and on many servers the
+    /// baseline moves between them — WFS offset paging walks deeper with every request, so a
+    /// page of 2,000 is timed against ground that has already got slower than where the page of
+    /// 1,600 was timed. At a 5% bar that drift alone condemns every step: MidKent's polygons
+    /// went 2,000 → 1,900 → 1,800 → 1,700 and on down to the floor of 100, each value found
+    /// "unprofitable" for a slowness the page size had nothing to do with, and the run then paid
+    /// 843 seeks instead of 50.
+    ///
+    /// The asymmetry says how wide. A false condemnation ratchets the value down for the rest of
+    /// the run; a false acquittal leaves one page slightly too big, which the time budget and an
+    /// outright refusal both still catch. So the bar is set where only a real collapse trips it,
+    /// not where drift does.
+    static let worthKeeping = 0.75
     /// Requests quicker than this tell us nothing about throughput: at a few milliseconds the
     /// measurement is mostly jitter, and dividing by it would have a fast server throwing away
     /// good page sizes over noise. Such a response still counts as a success.
     static let measurable: TimeInterval = 0.05
+    /// Responses at the new value before a step is judged. One is not enough: the first requests
+    /// of a run are quick and jittery, and a single unlucky one used to condemn a value for good
+    /// — MidKent's planning polygons spent 843 of 922 requests welded to the floor of 100
+    /// because of one comparison made in the first second.
+    static let verdictSamples = 2
+    /// Clean responses at a ceiling held down by `unprofitable` before that verdict is tried
+    /// again. A verdict is a measurement, and measurements go stale — an offset walks deeper, a
+    /// server warms up, whoever else was hammering it stops. Re-testing costs one request.
+    public static let retryUnprofitableAfter = 25
 
     /// A clean response, with what it revealed. A nil sample means nothing was measured, and the
     /// limit climbs on success alone as it did before.
@@ -107,28 +140,40 @@ public struct AdaptiveLimit: Sendable, Equatable {
             climb()
             return
         }
+        // A response that went out at another value cannot speak for this one, and with several
+        // requests in flight most of them did. Judging a step by whichever response lands next
+        // means judging it on evidence gathered before it was made: at best the step is waved
+        // through, at worst it is condemned for something it did not do.
+        if let at = sample.at, at != value { return }
+
         guard sample.elapsed >= Self.measurable else {
             // Too quick to measure: a success, but no evidence about throughput, so any pending
             // verdict on the last step is abandoned rather than decided on noise.
-            throughputBeforeStep = nil
-            previousValue = nil
+            forgetPendingStep()
             climb()
             return
         }
-        // Smoothed, so a single slow response does not overturn a good value.
-        throughput = throughput.map { $0 * 0.5 + sample.throughput * 0.5 } ?? sample.throughput
 
         // Did the last step pay? A larger page that succeeds can still be slower overall, which
-        // "it worked" can never see.
-        if let before = throughputBeforeStep, let previous = previousValue, let now = throughput {
-            throughputBeforeStep = nil
-            previousValue = nil
+        // "it worked" can never see. Judged on the mean of the first few responses at the new
+        // value, and nothing else moves until it has been judged.
+        if let before = throughputBeforeStep, let previous = previousValue {
+            stepSamples += 1
+            stepThroughput += sample.throughput
+            guard stepSamples >= Self.verdictSamples else { return }
+            let now = stepThroughput / Double(stepSamples)
+            forgetPendingStep()
+            throughput = now
             if now < before * Self.worthKeeping {
                 unprofitable = value
+                atCeiling = 0
                 value = clamp(previous)
                 successes = 0
                 return
             }
+        } else {
+            // Smoothed, so a single slow response does not overturn a good value.
+            throughput = throughput.map { $0 * 0.5 + sample.throughput * 0.5 } ?? sample.throughput
         }
 
         // Close enough to the time budget to be worth giving ground before being refused.
@@ -141,9 +186,26 @@ public struct AdaptiveLimit: Sendable, Equatable {
         climb()
     }
 
+    private mutating func forgetPendingStep() {
+        throughputBeforeStep = nil
+        previousValue = nil
+        stepSamples = 0
+        stepThroughput = 0
+    }
+
     private mutating func climb() {
         guard value < effectiveCeiling else {
             successes = 0
+            // Sitting at a ceiling that an `unprofitable` verdict is holding down. Once enough
+            // has gone right at this value, let the verdict go and try the step again: one
+            // request to re-test, against a cap that otherwise lasts the whole run.
+            if unprofitable != nil {
+                atCeiling += 1
+                if atCeiling >= Self.retryUnprofitableAfter {
+                    atCeiling = 0
+                    unprofitable = nil
+                }
+            }
             return
         }
         successes += 1
@@ -168,8 +230,7 @@ public struct AdaptiveLimit: Sendable, Equatable {
         knownBad = knownBad.map { Swift.min($0, value) } ?? value
         isProbing = false
         successes = 0
-        previousValue = nil
-        throughputBeforeStep = nil
+        forgetPendingStep()
         throughput = nil
         value = clamp(value / 2)
     }

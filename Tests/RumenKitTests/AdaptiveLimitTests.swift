@@ -102,8 +102,14 @@ final class AdaptiveLimitTests: XCTestCase {
 
     // MARK: - Not walking back into the cliff
 
-    private func sample(work: Double, seconds: Double, budget: Double = 100) -> AdaptiveLimit.Sample {
-        AdaptiveLimit.Sample(work: work, elapsed: seconds, budget: budget)
+    private func sample(work: Double, seconds: Double, budget: Double = 100, at: Int? = nil) -> AdaptiveLimit.Sample {
+        AdaptiveLimit.Sample(work: work, elapsed: seconds, budget: budget, at: at)
+    }
+
+    /// A verdict needs `verdictSamples` responses at the new value; feeding one and reading the
+    /// answer is what the tests used to do, and what the server used to get away with.
+    private func settle(_ limit: inout AdaptiveLimit, work: Double, seconds: Double, budget: Double = 100, at: Int? = nil) {
+        for _ in 0..<2 { limit.succeeded(sample(work: work, seconds: seconds, budget: budget, at: at)) }
     }
 
     /// The flaw in judging purely by "did it work": after a backoff the limit climbed one step
@@ -149,9 +155,9 @@ final class AdaptiveLimitTests: XCTestCase {
     /// budget reads as half spent, the same 30s of a 2,000-row budget as a fifth.
     func testAFixedPerRequestCostStillClimbsToTheCeiling() {
         var limit = AdaptiveLimit.pageSize(ceiling: 2_000)
-        for _ in 0..<8 {
+        for _ in 0..<20 {
             let budget = ArcGISClient.timeout(forFeatures: limit.value)
-            limit.succeeded(sample(work: Double(limit.value), seconds: 30, budget: budget))
+            limit.succeeded(sample(work: Double(limit.value), seconds: 30, budget: budget, at: limit.value))
         }
         XCTAssertEqual(limit.value, 2_000, "a fixed cost per request means asking for as much as possible")
     }
@@ -176,18 +182,34 @@ final class AdaptiveLimitTests: XCTestCase {
     // MARK: - A step has to pay for itself
 
     /// A bigger page that succeeds can still carry less per second, which "did it work" cannot
-    /// see. The step is given back and not tried again.
+    /// see. The step is given back, and the value is left alone for a good while afterwards.
     func testAStepThatCarriesLessPerSecondIsGivenBack() {
         var limit = AdaptiveLimit.pageSize(ceiling: 2_000)
         limit.succeeded(sample(work: 100, seconds: 1))      // 100/s at 100
         XCTAssertEqual(limit.value, 200)
 
-        limit.succeeded(sample(work: 200, seconds: 8))      // 25/s at 200: worse
+        settle(&limit, work: 200, seconds: 8)               // 25/s at 200: worse, twice over
         XCTAssertEqual(limit.value, 100, "back to the size that was actually faster")
         XCTAssertEqual(limit.unprofitable, 200)
 
-        for _ in 0..<50 { limit.succeeded(sample(work: 100, seconds: 1)) }
-        XCTAssertEqual(limit.value, 100, "and it does not creep back up to it")
+        for _ in 0..<20 { limit.succeeded(sample(work: 100, seconds: 1)) }
+        XCTAssertEqual(limit.value, 100, "and it does not creep straight back up to it")
+    }
+
+    /// A verdict is a measurement, not a life sentence: after enough has gone right at the value
+    /// beneath it, the step is tried once more. MidKent's planning polygons are why — one
+    /// verdict in the first second held the page size at 100 for 843 requests, each paying a
+    /// seek that a page of 2,000 would have paid once.
+    func testAnUnprofitableVerdictIsTriedAgain() {
+        var limit = AdaptiveLimit.pageSize(ceiling: 2_000)
+        limit.succeeded(sample(work: 100, seconds: 1))
+        settle(&limit, work: 200, seconds: 8)
+        XCTAssertEqual(limit.unprofitable, 200)
+
+        for _ in 0..<AdaptiveLimit.retryUnprofitableAfter { limit.succeeded(sample(work: 100, seconds: 1)) }
+        XCTAssertNil(limit.unprofitable, "the cap is let go of once it has held long enough")
+        limit.succeeded(sample(work: 100, seconds: 1))
+        XCTAssertEqual(limit.value, 200, "and the step is tried again")
     }
 
     func testAStepThatPaysIsKept() {
@@ -195,23 +217,64 @@ final class AdaptiveLimitTests: XCTestCase {
         limit.succeeded(sample(work: 100, seconds: 1))      // 100/s
         XCTAssertEqual(limit.value, 200)
 
-        limit.succeeded(sample(work: 200, seconds: 1))      // 200/s: better
+        settle(&limit, work: 200, seconds: 1)               // 200/s: better
         XCTAssertEqual(limit.value, 400, "worth it, so carry on climbing")
         XCTAssertNil(limit.unprofitable)
     }
 
-    /// Throughput is smoothed and the bar allows a few per cent, so ordinary variation between
-    /// responses does not undo a good size. A real collapse still does — see the test above,
-    /// where throughput halves and the step is given straight back.
+    /// The bar allows a few per cent, so ordinary variation between responses does not undo a
+    /// good size. A real collapse still does — see the test above, where throughput falls to a
+    /// quarter and the step is given straight back.
     func testAModestDipDoesNotGiveBackAGoodStep() {
         var limit = AdaptiveLimit.pageSize(ceiling: 2_000)
         limit.succeeded(sample(work: 100, seconds: 1))      // 100/s
-        limit.succeeded(sample(work: 200, seconds: 1))      // 200/s, so 150/s smoothed; climbs to 400
+        settle(&limit, work: 200, seconds: 1)               // 200/s; climbs to 400
         XCTAssertEqual(limit.value, 400)
 
-        limit.succeeded(sample(work: 400, seconds: 2.8))    // ~143/s: a few per cent off, not a collapse
+        settle(&limit, work: 400, seconds: 2.1)             // ~190/s: a few per cent off, not a collapse
         XCTAssertNil(limit.unprofitable, "ordinary variation is not a verdict")
         XCTAssertEqual(limit.value, 800, "still worth climbing")
+    }
+
+    // MARK: - A response speaks only for the value it was sent at
+
+    /// With several requests in flight, the response that lands after a step usually left before
+    /// it. Judging the step by that response means judging a change on evidence gathered before
+    /// it was made — which is how a page size gets condemned for a slowness it had nothing to do
+    /// with, and how a concurrency step gets waved through by a request that never felt it.
+    func testAResponseFromBeforeTheStepIsNotEvidence() {
+        var limit = AdaptiveLimit.pageSize(ceiling: 2_000)
+        limit.succeeded(sample(work: 100, seconds: 1, at: 100))
+        XCTAssertEqual(limit.value, 200)
+
+        // Two stragglers issued at 100, both dreadful. They say nothing about 200.
+        limit.succeeded(sample(work: 100, seconds: 20, at: 100))
+        limit.succeeded(sample(work: 100, seconds: 20, at: 100))
+        XCTAssertEqual(limit.value, 200, "a response sent at 100 cannot condemn 200")
+        XCTAssertNil(limit.unprofitable)
+
+        settle(&limit, work: 200, seconds: 1, at: 200)
+        XCTAssertEqual(limit.value, 400, "and the value it was sent at is heard")
+    }
+
+    /// The run that prompted all this: MidKent's WFS, where every request pays a seek that grows
+    /// with the offset, several are in flight, and the page itself is nearly free. Latency rises
+    /// through the run no matter what the page size does. The limit must still climb, because a
+    /// bigger page is how the seek gets paid fewer times.
+    func testARisingBaselineWithRequestsInFlightStillClimbs() {
+        var limit = AdaptiveLimit.pageSize(ceiling: 2_000)
+        var offset = 0.0
+        var inFlight = [100, 100, 100]      // three requests already on their way
+        for _ in 0..<80 {
+            inFlight.append(limit.value)
+            let landed = inFlight.removeFirst()      // what arrives now left three requests ago
+            offset += Double(landed)
+            // Seek cost grows with the offset; the features themselves are nearly free. These are
+            // MidKent's own numbers: at row 140,000, 100 features cost 8.3s and 5,000 cost 12.0s.
+            let elapsed = 0.5 + offset * 0.00006 + Double(landed) * 0.0007
+            limit.succeeded(sample(work: Double(landed), seconds: elapsed, budget: 120, at: landed))
+        }
+        XCTAssertEqual(limit.value, 2_000, "a nearly free page against a fixed seek means ask for everything")
     }
 
     /// A fast server answers in milliseconds, where the measurement is mostly jitter. Dividing

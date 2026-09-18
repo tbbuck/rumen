@@ -528,9 +528,11 @@ public actor DownloadEngine {
                     features += Int64(appended)
                     bytes += Int64(fetched.bytes)
                     // Judged on what it cost, not merely on the fact that it arrived: how much of
-                    // its time budget it used, and how many features per second it carried.
+                    // its time budget it used, and how many features per second it carried — and
+                    // against the page size this request actually asked for, which with several
+                    // in flight is often no longer the one in force.
                     pager.succeeded(AdaptiveLimit.Sample(work: Double(appended), elapsed: fetched.elapsed,
-                                                         budget: fetched.budget))
+                                                         budget: fetched.budget, at: chunks[index].limit))
                     lastLatency = fetched.elapsed
                     // Refill first: reporting between a chunk finishing and the next going out
                     // shows nothing in flight, so a run at full tilt reads as "0/1" and looks

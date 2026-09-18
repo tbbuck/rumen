@@ -268,6 +268,9 @@ private struct RunRow: View {
     let run: TransferRun
 
     var body: some View {
+        // Picked up but not yet heard from. The record still says what it said when it failed,
+        // and showing that back with a Retry button reads as though the click did nothing.
+        let starting = model.resuming.contains(run.id)
         HStack(alignment: .top, spacing: 24) {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 8) {
@@ -275,11 +278,15 @@ private struct RunRow: View {
                     Text("on \(run.serverName)").font(.sheetUI(12.5)).foregroundStyle(Palette.muted).lineLimit(1)
                     Chip(text: run.record.transport.rawValue.uppercased())
                     Chip(text: run.record.strategy.label.capitalizedFirst)
-                    if let (text, style) = run.statusChip { Chip(text: text, style: style) }
+                    if starting { Chip(text: "Starting", style: .accent) }
+                    else if let (text, style) = run.statusChip { Chip(text: text, style: style) }
                 }
                 Text(run.targetLine).font(.sheetMono(11)).foregroundStyle(Palette.muted).lineLimit(1).truncationMode(.middle)
                     .textSelection(.enabled)
-                Text(run.stats).font(.sheetUI(12.5)).foregroundStyle(run.status == .failed ? Palette.no : Palette.muted).lineLimit(2)
+                Text(starting ? "Asking the server for the first request…" : run.stats)
+                    .font(.sheetUI(12.5))
+                    .foregroundStyle(!starting && run.status == .failed ? Palette.no : Palette.muted)
+                    .lineLimit(2)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             // The grid widens (from the text column) before it grows tall; the row grows to fit it.

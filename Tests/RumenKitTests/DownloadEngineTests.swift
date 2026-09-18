@@ -479,7 +479,10 @@ extension DownloadEngineTests {
         XCTAssertEqual(record.featureCount, 3_000)
 
         let secondChunks = try await db.chunks(downloadID: second.id)
-        XCTAssertEqual(secondChunks.map(\.limit), [2_000, 1_000],
+        // 1,600 rather than 2,000: the first run's last request was the trimmed remainder of
+        // 1,500, and a request sent at a size other than the one in force teaches the limit
+        // nothing — a partial page's throughput is not comparable with a full one's.
+        XCTAssertEqual(secondChunks.map(\.limit), [1_600, 1_400],
                        "the second run opens at what the host was last seen to manage")
     }
 
@@ -498,7 +501,7 @@ extension DownloadEngineTests {
 
         let afterAChunk = reports.all.filter { $0.status == .running && $0.chunksDone > 0 }
         let last = try XCTUnwrap(afterAChunk.last)
-        XCTAssertEqual(last.pageSize, 2_000, "the size it climbed to, not the floor it opened at")
+        XCTAssertEqual(last.pageSize, 1_600, "the size it climbed to, not the floor it opened at")
         XCTAssertNotNil(last.concurrency, "what the host is currently allowed")
         let latency = try XCTUnwrap(last.latency)
         XCTAssertGreaterThanOrEqual(latency, 0)

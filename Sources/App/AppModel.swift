@@ -896,6 +896,8 @@ extension AppModel {
     }
 
     private func progressed(_ progress: DownloadProgress) async {
+        // The run has said something: whatever it says, it is no longer starting.
+        resuming.remove(progress.downloadID)
         liveProgress[progress.downloadID] = progress
         if runStarted[progress.downloadID] == nil { runStarted[progress.downloadID] = Date() }
         if let database { liveChunks[progress.downloadID] = (try? await database.chunks(downloadID: progress.downloadID).map(\.status)) ?? [] }
@@ -945,14 +947,18 @@ extension AppModel {
         // A person clicking Retry knows something the timer does not — they have fixed the
         // cookie, or the server is back — so the wait starts again from the beginning.
         if !auto { retryAttempts[id] = 0 }
-        defer { resuming.remove(id) }
         do {
+            // Held until the run first reports, not until the engine hands back: what it hands
+            // back is the record as it was, still marked failed, and clearing here put the row
+            // back to "Retry" with the old error under it for as long as the server took to
+            // answer the first request. `progressed` lets go of it.
             _ = try await engine.resume(downloadID: id, overwrite: true, outputDirectory: downloadDirectory) { [weak self] progress in
                 Task { @MainActor in await self?.progressed(progress) }
             }
             runStarted[id] = Date()
             await reloadRuns()
         } catch {
+            resuming.remove(id)
             transfersError = String(describing: error)
             // A resume that would not even start is a failure like any other, and waits its turn.
             scheduleAutoRetry(id)

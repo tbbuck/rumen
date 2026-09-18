@@ -338,11 +338,16 @@ extension DownloadEngine {
                     let appended = try staging.ingest(file: page.path, chunk: page.seq)
                     try? FileManager.default.removeItem(atPath: page.path)
                     try await db.updateChunk(downloadID: id, seq: page.seq, status: .done, count: Int64(appended), attempts: attempts[page.seq] ?? 1, error: nil)
-                    if let index = chunks.firstIndex(where: { $0.seq == page.seq }) { chunks[index].status = .done }
+                    let index = chunks.firstIndex(where: { $0.seq == page.seq })
+                    if let index { chunks[index].status = .done }
                     done += 1
                     features += Int64(appended)
                     bytes += Int64(page.bytes)
-                    pager.succeeded(AdaptiveLimit.Sample(work: Double(appended), elapsed: page.elapsed, budget: page.budget))
+                    // `at:` is the page size this request asked for, not the one in force now:
+                    // with several in flight they are usually different, and a response cannot
+                    // speak for a size it was not sent at.
+                    pager.succeeded(AdaptiveLimit.Sample(work: Double(appended), elapsed: page.elapsed,
+                                                         budget: page.budget, at: index.flatMap { chunks[$0].limit }))
                     lastLatency = page.elapsed
                     try await refill()          // before reporting, or a busy run reads as 0 in flight
                     report(.running, inFlight: inFlight)

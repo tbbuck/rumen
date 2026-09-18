@@ -172,6 +172,24 @@ public enum Extractability {
     /// offers a GeoJSON output, or through the WFS type of the same name at the same endpoint
     /// (its twin); otherwise it is a picture. A WMTS layer is a tile cache and yields nothing;
     /// the statement says what can be had instead.
+    /// The most to ask a WFS for in one GetFeature, and what to ask for when it says nothing.
+    ///
+    /// Five thousand because on a WFS the cost is the seek, not the features. MidKent's planning
+    /// polygons, at row 140,000: 100 features take 8.3s, 2,000 take 9.0s, 5,000 take 12.0s — the
+    /// server walks to the offset and the rows themselves are nearly free, so a page ten times
+    /// bigger costs a third more and does a tenth of the walking. It keeps paying past this
+    /// (10,000 in 13.3s) but a response is 12MB at five thousand and 25MB at ten, and a large
+    /// response on an unreliable hop is a lot to lose and fetch again.
+    ///
+    /// It is a cap as well as a default: `CountDefault` is what a server sends when asked for no
+    /// particular number, not a promise about its largest sensible page, and GeoServer's is a
+    /// million. Asking for a million is not a page, it is the whole table with extra steps.
+    public static let wfsPageCeiling = 5_000
+
+    static func wfsPageSize(_ detail: OGCServiceDetail) -> Int {
+        min(detail.countDefault ?? wfsPageCeiling, wfsPageCeiling)
+    }
+
     public static func assessOGC(layer: LayerRecord, service: ServiceRecord, twin: LayerRecord? = nil,
                                  twinService: ServiceRecord? = nil) -> Assessment {
         let id = layer.id
@@ -184,7 +202,7 @@ public enum Extractability {
                 return Assessment(verdict: false, reason: "The WFS does not advertise GetFeature.", layerID: id)
             }
             let transport: Assessment.Transport = detail.geoJSONFormat != nil ? .geojson : .gml
-            let pageSize = detail.countDefault ?? 1000
+            let pageSize = wfsPageSize(detail)
             let strategy: Assessment.Strategy = detail.paging ? .offset : .single
             let how = transport == .geojson ? "GeoJSON" : "GML"
             let paged = detail.paging ? "paged \(pageSize.formatted(.number.grouping(.automatic))) at a time" : "in one request, since the server does not page"

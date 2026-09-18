@@ -165,7 +165,7 @@ extension DownloadEngine {
         if let manual = requests[id]?.manualPageSize {
             pager = AdaptiveLimit(floor: manual, ceiling: manual)
         } else {
-            pager = .pageSize(ceiling: detail.countDefault ?? 1000)
+            pager = .pageSize(ceiling: Extractability.wfsPageSize(detail))
         }
         var chunks = try await db.chunks(downloadID: id)
 

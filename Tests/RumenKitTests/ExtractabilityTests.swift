@@ -166,4 +166,44 @@ final class ExtractabilityTests: XCTestCase {
         let b = Extractability.assess(layer: record(trailheads, id: 2), service: service(1, "Trailheads", .featureServer))
         XCTAssertEqual(b.reason, "PBF, OID list chunking at 2,000 records per request.")
     }
+
+    // MARK: - What to ask a WFS for
+
+    private func wfs(countDefault: Int?) -> (LayerRecord, ServiceRecord) {
+        var detail = OGCServiceDetail(version: "2.0.0")
+        detail.operations = ["GetCapabilities", "GetFeature"]
+        detail.formats = ["text/xml; subtype=gml/3.2.1"]
+        detail.paging = true
+        detail.countDefault = countDefault
+        let json = String(decoding: try! JSONEncoder().encode(detail), as: UTF8.self)
+        let service = ServiceRecord(id: 1, serverID: 1, name: "WFS", type: .wfs,
+                                    url: URL(string: "https://gis.example/wfs")!, fetchedAt: Date(), ogcJSON: json)
+        let layer = LayerRecord(id: 10, serviceID: 1, layerID: 0, name: "Polygons", type: "Feature type",
+                                fetchedAt: Date(), ogcName: "ms:Polygons")
+        return (layer, service)
+    }
+
+    /// On a WFS the cost is the seek to the offset, not the features: MidKent's planning polygons
+    /// at row 140,000 take 8.3s for 100 and 12.0s for 5,000. A server that says nothing about its
+    /// page therefore gets asked for a big one.
+    func testAWFSThatNamesNoPageIsAskedForAGenerousOne() {
+        let (layer, service) = wfs(countDefault: nil)
+        let a = Extractability.assessOGC(layer: layer, service: service)
+        XCTAssertEqual(a.verdict, true)
+        XCTAssertEqual(a.pageSize, 5_000)
+        XCTAssertEqual(a.reason, "WFS GetFeature for ms:Polygons as GML, paged 5,000 at a time.")
+    }
+
+    /// `CountDefault` is what the server sends when asked for no particular number, not a promise
+    /// about its largest sensible page — GeoServer's is a million, which is not a page at all.
+    func testAnAbsurdCountDefaultIsCapped() {
+        let (layer, service) = wfs(countDefault: 1_000_000)
+        XCTAssertEqual(Extractability.assessOGC(layer: layer, service: service).pageSize, 5_000)
+    }
+
+    /// A server asking for less than that is believed.
+    func testASmallCountDefaultIsHonoured() {
+        let (layer, service) = wfs(countDefault: 250)
+        XCTAssertEqual(Extractability.assessOGC(layer: layer, service: service).pageSize, 250)
+    }
 }

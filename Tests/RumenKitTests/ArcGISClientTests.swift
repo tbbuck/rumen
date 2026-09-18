@@ -346,9 +346,12 @@ extension ArcGISClientTests {
     func testTheTimeoutFollowsWhatWasAskedFor() {
         XCTAssertEqual(ArcGISClient.timeout(forFeatures: nil), 120, "metadata keeps the default")
         XCTAssertEqual(ArcGISClient.timeout(forFeatures: 0), 120)
-        XCTAssertEqual(ArcGISClient.timeout(forFeatures: 100), 65)
-        XCTAssertEqual(ArcGISClient.timeout(forFeatures: 2_000), 160)
-        XCTAssertEqual(ArcGISClient.timeout(forFeatures: 100_000), 240, "capped, however greedy the page")
+        // The fixed part is generous because a server's per-request cost often is too: Cornwall's
+        // planning polygons take 30–40s before the first byte at any page size, and a base that
+        // only suited a fast server would time those out and be read as the page being too big.
+        XCTAssertEqual(ArcGISClient.timeout(forFeatures: 100), 95)
+        XCTAssertEqual(ArcGISClient.timeout(forFeatures: 2_000), 190)
+        XCTAssertEqual(ArcGISClient.timeout(forFeatures: 100_000), 300, "capped, however greedy the page")
         XCTAssertLessThan(ArcGISClient.timeout(forFeatures: 100), ArcGISClient.timeout(forFeatures: 2_000))
     }
 

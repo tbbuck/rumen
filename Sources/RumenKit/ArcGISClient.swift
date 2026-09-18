@@ -325,9 +325,13 @@ public actor ArcGISClient {
     /// struggling — sits for two minutes before anyone finds out, which is the delay the page
     /// size is trying to avoid. Waiting in proportion to what was asked for makes a refusal at
     /// the floor quick and a large page patient.
+    /// The fixed part is generous on purpose. A server's per-request cost is often mostly fixed
+    /// — Cornwall's planning polygons take thirty to forty seconds before the first byte whatever
+    /// page size is asked for — so a base that merely covered a fast server would have small
+    /// pages timing out, be read as the page being too big, and shrink it further.
     public static func timeout(forFeatures count: Int?) -> TimeInterval {
         guard let count, count > 0 else { return defaultTimeout }
-        return min(240, 60 + Double(count) * 0.05)
+        return min(300, 90 + Double(count) * 0.05)
     }
 
     /// What one host has shown it can actually take. The climb, the halving and the ceiling all

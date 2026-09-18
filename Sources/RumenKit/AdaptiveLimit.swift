@@ -82,12 +82,16 @@ public struct AdaptiveLimit: Sendable, Equatable {
         public var headroom: Double { budget > 0 ? elapsed / budget : 0 }
     }
 
-    /// Past this share of the time budget, stop climbing: the request is close enough to the
-    /// edge that the next larger one would likely go over it.
-    static let holdAbove = 0.5
-    /// Past this share, step back down without waiting to be refused. Backing off on time is the
-    /// whole point — a refusal costs a full timeout and a re-plan, a smaller request costs
-    /// almost nothing.
+    /// Past this share of the time budget, step back down without waiting to be refused. Backing
+    /// off on time is the point — a refusal costs a full timeout and a re-plan, a smaller request
+    /// costs almost nothing.
+    ///
+    /// There used to be a second, lower threshold that merely held the climb, and it was wrong.
+    /// The budget grows with the page size but many servers' latency does not: Cornwall's
+    /// planning polygons take about thirty seconds whatever you ask for, so a 100-record request
+    /// reads as having used half its budget while a 2,000-record one reads as a fifth — and the
+    /// climb stalled precisely where it mattered most. Whether a bigger page is affordable is
+    /// already answered, and answered properly, by whether the last increase improved throughput.
     static let retreatAbove = 0.75
     /// How much worse a step may leave throughput before it counts as not worth keeping.
     static let worthKeeping = 0.95
@@ -127,16 +131,11 @@ public struct AdaptiveLimit: Sendable, Equatable {
             }
         }
 
-        // Close to the time budget: hold, or give ground, before being refused.
+        // Close enough to the time budget to be worth giving ground before being refused.
         if sample.headroom >= Self.retreatAbove {
             isProbing = false
             successes = 0
             value = clamp(value - step)
-            return
-        }
-        if sample.headroom >= Self.holdAbove {
-            isProbing = false
-            successes = 0
             return
         }
         climb()

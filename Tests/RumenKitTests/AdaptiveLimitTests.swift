@@ -139,13 +139,21 @@ final class AdaptiveLimitTests: XCTestCase {
 
     // MARK: - Backing off on time rather than on failure
 
-    /// Past half the time budget the climb stops: the next size up would likely go over, and
-    /// going over costs a full timeout and a re-plan.
-    func testARequestNearItsTimeBudgetHoldsTheClimb() {
+    /// Cornwall's planning polygons take about thirty seconds before the first byte whatever page
+    /// size is asked for: the cost is fixed per request and the payload nearly free. Asking for
+    /// 100 instead of 2,000 therefore costs twenty times the total time for the same data, so the
+    /// limit must climb.
+    ///
+    /// An earlier rule held the climb past half the budget and stopped it dead here, because the
+    /// budget shrinks with the page size while this server's latency does not — 30s of a 100-row
+    /// budget reads as half spent, the same 30s of a 2,000-row budget as a fifth.
+    func testAFixedPerRequestCostStillClimbsToTheCeiling() {
         var limit = AdaptiveLimit.pageSize(ceiling: 2_000)
-        limit.succeeded(sample(work: 100, seconds: 60))     // 60% of budget
-        XCTAssertEqual(limit.value, 100, "no climb this close to the edge")
-        XCTAssertFalse(limit.isProbing, "and the doubling phase is over")
+        for _ in 0..<8 {
+            let budget = ArcGISClient.timeout(forFeatures: limit.value)
+            limit.succeeded(sample(work: Double(limit.value), seconds: 30, budget: budget))
+        }
+        XCTAssertEqual(limit.value, 2_000, "a fixed cost per request means asking for as much as possible")
     }
 
     /// Past three-quarters it gives ground without waiting to be refused.

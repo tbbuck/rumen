@@ -59,6 +59,9 @@ struct DetailPane: View {
             return "OGC endpoint at \(server.host)\(types.isEmpty ? "" : ": \(types)"). Cached \(Age.text(server.lastVisitedAt))."
         }
         let version = server.arcgisVersion.map { "ArcGIS Server \($0.formatted(.number.precision(.fractionLength(0...2))))" } ?? "ArcGIS Server"
+        if server.kind == .service {
+            return "\(version) at \(server.host): one service, reached with no services directory above it. Cached \(Age.text(server.lastVisitedAt))."
+        }
         return "\(version) at \(server.host). Cached \(Age.text(server.lastVisitedAt))."
     }
 }
@@ -72,10 +75,11 @@ private struct EmptyState: View {
             Text("Paste an ArcGIS or OGC URL into the bar above, or press ⌘L")
                 .font(.sheetDisplay(24))
                 .foregroundStyle(Palette.ink)
-            Caption("Any URL in an ArcGIS hierarchy works: a services root, a folder, a service, a layer, even a query someone sent you. So does a WMS, WFS or WMTS endpoint, vendor parameters and all.")
+            Caption("Any URL in an ArcGIS hierarchy works: a services root, a folder, a service, a layer, even a query someone sent you, or a service behind a proxy that hides the rest/services path. So does a WMS, WFS or WMTS endpoint, vendor parameters and all.")
             VStack(alignment: .leading, spacing: 6) {
                 Text("https://gis.example.gov.uk/arcgis/rest/services").font(.sheetMono(12)).foregroundStyle(Palette.muted)
                 Text("https://services3.arcgis.com/…/arcgis/rest/services/Trailheads/FeatureServer/0").font(.sheetMono(12)).foregroundStyle(Palette.muted)
+                Text("https://apps.example.gov.uk/planning/api/v1/Map/3").font(.sheetMono(12)).foregroundStyle(Palette.muted)
                 Text("https://maps.example.gov.uk/cgi-bin/mapserv?map=planning&service=WFS&request=GetCapabilities").font(.sheetMono(12)).foregroundStyle(Palette.muted)
             }
             Button("Open a URL") { model.beginURLEdit() }.buttonStyle(PrimaryButtonStyle())

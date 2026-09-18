@@ -520,7 +520,7 @@ final class AppModel {
         guard !text.isEmpty else { isEditingURL = false; return }
         clearError()
         do {
-            guard let database else { return }
+            guard let database, let crawler else { return }
             let rootURL: URL
             let preview: String
             do {
@@ -528,10 +528,38 @@ final class AppModel {
                 rootURL = location.rootURL
                 preview = Self.preview(of: location)
             } catch ArcGISURLError.notArcGIS {
-                // Not ArcGIS: an OGC endpoint, probed for WMS, WFS and WMTS once added (M10).
-                let location = try OGCURL.parse(text)
-                rootURL = location.rootURL
-                preview = Self.preview(of: location)
+                // Outside the rest/services shape (decision 19): a registered root may own it;
+                // otherwise the URL is asked what it is — without the sheet's cookie and headers,
+                // the open asks again with them — before an OGC endpoint is assumed (M10).
+                if try ArcGISURL.resolve(text, against: servers) != nil || OGCURL.knownEndpoint(of: text, among: servers) != nil {
+                    isEditingURL = false
+                    await open(text, friendlyName: nil)
+                    return
+                }
+                let bare = try ArcGISURL.bareURL(text)
+                openingStatus = OpeningStatus(url: bare.absoluteString, step: "Asking \(bare.host ?? "the server") what this is…")
+                let outcome: ArcGISProbeOutcome
+                do {
+                    outcome = try await crawler.probeArcGIS(text)
+                } catch {
+                    openingStatus = nil
+                    throw error
+                }
+                openingStatus = nil
+                switch outcome {
+                case .found(let finding):
+                    rootURL = finding.location.rootURL
+                    preview = Self.preview(of: finding)
+                case .refused(let error):
+                    // ArcGIS, but it wants something: the sheet's advanced fields are the way in,
+                    // and the open probes again with them, so this root is provisional.
+                    rootURL = bare
+                    preview = "This answered as ArcGIS but refused: \(error). If a signed-in browser's cookie or a particular Referer gets in, add it under Advanced and the open will ask again."
+                case .notArcGIS(let reason):
+                    let location = try OGCURL.parse(text)
+                    rootURL = location.rootURL
+                    preview = Self.preview(of: location, arcgisAttempt: reason)
+                }
             }
             if try await database.server(rootURL: rootURL) != nil {
                 isEditingURL = false
@@ -560,10 +588,24 @@ final class AppModel {
         return "This is the services root of \(host)."
     }
 
-    /// The same, for an OGC endpoint: what will be asked of it, and what the URL named.
-    static func preview(of location: OGCLocation) -> String {
+    /// The same, for a URL outside the rest/services shape that answered as ArcGIS (decision 19).
+    static func preview(of finding: ArcGISProbeFinding) -> String {
+        switch finding {
+        case .directory(let rootURL, _):
+            return "This is an ArcGIS services directory on \(rootURL.host ?? "this server"), reached without the usual rest/services path."
+        case .service(let serviceURL, let type, _):
+            return "This is the \(type.name) service \(ArcGISURL.lastSegment(of: serviceURL)) on \(serviceURL.host ?? "this server"), reached on its own with no services directory above it (a proxy)."
+        case .layer(let serviceURL, let type, let layerID, _):
+            return "This is layer \(layerID) of the \(type.name) service \(ArcGISURL.lastSegment(of: serviceURL)) on \(serviceURL.host ?? "this server"), reached on its own with no services directory above it (a proxy)."
+        }
+    }
+
+    /// The same, for an OGC endpoint: what will be asked of it, and what the URL named. With
+    /// `arcgisAttempt`, what the URL said when first asked whether it was ArcGIS.
+    static func preview(of location: OGCLocation, arcgisAttempt: String? = nil) -> String {
         let host = location.rootURL.host ?? "this server"
-        var text = "This looks like an OGC endpoint on \(host): it will be asked for WMS, WFS and WMTS capabilities."
+        var text = arcgisAttempt.map { "Asked ?f=json, \(host) did not answer as ArcGIS (\($0)), so it is taken for an OGC endpoint and will be asked for WMS, WFS and WMTS capabilities." }
+            ?? "This looks like an OGC endpoint on \(host): it will be asked for WMS, WFS and WMTS capabilities."
         if let name = location.layerName {
             text += " The URL names \(location.serviceHint.map { "the \($0.name) layer " } ?? "")\(name)."
         } else if let hint = location.serviceHint {
@@ -572,9 +614,12 @@ final class AppModel {
         return text
     }
 
-    /// The root a pasted URL belongs to, ArcGIS or OGC; nil when it is neither.
-    static func rootURL(of text: String) -> URL? {
-        (try? ArcGISURL.parse(text))?.rootURL ?? (try? OGCURL.parse(text))?.rootURL
+    /// The root a pasted URL belongs to: ArcGIS by shape, a registered root outside that
+    /// shape, else the OGC endpoint; nil when it is none of those.
+    func rootURL(of text: String) -> URL? {
+        (try? ArcGISURL.parse(text))?.rootURL
+            ?? (try? ArcGISURL.resolve(text, against: servers))?.rootURL
+            ?? (try? OGCURL.parse(text))?.rootURL
     }
 
     /// A URL given at launch (`--open`): known servers navigate, unknown ones are added with
@@ -596,7 +641,7 @@ final class AppModel {
     private func open(_ text: String, friendlyName: String?,
                       headerOverrides: (origin: String?, referer: String?)? = nil, cookie: String? = nil) async {
         guard let crawler else { return }
-        let root = Self.rootURL(of: text)?.absoluteString ?? text
+        let root = rootURL(of: text)?.absoluteString ?? text
         openingStatus = OpeningStatus(url: root, step: "Opening…")
         defer { openingStatus = nil }
         do {
@@ -647,7 +692,7 @@ final class AppModel {
             })
             // The server may have been registered before the failure: go there rather than
             // leaving the user on whatever was open before.
-            if let database, let root = Self.rootURL(of: text),
+            if let database, let root = rootURL(of: text),
                let server = try? await database.server(rootURL: root), currentServer?.id != server.id {
                 await selectServer(server.id)
             }

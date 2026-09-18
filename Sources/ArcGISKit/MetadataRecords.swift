@@ -5,6 +5,12 @@ import SQLiteKit
 // since the Unix epoch in SQLite, so they arrive as integers, never as parsed strings. Explicit
 // initialisers keep them constructible from tests and previews.
 
+/// What a remembered server is: an ArcGIS REST directory, a lone ArcGIS service reached with
+/// no directory above it (a proxy; decision 19), or an OGC endpoint (M10).
+public enum ServerKind: String, Sendable, Equatable {
+    case arcgis, service, ogc
+}
+
 public struct ServerRecord: Sendable, Equatable, Identifiable {
     public let id: Int64
     public let rootURL: URL
@@ -20,7 +26,7 @@ public struct ServerRecord: Sendable, Equatable, Identifiable {
     public var lastDeepCrawlAt: Date?
     /// A raw `Cookie` header for every request to this server, as curl's `-b` (decision 17).
     public var cookie: String?
-    /// ArcGIS REST root, or an OGC endpoint (M10).
+    /// ArcGIS REST root, lone ArcGIS service, or OGC endpoint.
     public var kind: ServerKind
 
     public init(id: Int64, rootURL: URL, friendlyName: String, originOverride: String? = nil,

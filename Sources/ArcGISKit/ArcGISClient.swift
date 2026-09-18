@@ -185,6 +185,9 @@ public actor ArcGISClient {
     private var maxConcurrentPerHost: Int
     private var inFlight: [String: Int] = [:]
     private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+    /// Origins that answered `405 Allow: GET` to a POST. Some proxies in front of ArcGIS route
+    /// only GET; once one has said so, its later requests go out as GET without the wasted POST.
+    private var getOnlyOrigins: Set<String> = []
 
     public init(transport: HTTPTransport = URLSessionTransport(), retry: RetryPolicy = RetryPolicy(),
                 maxConcurrentPerHost: Int = 4) {
@@ -218,12 +221,30 @@ public actor ArcGISClient {
     public func request(_ method: HTTPMethod, url: URL, params: [String: String] = [:],
                         server: ServerConnection, maxAttempts: Int? = nil,
                         progress: TransferProgressHandler? = nil) async throws -> Data {
-        var params = params
-        if params["f"] == nil { params["f"] = "json" }
-        if let token = server.token, params["token"] == nil { params["token"] = token }
-        let request = try Self.build(method, url: url, params: params, server: server)
-        return try await send(request, url: url, maxAttempts: maxAttempts, progress: progress)
+        var all = params
+        if all["f"] == nil { all["f"] = "json" }
+        if let token = server.token, all["token"] == nil { all["token"] = token }
+        let sent = all
+        func attempt(_ method: HTTPMethod) async throws -> Data {
+            let request = try Self.build(method, url: url, params: sent, server: server)
+            return try await send(request, url: url, maxAttempts: maxAttempts, progress: progress)
+        }
+        let origin = ArcGISURL.origin(of: url)
+        guard method == .post else { return try await attempt(method) }
+        if getOnlyOrigins.contains(origin) { return try await attempt(.get) }
+        do {
+            return try await attempt(.post)
+        } catch let error as ArcGISClientError {
+            guard case .http(405, _) = error else { throw error }
+            // The params go into the URL instead; a long one may then be refused in its turn,
+            // which the caller (the download engine) already answers by splitting the chunk.
+            getOnlyOrigins.insert(origin)
+            return try await attempt(.get)
+        }
     }
+
+    /// Origins known to route only GET — what a POST of theirs answered `405` to.
+    public var postRefusingOrigins: Set<String> { getOnlyOrigins }
 
     /// A GET against an OGC endpoint (M10): the same headers, cap and retries, but no `f=json`
     /// and no token, and the root's vendor parameters (`map=`) ride along with every request.
@@ -242,6 +263,23 @@ public actor ArcGISClient {
             throw ArcGISClientError.server(code: nil, message: OGCCapabilities.exceptionText(rootElement), details: [], url: url)
         }
         return data
+    }
+
+    /// Some proxies in front of ArcGIS are web-framework actions that return the server's
+    /// answer as a *string*: asked for `application/json` they serialise that string, so the
+    /// body is a JSON string whose content is the real document
+    /// (`"{\"currentVersion\":10.81,…}"`). It is unwrapped here, once, so the probe, the crawl,
+    /// queries and downloads all see the document itself — and so a wrapped `{"error":…}` is
+    /// still recognised as the error it is. Anything else is returned untouched: the body must
+    /// begin with the quote, parse as a JSON string, and hold an object or an array, which no
+    /// ArcGIS response and no PBF body does.
+    public static func unwrapJSONString(_ data: Data) -> Data {
+        guard data.first == 0x22 else { return data }
+        guard let parsed = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]),
+              let text = parsed as? String else { return data }
+        let start = text.first { !$0.isWhitespace }
+        guard start == "{" || start == "[" else { return data }
+        return Data(text.utf8)
     }
 
     public static func looksLikeXML(_ data: Data) -> Bool {
@@ -295,7 +333,8 @@ public actor ArcGISClient {
         guard (200..<300).contains(response.statusCode) else {
             throw ArcGISClientError.http(status: response.statusCode, url: url)
         }
-        if let envelope = ArcGISJSON.errorEnvelope(in: data) {
+        let body = Self.unwrapJSONString(data)
+        if let envelope = ArcGISJSON.errorEnvelope(in: body) {
             let message = envelope.error.message ?? "unknown error"
             if let code = envelope.error.code, code == 498 || code == 499 {
                 throw ArcGISClientError.tokenRequired(code: code, message: message, url: url)
@@ -303,7 +342,7 @@ public actor ArcGISClient {
             throw ArcGISClientError.server(code: envelope.error.code, message: message,
                                            details: envelope.error.details ?? [], url: url)
         }
-        return data
+        return body
     }
 
     /// Performs a request and decodes the JSON body. Returns the raw data too, so callers can

@@ -93,7 +93,12 @@ and into DuckDB, Parquet, and friends, without ArcGIS tooling.
 - Accept **any** pasted URL in the hierarchy: root, folder, service, layer, `/query`,
   or an ArcGIS Online item page. Normalise it (strip `f=`, trailing slashes, query
   strings) and resolve it to `(server root, optional folder, optional service,
-  optional layer)`. Reject clearly non-ArcGIS URLs with a specific message.
+  optional layer)`. A URL outside that shape is not refused on sight: a registered root
+  may own it (a proxied directory's service, a lone service's layer), and failing that
+  the URL is asked `?f=json` what it is — a directory, a service or a layer behind a
+  proxy that hides `rest/services` (decision 19) — before it is taken for an OGC
+  endpoint (§5.11). Only a URL that answers as none of these is refused, and the
+  message says what each attempt got.
 - Register the **server root** with a **friendly name** (default: the host). Record
   `currentVersion` from the root JSON.
 - Per server, the request headers are:
@@ -317,8 +322,9 @@ Coded-value domains are exported as the raw code; an opt-in option (off by defau
 ArcGIS is the full-fledged source; WMS, WFS and WMTS endpoints are supported at a
 minimum: what the endpoint serves, what each layer looks like, and a download where the
 protocol has one. No filtering, no querying.
-- **Intake.** A pasted URL that is not ArcGIS is taken for an OGC endpoint. Its OGC
-  request parameters (`service`, `request`, `typeNames`, `layers`, `bbox`, …) are
+- **Intake.** A pasted URL outside the ArcGIS shape that does not answer `?f=json` as
+  ArcGIS (§5.1) is taken for an OGC endpoint. Its OGC request parameters (`service`,
+  `request`, `typeNames`, `layers`, `bbox`, …) are
   stripped; whatever remains (a UMN MapServer's `map=`, any vendor parameter) is the
   endpoint's identity and rides along on every request. The endpoint is probed for
   WMS, WFS and WMTS `GetCapabilities`; each answer becomes a service with its layers; a
@@ -359,7 +365,7 @@ protocol has one. No filtering, no querying.
 - **Pages.** An OGC layer offers only the tabs its protocol can answer: a WFS type has
   Overview, Fields, Download, Stored, Map, Raw; a WMS layer Overview, Download, Map,
   Raw; a WMTS layer Overview, Map, Raw. Raw shows the layer's capabilities fragment.
-- **Storage.** `server.kind` (`arcgis` | `ogc`); services and layers share the ArcGIS
+- **Storage.** `server.kind` (`arcgis` | `service` | `ogc`); services and layers share the ArcGIS
   tables with `ogc_name` (the request identifier) and `ogc_json` (the normalised
   detail); a layer is matched across crawls by `ogc_name`, so its id and its downloads
   survive a reorder (migration 0007).
@@ -461,6 +467,13 @@ owned by `AppDatabase`). DuckDB never holds app state.
   `ArcGISClient` so the header rule cannot be bypassed.
 - Fixture-driven tests use a custom `URLProtocol` that serves recorded responses
   from `Fixtures/`.
+- **Proxies in front of ArcGIS** (decision 19) are met in the client, so every caller is
+  spared them. A body that is the document wrapped in a JSON string — a web-framework
+  action returning `String`, asked for `application/json` — is unwrapped once, before the
+  error envelope is looked for, and only when it begins with a quote, parses as a JSON
+  string and holds an object or an array, so PBF and XML are never touched. A POST that
+  is answered `405` goes out again as a GET with its form body as the query string, and
+  the origin is remembered so later requests skip the refused POST.
 
 ### 7.4 Engine
 - Same as DuckLake Explorer: link Homebrew `libduckdb` in dev
@@ -566,6 +579,18 @@ owned by `AppDatabase`). DuckDB never holds app state.
     MapServer's `map=` is never lost. Features are the download where the protocol has
     them (WFS, a GeoJSON-capable WMS, or a WMS layer's WFS twin); a picture is the WMS
     layer's other download; a WMTS layer is drawn, not downloaded. See §5.11.
+19. **A URL outside the `rest/services` shape is asked what it is before it is refused or
+    taken for OGC** — accepted 2026-09-18. Councils front ArcGIS services with proxies
+    that hide the directory: `…/EplanningV2/API/v1/Map/3?f=json` answers as an ordinary
+    MapServer layer. Such a URL is resolved against registered roots first; otherwise it
+    is asked `?f=json` (the URL, then its parent when it answers as a layer) with the
+    headers and cookie the new server would use. A directory becomes an `arcgis` server
+    at that root; a service or a layer becomes a server of kind `service`, whose root
+    *is* the service, listed as its only entry, so queries and downloads build on the
+    service URL unchanged. ArcGIS's token wall (498/499) means ArcGIS that refused,
+    reported verbatim rather than followed by OGC attempts; any other error envelope is
+    only a hint and rides along in the message. Only a URL that answers as none of these
+    is taken for an OGC endpoint, and when that fails too the message names both.
 
 ## 10. Open questions
 1. ~~**Design direction**: reuse DuckLake Explorer's Stratum system or give this app

@@ -65,15 +65,37 @@ public actor Crawler {
                      headerOverrides: (origin: String?, referer: String?)? = nil, cookie: String? = nil,
                      progress: (@Sendable (CrawlEvent) -> Void)? = nil) async throws -> Opened {
         let location: ArcGISLocation
+        var kind = ServerKind.arcgis
         do {
             location = try ArcGISURL.parse(text)
         } catch ArcGISURLError.notArcGIS {
-            // Anything else that is a URL may be an OGC endpoint (M10); the probe decides.
-            return try await openOGC(text, friendlyName: friendlyName, headerOverrides: headerOverrides, cookie: cookie, progress: progress)
+            // Outside the rest/services shape (decision 19). A registered root may own it (a
+            // proxied directory's service, a lone service's layer, a known OGC endpoint);
+            // otherwise the URL is asked what it is before it is taken for an OGC endpoint (M10).
+            let servers = try await db.servers()
+            if let owned = try ArcGISURL.resolve(text, against: servers) {
+                location = owned
+            } else if OGCURL.knownEndpoint(of: text, among: servers) != nil {
+                return try await openOGC(text, friendlyName: friendlyName, headerOverrides: headerOverrides, cookie: cookie, progress: progress)
+            } else {
+                switch try await probeArcGIS(text, headerOverrides: headerOverrides, cookie: cookie) {
+                case .found(let finding):
+                    location = finding.location
+                    kind = finding.kind
+                case .refused(let error):
+                    throw error
+                case .notArcGIS(let reason):
+                    do {
+                        return try await openOGC(text, friendlyName: friendlyName, headerOverrides: headerOverrides, cookie: cookie, progress: progress)
+                    } catch OGCError.noServices(let url, let attempts) {
+                        throw ArcGISProbeError.nothingAnswered(url: url, arcgis: reason, ogc: attempts)
+                    }
+                }
+            }
         }
         let existing = try await db.server(rootURL: location.rootURL)
         var server = try await db.addServer(rootURL: location.rootURL,
-                                            friendlyName: friendlyName ?? location.rootURL.host ?? "server")
+                                            friendlyName: friendlyName ?? location.rootURL.host ?? "server", kind: kind)
         let isNew = existing == nil
         if isNew {
             if let headerOverrides {
@@ -97,9 +119,12 @@ public actor Crawler {
                 try await crawlDirectory(serverID: server.id, folderPath: location.folderPath ?? "", progress: progress)
                 service = try await db.service(serverID: server.id, url: serviceURL)
             }
+            // A lone service was read in full by the shallow crawl a moment ago; any other is read now.
             if let found = service, found.type.hasLayers {
-                try await crawlService(serviceID: found.id, progress: progress)
-                service = try await db.service(id: found.id)
+                if !(isNew && server.kind == .service) {
+                    try await crawlService(serviceID: found.id, progress: progress)
+                    service = try await db.service(id: found.id)
+                }
                 if let layerID = location.layerID {
                     layer = try await db.layer(serviceID: found.id, layerID: layerID)
                 }
@@ -114,13 +139,40 @@ public actor Crawler {
     // MARK: - Shallow crawl
 
     /// Root listing, then every folder recursively. Records the server's version. The root
-    /// must list; a folder that fails is returned as a problem and the rest carries on.
+    /// must list; a folder that fails is returned as a problem and the rest carries on. A lone
+    /// service is read instead of listed (`crawlLoneService`); an OGC endpoint is probed.
     @discardableResult
     public func shallowCrawl(serverID: Int64, progress: (@Sendable (CrawlEvent) -> Void)? = nil) async throws -> [CrawlProblem] {
-        if try await db.server(id: serverID).kind == .ogc {
+        switch try await db.server(id: serverID).kind {
+        case .ogc:
             return try await probeOGC(serverID: serverID, progress: progress)
+        case .service:
+            try await crawlLoneService(serverID: serverID, progress: progress)
+            return []
+        case .arcgis:
+            return try await crawlDirectory(serverID: serverID, folderPath: "", recursive: true, progress: progress)
         }
-        return try await crawlDirectory(serverID: serverID, folderPath: "", recursive: true, progress: progress)
+    }
+
+    /// The shallow crawl of a `ServerKind.service` server (decision 19): the root is its one
+    /// service. The definition is read and classified again (a proxy may have changed what it
+    /// fronts), recorded as the only service at the top level, and its layers read as
+    /// `crawlService` would, so the tree has them at once.
+    public func crawlLoneService(serverID: Int64, progress: (@Sendable (CrawlEvent) -> Void)? = nil) async throws {
+        let server = try await db.server(id: serverID)
+        let conn = await connection(server)
+        let (info, raw) = try await client.serviceInfo(conn, serviceURL: server.rootURL)
+        guard case .service(let type, _)? = ArcGISProbe.classify(raw) else {
+            throw ArcGISProbeError.notAService(url: server.rootURL, found: ArcGISProbe.describe(raw))
+        }
+        if let version = info.currentVersion {
+            try await db.setServerVersion(id: serverID, version: version)
+        }
+        let service = try await db.upsertService(serverID: serverID, folderPath: "",
+                                                 name: ArcGISURL.lastSegment(of: server.rootURL), type: type, url: server.rootURL)
+        try await db.pruneServices(serverID: serverID, folderPath: "", keeping: [service.url])
+        progress?(.directory(folderPath: "", services: 1))
+        try await storeService(service, info: info, raw: raw, connection: conn, progress: progress)
     }
 
     /// Lists one directory (root when `folderPath` is empty), upserting and pruning its
@@ -129,6 +181,11 @@ public actor Crawler {
     public func crawlDirectory(serverID: Int64, folderPath: String, recursive: Bool = false,
                                progress: (@Sendable (CrawlEvent) -> Void)? = nil) async throws -> [CrawlProblem] {
         let server = try await db.server(id: serverID)
+        if server.kind == .service {
+            // No directory to list: the root is the service, and it has no folders.
+            try await crawlLoneService(serverID: serverID, progress: progress)
+            return []
+        }
         let conn = await connection(server)
         let listing = try await client.serviceDirectory(conn, folder: folderPath.isEmpty ? nil : folderPath).value
         if folderPath.isEmpty, let version = listing.currentVersion {
@@ -190,8 +247,16 @@ public actor Crawler {
         if service.type.isOGC { return try await crawlOGCService(serviceID: serviceID, progress: progress) }
         let server = try await db.server(id: service.serverID)
         let conn = await connection(server)
-
         let (info, raw) = try await client.serviceInfo(conn, serviceURL: service.url)
+        try await storeService(service, info: info, raw: raw, connection: conn, progress: progress)
+    }
+
+    /// Records a fetched service definition and reads every layer and table beneath it: the
+    /// bulk `layers` endpoint (one request), falling back to per-layer requests when it is
+    /// missing, errors, or omits a layer.
+    func storeService(_ service: ServiceRecord, info: ServiceInfo, raw: Data, connection conn: ServerConnection,
+                      progress: (@Sendable (CrawlEvent) -> Void)?) async throws {
+        let serviceID = service.id
         let serviceBox = try await db.wgs84Extent(of: info.fullExtent, wkid: info.spatialReference?.effectiveWkid)
         try await db.updateService(id: serviceID, info: info, raw: raw, extentWGS84: serviceBox)
         let summaries = try await db.upsertLayers(serviceID: serviceID, layers: info.layers, tables: info.tables)

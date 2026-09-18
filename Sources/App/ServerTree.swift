@@ -88,7 +88,8 @@ private struct ServerHeader: View {
             let types = model.services.map(\.type.name).sorted().joined(separator: ", ")
             version = types.isEmpty ? "OGC endpoint" : "OGC endpoint: \(types)"
         } else {
-            version = server.arcgisVersion.map { "ArcGIS Server \($0.formatted(.number.precision(.fractionLength(0...2))))" } ?? server.host
+            let arcgis = server.arcgisVersion.map { "ArcGIS Server \($0.formatted(.number.precision(.fractionLength(0...2))))" } ?? server.host
+            version = server.kind == .service ? "\(arcgis), one service with no directory" : arcgis
         }
         return "\(version), cached \(Age.text(server.lastVisitedAt))"
     }

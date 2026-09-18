@@ -258,7 +258,10 @@ final class OGCTests: XCTestCase {
         let fields = try await db.fields(layerID: layer.id)
         XCTAssertEqual(fields.map(\.name), ["msGeometry", "OBJECTID", "NAME", "POP", "WHEN"])
         XCTAssertEqual(fields[4].duckType, "TIMESTAMP")
-        XCTAssertTrue(endpoint.log.allSatisfy { $0["map"] == "pa" }, "every request carries the vendor parameter")
+        // The endpoint was first asked ?f=json, bare (decision 19), and turned it down; every OGC
+        // request after that carries the vendor parameter.
+        XCTAssertEqual(endpoint.log.first, ["f": "json"])
+        XCTAssertTrue(endpoint.log.dropFirst().allSatisfy { $0["map"] == "pa" }, "every request carries the vendor parameter")
         let raw = try await db.layerRawJSON(id: layer.id)
         XCTAssertTrue(raw?.contains("<wfs:Name>ms:towns</wfs:Name>") == true)
 
@@ -309,7 +312,8 @@ final class OGCTests: XCTestCase {
         do {
             _ = try await crawler.open("https://nothing.example.gov.uk/cgi-bin/mapserv?map=x")
             XCTFail("expected no services")
-        } catch OGCError.noServices(_, let attempts) {
+        } catch ArcGISProbeError.nothingAnswered(_, let arcgis, let attempts) {
+            XCTAssertTrue(arcgis.contains("an HTML page"), arcgis)
             XCTAssertEqual(attempts.count, 3)
         }
         let servers = try await db.servers()

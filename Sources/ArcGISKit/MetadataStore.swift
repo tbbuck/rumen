@@ -230,21 +230,26 @@ extension AppDatabase {
     @discardableResult
     public func upsertServices(serverID: Int64, rootURL: URL, folderPath: String,
                                entries: [ServiceDirectory.Entry]) throws -> [ServiceRecord] {
-        var ids = [Int64]()
-        for entry in entries {
+        try entries.map { entry in
             let type = entry.serviceType
             let url = rootURL.appendingPathComponent(entry.name).appendingPathComponent(type.name)
-            let id = try query("""
-                INSERT INTO service (server_id, folder_path, name, type, url)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT (server_id, url) DO UPDATE SET name = excluded.name, folder_path = excluded.folder_path
-                RETURNING id;
-                """, [.int(serverID), .string(folderPath), .string(entry.name), .string(type.name),
-                      .string(url.absoluteString)]).rows.first?.first?.int64
-            guard let id else { throw MetadataStoreError.unexpectedRow("service insert") }
-            ids.append(id)
+            return try upsertService(serverID: serverID, folderPath: folderPath, name: entry.name, type: type, url: url)
         }
-        return try ids.map { try service(id: $0) }
+    }
+
+    /// Records one service by its URL: a directory entry, or the root itself for a
+    /// `ServerKind.service` server (decision 19). An existing row keeps its crawled detail.
+    @discardableResult
+    public func upsertService(serverID: Int64, folderPath: String, name: String, type: ServiceType, url: URL) throws -> ServiceRecord {
+        let id = try query("""
+            INSERT INTO service (server_id, folder_path, name, type, url)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT (server_id, url) DO UPDATE SET name = excluded.name, folder_path = excluded.folder_path, type = excluded.type
+            RETURNING id;
+            """, [.int(serverID), .string(folderPath), .string(name), .string(type.name),
+                  .string(url.absoluteString)]).rows.first?.first?.int64
+        guard let id else { throw MetadataStoreError.unexpectedRow("service insert") }
+        return try service(id: id)
     }
 
     /// Drops services in `folderPath` whose URL is not in `keeping` — the reconcile step after

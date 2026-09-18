@@ -5,11 +5,6 @@ import Foundation
 // what the endpoint serves, what each layer looks like, and a download where one makes sense
 // (features from a WFS, a picture from a WMS). No filtering, no querying.
 
-/// Which protocol family a remembered server speaks.
-public enum ServerKind: String, Sendable, Equatable {
-    case arcgis, ogc
-}
-
 // MARK: - Locations and requests
 
 /// A pasted OGC URL, reduced to the endpoint it belongs to. `rootURL` is the endpoint plus
@@ -83,6 +78,13 @@ public enum OGCURL {
         components.queryItems = vendor.isEmpty ? nil : vendor.sorted { $0.name.lowercased() < $1.name.lowercased() }
         guard let root = components.url else { throw OGCURLError.malformed(trimmed) }
         return OGCLocation(rootURL: root, serviceHint: hint, layerName: layerName, isCapabilitiesDocument: isDocument)
+    }
+
+    /// The registered OGC endpoint a pasted URL belongs to, if any: its root, vendor parameters
+    /// and all, is a server of kind `ogc`. Such a URL is never asked whether it is ArcGIS again.
+    public static func knownEndpoint(of text: String, among servers: [ServerRecord]) -> ServerRecord? {
+        guard let root = try? parse(text).rootURL else { return nil }
+        return servers.first { $0.kind == .ogc && $0.rootURL.absoluteString == root.absoluteString }
     }
 
     /// The endpoint without its query, and the vendor parameters the root carries, so a

@@ -65,6 +65,82 @@ final class ArcGISClientTests: XCTestCase {
         XCTAssertEqual(request.encodedParams, "f=json&returnCountOnly=true&where=STATE%20%3D%20%27CA%27%20AND%20x%3E1")
     }
 
+    // MARK: - Proxies in front of ArcGIS
+
+    /// A proxy that hands back the server's answer as a *string* (an ASP.NET action returning
+    /// `String`, asked for `application/json`): the body is a JSON string holding the document.
+    private func doubleEncode(_ json: String) -> Data {
+        try! JSONSerialization.data(withJSONObject: json, options: [.fragmentsAllowed])
+    }
+
+    func testADoubleEncodedBodyIsUnwrapped() async throws {
+        let body = doubleEncode(#"{"currentVersion":10.81,"folders":["A"],"services":[{"name":"Census","type":"MapServer"}]}"#)
+        XCTAssertEqual(body.first, 0x22, "the proxy's body really is a quoted string")
+        let transport = StubTransport(reply: StubTransport.Reply(body: body))
+        let listing = try await client(transport).serviceDirectory(server).value
+        XCTAssertEqual(listing.currentVersion, 10.81)
+        XCTAssertEqual(listing.folders, ["A"])
+        XCTAssertEqual(listing.services.first?.name, "Census")
+    }
+
+    func testADoubleEncodedErrorEnvelopeIsStillAnError() async throws {
+        let transport = StubTransport(reply: StubTransport.Reply(body: doubleEncode(#"{"error":{"code":499,"message":"Token Required","details":[]}}"#)))
+        do {
+            _ = try await client(transport).serviceDirectory(server)
+            XCTFail("expected the wall")
+        } catch ArcGISClientError.tokenRequired(let code, let message, _) {
+            XCTAssertEqual(code, 499)
+            XCTAssertEqual(message, "Token Required")
+        }
+    }
+
+    func testOnlyAWrappedDocumentIsUnwrapped() {
+        func round(_ text: String) -> String { String(decoding: ArcGISClient.unwrapJSONString(Data(text.utf8)), as: UTF8.self) }
+        XCTAssertEqual(round(#""{\"a\":1}""#), #"{"a":1}"#)
+        XCTAssertEqual(round(#""[1,2]""#), "[1,2]")
+        XCTAssertEqual(round(#"{"a":1}"#), #"{"a":1}"#, "an ordinary document is untouched")
+        XCTAssertEqual(round(#""hello""#), #""hello""#, "a string that is not a document is untouched")
+        XCTAssertEqual(round("<Capabilities/>"), "<Capabilities/>")
+        XCTAssertEqual(round(#""unterminated"#), #""unterminated"#)
+        // A PBF body is binary and never mistaken for one: it neither begins with a quote nor parses.
+        let pbf = Data([0x0A, 0x22, 0x08, 0x01, 0x12, 0xFF])
+        XCTAssertEqual(ArcGISClient.unwrapJSONString(pbf), pbf)
+    }
+
+    /// A proxy that routes only GET answers `405 Allow: GET` to the POSTed query; the request
+    /// goes out again as a GET, and the origin is remembered so the next one skips the POST.
+    func testAPostRefusedWith405IsRetriedAsAGetAndRemembered() async throws {
+        let transport = StubTransport { request, _ in
+            request.httpMethod == "POST" ? .json("", status: 405) : .json(#"{"count":349114}"#)
+        }
+        let client = self.client(transport)
+        let layer = root.appendingPathComponent("Map/3")
+        let count = try await client.count(server, layerURL: layer, where: "1=1")
+        XCTAssertEqual(count, 349114)
+        XCTAssertEqual(transport.requests.map(\.httpMethod), ["POST", "GET"])
+        let retried = try XCTUnwrap(transport.last)
+        XCTAssertEqual(retried.url?.absoluteString, layer.absoluteString + "/query?f=json&returnCountOnly=true&where=1%3D1",
+                       "the form body became the query string")
+        XCTAssertNil(retried.httpBody)
+        let origins = await client.postRefusingOrigins
+        XCTAssertEqual(origins, ["https://sampleserver6.arcgisonline.com"])
+
+        // The second query goes straight out as a GET.
+        _ = try await client.count(server, layerURL: layer, where: "1=1")
+        XCTAssertEqual(transport.requests.map(\.httpMethod), ["POST", "GET", "GET"])
+    }
+
+    func testA405OnAGetIsReportedNotRetried() async throws {
+        let transport = StubTransport(reply: .json("", status: 405))
+        do {
+            _ = try await client(transport).serviceDirectory(server)
+            XCTFail("expected the status")
+        } catch ArcGISClientError.http(let status, _) {
+            XCTAssertEqual(status, 405)
+        }
+        XCTAssertEqual(transport.count, 1, "405 is not a transient failure")
+    }
+
     func testTokenIsAppendedWhenSet() async throws {
         let transport = try StubTransport(reply: .fixture("s6-root.json"))
         _ = try await client(transport).serviceDirectory(ServerConnection(rootURL: root, token: "abc/+="))

@@ -154,10 +154,18 @@ public extension HTTPTransport {
     }
 }
 
-public struct URLSessionTransport: HTTPTransport {
+public final class URLSessionTransport: HTTPTransport, @unchecked Sendable {
     private let session: URLSession
+    /// Owns the second, delegate-backed session used by the calls that want progress. A separate
+    /// object so this transport is not in the session's retain cycle and can be torn down.
+    private let streamer: StreamingSession
 
-    public init(session: URLSession = .shared) { self.session = session }
+    public init(session: URLSession = .shared) {
+        self.session = session
+        self.streamer = StreamingSession()
+    }
+
+    deinit { streamer.invalidate() }
 
     public func perform(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         let (data, response) = try await session.data(for: request)
@@ -167,29 +175,106 @@ public struct URLSessionTransport: HTTPTransport {
         return (data, http)
     }
 
-    /// Streams the body, reporting every 64 KB. `Content-Length` counts encoded bytes while
-    /// `URLSession` hands back decoded ones, so the total is only trusted without an encoding.
+    /// Streams the body, reporting every 64 KB.
+    ///
+    /// This used to iterate `URLSession.AsyncBytes`, which yields one `UInt8` at a time: a
+    /// several-megabyte map sample meant millions of asynchronous resumptions and as many
+    /// single-byte appends, which cost far more than the download. The session's delegate hands
+    /// over whole chunks instead, so progress costs a closure call per chunk rather than per
+    /// byte, and the request no longer has to refuse compression to be measurable.
     public func perform(_ request: URLRequest, progress: @escaping TransferProgressHandler) async throws -> (Data, HTTPURLResponse) {
-        let (bytes, response) = try await session.bytes(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw URLError(.badServerResponse)
-        }
-        let encoded = http.value(forHTTPHeaderField: "Content-Encoding").map { !$0.isEmpty && $0 != "identity" } ?? false
-        let expected: Int64? = (!encoded && http.expectedContentLength >= 0) ? http.expectedContentLength : nil
-        var data = Data()
-        if let expected { data.reserveCapacity(Int(expected)) }
-        var sinceReport = 0
-        progress(TransferProgress(received: 0, expected: expected))
-        for try await byte in bytes {
-            data.append(byte)
-            sinceReport += 1
-            if sinceReport >= 65_536 {
-                sinceReport = 0
-                progress(TransferProgress(received: Int64(data.count), expected: expected))
+        try await streamer.perform(request, progress: progress)
+    }
+}
+
+/// The delegate-backed half of `URLSessionTransport`: one session, one entry per task in flight.
+///
+/// Kept apart from the transport because a session retains its delegate for as long as it lives,
+/// so a transport that was its own delegate could never be released.
+private final class StreamingSession: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var transfers: [Int: Transfer] = [:]
+    /// Assigned once, in `init`, and only read afterwards. It was a `lazy var`, which is not
+    /// thread-safe: two concurrent streams raced to build it and one lost its session, so its
+    /// task never reported back and the caller waited for ever.
+    private var session: URLSession!
+
+    override init() {
+        super.init()
+        session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
+    }
+
+    func invalidate() { session.finishTasksAndInvalidate() }
+
+    func perform(_ request: URLRequest, progress: @escaping TransferProgressHandler) async throws -> (Data, HTTPURLResponse) {
+        let task = session.dataTask(with: request)
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                lock.withLock {
+                    transfers[task.taskIdentifier] = Transfer(progress: progress, continuation: continuation)
+                }
+                progress(TransferProgress(received: 0, expected: nil))
+                task.resume()
             }
+        } onCancel: {
+            task.cancel()
         }
-        progress(TransferProgress(received: Int64(data.count), expected: expected))
-        return (data, http)
+    }
+
+    /// One in-flight streamed request.
+    private struct Transfer {
+        var data = Data()
+        var expected: Int64?
+        var response: HTTPURLResponse?
+        var sinceReport = 0
+        let progress: TransferProgressHandler
+        let continuation: CheckedContinuation<(Data, HTTPURLResponse), Error>
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,
+                    didReceive response: URLResponse) async -> URLSession.ResponseDisposition {
+        lock.withLock {
+            guard var transfer = transfers[dataTask.taskIdentifier] else { return }
+            transfer.response = response as? HTTPURLResponse
+            // Content-Length counts the bytes on the wire while the session hands back decoded
+            // ones, so a compressed body has no total worth showing.
+            let encoded = transfer.response?.value(forHTTPHeaderField: "Content-Encoding")
+                .map { !$0.isEmpty && $0 != "identity" } ?? false
+            if !encoded, response.expectedContentLength >= 0 {
+                transfer.expected = response.expectedContentLength
+                transfer.data.reserveCapacity(Int(response.expectedContentLength))
+            }
+            transfers[dataTask.taskIdentifier] = transfer
+        }
+        return .allow
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        let report: (TransferProgressHandler, TransferProgress)? = lock.withLock {
+            guard var transfer = transfers[dataTask.taskIdentifier] else { return nil }
+            transfer.data.append(data)
+            transfer.sinceReport += data.count
+            defer { transfers[dataTask.taskIdentifier] = transfer }
+            guard transfer.sinceReport >= 65_536 else { return nil }
+            transfer.sinceReport = 0
+            return (transfer.progress, TransferProgress(received: Int64(transfer.data.count), expected: transfer.expected))
+        }
+        if let (handler, progress) = report { handler(progress) }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        let finished: Transfer? = lock.withLock { transfers.removeValue(forKey: task.taskIdentifier) }
+        guard let finished else { return }
+        if let error {
+            finished.continuation.resume(throwing: error)
+            return
+        }
+        guard let http = finished.response ?? task.response as? HTTPURLResponse else {
+            finished.continuation.resume(throwing: URLError(.badServerResponse))
+            return
+        }
+        finished.progress(TransferProgress(received: Int64(finished.data.count), expected: finished.expected))
+        finished.continuation.resume(returning: (finished.data, http))
     }
 }
 
@@ -419,10 +504,9 @@ public actor ArcGISClient {
         let response: HTTPURLResponse
         do {
             if let progress {
-                // Unencoded, so Content-Length counts the bytes that arrive and the percentage is honest.
-                var streamed = request
-                streamed.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
-                (data, response) = try await transport.perform(streamed, progress: progress)
+                // Compression stays on: the transport simply shows no total for an encoded body
+                // rather than making the download bigger to keep the percentage honest.
+                (data, response) = try await transport.perform(request, progress: progress)
             } else {
                 (data, response) = try await transport.perform(request)
             }

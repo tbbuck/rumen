@@ -40,7 +40,29 @@ final class AppDatabaseTests: XCTestCase {
         XCTAssertFalse(fm.fileExists(atPath: legacy.path), "the old folder should be gone, not copied")
     }
 
-    /// A Rumen folder that already exists wins; the old one is left untouched rather than
+    /// The case the release dry run turned up: `--selftest` had already created the new folder
+    /// to hold the DuckDB extension cache, so a folder-existence test would have stranded the
+    /// real database next door. The database file is what decides, not the folder.
+    func testSupportFolderHoldingOnlyTheExtensionCacheStillAdopts() throws {
+        let fm = FileManager.default
+        let legacy = scratch.appendingPathComponent("ArcGIS Explorer", isDirectory: true)
+        let current = scratch.appendingPathComponent("Rumen", isDirectory: true)
+        try fm.createDirectory(at: legacy.appendingPathComponent("staging"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: legacy.appendingPathComponent("duckdb-extensions"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: current.appendingPathComponent("duckdb-extensions"), withIntermediateDirectories: true)
+        try Data("servers".utf8).write(to: legacy.appendingPathComponent("explorer.sqlite"))
+        try Data("run".utf8).write(to: legacy.appendingPathComponent("staging/download-1.duckdb"))
+
+        try AppDatabase.adoptLegacySupportDirectory(under: scratch)
+
+        XCTAssertEqual(try String(contentsOf: current.appendingPathComponent("explorer.sqlite"), encoding: .utf8), "servers")
+        XCTAssertTrue(fm.fileExists(atPath: current.appendingPathComponent("staging/download-1.duckdb").path))
+        // The cache was already here, so the old copy is left where it is rather than overwritten.
+        XCTAssertTrue(fm.fileExists(atPath: legacy.appendingPathComponent("duckdb-extensions").path))
+        XCTAssertFalse(fm.fileExists(atPath: legacy.appendingPathComponent("explorer.sqlite").path))
+    }
+
+    /// A Rumen database that already exists wins; the old folder is left untouched rather than
     /// merged or overwritten.
     func testExistingSupportDirectoryIsNotOverwritten() throws {
         let fm = FileManager.default

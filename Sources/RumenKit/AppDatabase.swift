@@ -21,18 +21,26 @@ public actor AppDatabase {
         return support.appendingPathComponent("Rumen", isDirectory: true)
     }
 
+    public static let filename = "explorer.sqlite"
+
     /// `~/Library/Application Support/Rumen/explorer.sqlite`.
     public static func defaultURL() -> URL {
-        supportDirectory().appendingPathComponent("explorer.sqlite")
+        supportDirectory().appendingPathComponent(filename)
     }
 
     /// The app was called ArcGIS Explorer until it grew its OGC half, and kept its state under
-    /// that name. An install from then keeps its servers, its download history and its cached
-    /// `spatial`: the old folder is moved across on the first launch that finds it and no new
-    /// one, and never looked at again. Must run before anything creates the new folder.
+    /// that name. An install from then keeps its servers, its download history and its staged
+    /// runs: the old folder's contents are carried across on the first launch that finds a
+    /// database there and none here.
     ///
-    /// A failure throws rather than falling through to a fresh database, which would look like
-    /// the app had quietly forgotten every server.
+    /// The decision is keyed on the database file rather than on the folder, because the folder
+    /// is not proof of an install — `--selftest` creates it just to hold the DuckDB extension
+    /// cache, and a folder test would then strand the real database next door forever.
+    ///
+    /// Nothing is ever overwritten: an entry already present here is left alone and its old
+    /// copy stays where it is, so the worst case is a stale cache left behind rather than lost
+    /// state. A failure throws rather than falling through to a fresh database, which would
+    /// look like the app had quietly forgotten every server.
     public static func adoptLegacySupportDirectory() throws {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         try adoptLegacySupportDirectory(under: support)
@@ -44,8 +52,18 @@ public actor AppDatabase {
         let fm = FileManager.default
         let legacy = support.appendingPathComponent("ArcGIS Explorer", isDirectory: true)
         let current = support.appendingPathComponent("Rumen", isDirectory: true)
-        guard fm.fileExists(atPath: legacy.path), !fm.fileExists(atPath: current.path) else { return }
-        try fm.moveItem(at: legacy, to: current)
+        guard fm.fileExists(atPath: legacy.appendingPathComponent(filename).path) else { return }
+        guard !fm.fileExists(atPath: current.appendingPathComponent(filename).path) else { return }
+
+        try fm.createDirectory(at: current, withIntermediateDirectories: true)
+        for entry in try fm.contentsOfDirectory(atPath: legacy.path) {
+            let destination = current.appendingPathComponent(entry)
+            guard !fm.fileExists(atPath: destination.path) else { continue }
+            try fm.moveItem(at: legacy.appendingPathComponent(entry), to: destination)
+        }
+        if try fm.contentsOfDirectory(atPath: legacy.path).isEmpty {
+            try fm.removeItem(at: legacy)
+        }
     }
 
     /// Opens (creating if needed) the database file at `path`, creating its directory first.

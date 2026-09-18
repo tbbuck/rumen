@@ -305,12 +305,13 @@ public actor DownloadEngine {
             // Through the same function the verdict used, so the size the page claims and the
             // size the run asks for cannot drift apart.
             pager = .pageSize(ceiling: Extractability.pageSize(for: record.strategy, layer: source, service: service))
-            // What this server coped with last time, so the climb is not repeated from scratch on
-            // every run. It is a starting point: the layer's ceiling still bounds it, and a
-            // refusal still takes it straight back down.
-            if let remembered = try await db.capacity(serverID: server.id) {
-                if let size = remembered.pageSize { pager.adopt(size) }
-                if let slots = remembered.concurrency { await client.seedConcurrency(slots, forHost: host) }
+            // What was learned last time, so the climb is not repeated from scratch on every run:
+            // the page from this layer, the width from the server it sits on. Both are starting
+            // points — the layer's ceiling still bounds the page, and a refusal still takes it
+            // straight back down.
+            if let size = try await db.layerPageSize(layerID: source.id) { pager.adopt(size) }
+            if let slots = try await db.serverConcurrency(serverID: server.id) {
+                await client.seedConcurrency(slots, forHost: host)
             }
         }
         let pageSize = pager.value
@@ -545,11 +546,11 @@ public actor DownloadEngine {
             if switchedToJSON {
                 try await db.setLayerTransport(layerID: source.id, transport: Assessment.Transport.json.rawValue)
             }
-            // What the run settled on, for the next one to start from. Recorded only when the
-            // size was free to move: a size the user pinned says nothing about the server.
+            // What the run settled on, for the next one to start from. The page is recorded only
+            // when it was free to move: a size the user pinned says nothing about the layer.
+            try? await db.recordServerConcurrency(await client.concurrencyLimit(forHost: host), serverID: server.id)
             if requests[id]?.manualPageSize == nil {
-                try? await db.recordCapacity(serverID: server.id, concurrency: await client.concurrencyLimit(forHost: host),
-                                             pageSize: pager.value)
+                try? await db.recordLayerPageSize(pager.value, layerID: source.id)
             }
         } catch is CancellationError {
             let db = self.db

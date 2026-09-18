@@ -564,49 +564,38 @@ extension AppDatabase {
     }
 }
 
-// MARK: - Learned server capacity
-
-/// What a server sustained last time, as a starting point rather than a promise.
-public struct ServerCapacity: Sendable, Equatable {
-    public let concurrency: Int?
-    public let pageSize: Int?
-
-    public init(concurrency: Int?, pageSize: Int?) {
-        self.concurrency = concurrency
-        self.pageSize = pageSize
-    }
-}
+// MARK: - What a run learned
 
 extension AppDatabase {
-    /// What this server was last seen to cope with, if a run has finished against it before.
+    /// How many requests at once this server was last seen to sustain.
     ///
     /// The registered server, not the host: `services-eu1.arcgis.com` is one machine to DNS and
     /// thousands of unrelated organisations to everyone else, and one tenant's slow layer has no
     /// business deciding how another tenant's download opens. Requests in flight are still
     /// counted per origin while a run is going, so the box is treated no less gently.
-    public func capacity(serverID: Int64) throws -> ServerCapacity? {
-        guard let row = try query("SELECT concurrency, page_size FROM server_capacity WHERE server_id = ?;",
-                                  [.int(serverID)]).rows.first else { return nil }
-        let concurrency = row.first?.intValue
-        let pageSize = row.count > 1 ? row[1].intValue : nil
-        guard concurrency != nil || pageSize != nil else { return nil }
-        return ServerCapacity(concurrency: concurrency, pageSize: pageSize)
+    public func serverConcurrency(serverID: Int64) throws -> Int? {
+        try query("SELECT concurrency FROM server_capacity WHERE server_id = ?;",
+                  [.int(serverID)]).rows.first?.first?.intValue
     }
 
-    /// Records what a finished run settled on. Either number may be left out, so a run that
-    /// learned nothing about one of them does not overwrite what another run knew.
-    public func recordCapacity(serverID: Int64, concurrency: Int? = nil, pageSize: Int? = nil) throws {
-        guard concurrency != nil || pageSize != nil else { return }
+    public func recordServerConcurrency(_ concurrency: Int, serverID: Int64) throws {
         try query("""
-            INSERT INTO server_capacity (server_id, concurrency, page_size, updated_at)
-            VALUES (?, ?, ?, datetime('now'))
+            INSERT INTO server_capacity (server_id, concurrency, updated_at)
+            VALUES (?, ?, datetime('now'))
             ON CONFLICT (server_id) DO UPDATE SET
-                concurrency = coalesce(excluded.concurrency, server_capacity.concurrency),
-                page_size   = coalesce(excluded.page_size, server_capacity.page_size),
+                concurrency = excluded.concurrency,
                 updated_at  = excluded.updated_at;
-            """,
-            [.int(serverID), concurrency.map { SQLBind.int(Int64($0)) } ?? .null,
-             pageSize.map { SQLBind.int(Int64($0)) } ?? .null])
+            """, [.int(serverID), .int(Int64(concurrency))])
+    }
+
+    /// How many features per request this layer was last seen to give — its own number, because
+    /// the answer comes from its field list and its geometry, not from the machine it sits on.
+    public func layerPageSize(layerID: Int64) throws -> Int? {
+        try query("SELECT page_size FROM layer WHERE id = ?;", [.int(layerID)]).rows.first?.first?.intValue
+    }
+
+    public func recordLayerPageSize(_ pageSize: Int, layerID: Int64) throws {
+        try query("UPDATE layer SET page_size = ? WHERE id = ?;", [.int(Int64(pageSize)), .int(layerID)])
     }
 }
 

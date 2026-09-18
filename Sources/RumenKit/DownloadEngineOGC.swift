@@ -161,11 +161,19 @@ extension DownloadEngine {
         // A WFS advertises `CountDefault` the way an ArcGIS layer advertises maxRecordCount, and
         // it is just as much a claim rather than a promise — so it is the ceiling and the run
         // climbs to it. A size the user set by hand is pinned.
+        let host = ArcGISURL.origin(of: server.rootURL)
         var pager: AdaptiveLimit
         if let manual = requests[id]?.manualPageSize {
             pager = AdaptiveLimit(floor: manual, ceiling: manual)
         } else {
             pager = .pageSize(ceiling: Extractability.wfsPageSize(detail))
+            // What was learned last time. A WFS run used to record nothing at all, so every
+            // download re-climbed from a hundred — on a server where the walk to the offset is
+            // the whole cost, that is minutes of asking for far too little.
+            if let size = try await db.layerPageSize(layerID: layer.id) { pager.adopt(size) }
+            if let slots = try await db.serverConcurrency(serverID: server.id) {
+                await client.seedConcurrency(slots, forHost: host)
+            }
         }
         var chunks = try await db.chunks(downloadID: id)
 
@@ -211,7 +219,6 @@ extension DownloadEngine {
         var failed = 0
         var features = chunks.filter { $0.status == .done }.reduce(Int64(0)) { $0 + ($1.count ?? 0) }
         var bytes = record.bytes ?? 0
-        let host = ArcGISURL.origin(of: server.rootURL)
         var lastLatency: TimeInterval?
         var hostWidth: Int?
         func report(_ status: DownloadStatus, inFlight: Int, message: String? = nil) {
@@ -373,6 +380,13 @@ extension DownloadEngine {
             }
             report(status, inFlight: 0, message: message)
             return record
+        }
+
+        // What the run settled on, for the next one to start from — the page against the feature
+        // type it was learned on, the width against the server.
+        try? await db.recordServerConcurrency(await client.concurrencyLimit(forHost: host), serverID: server.id)
+        if requests[id]?.manualPageSize == nil {
+            try? await db.recordLayerPageSize(pager.value, layerID: layer.id)
         }
 
         guard let staging else {

@@ -250,14 +250,13 @@ extension CrawlerTests {
     /// that server is worth keeping for the next one.
     func testADeepCrawlRecordsWhatTheServerCouldTake() async throws {
         let opened = try await crawler.open(root)
-        let before = try await db.capacity(serverID: opened.server.id)
+        let before = try await db.serverConcurrency(serverID: opened.server.id)
         XCTAssertNil(before, "nothing known before the first crawl")
 
         _ = try await crawler.deepCrawl(serverID: opened.server.id)
 
-        let after = try await db.capacity(serverID: opened.server.id)
-        XCTAssertNotNil(after?.concurrency, "the crawl recorded what the server sustained")
-        XCTAssertNil(after?.pageSize, "a crawl has no opinion on a download's page size")
+        let after = try await db.serverConcurrency(serverID: opened.server.id)
+        XCTAssertNotNil(after, "the crawl recorded what the server sustained")
     }
 
     func testDeepCrawlSkipsFreshServicesSoItResumes() async throws {

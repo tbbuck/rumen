@@ -417,7 +417,7 @@ public actor Crawler {
         // What this used to declare as a fixed 4 is now the host's own discovered limit, read
         // afresh on every refill so a crawl of 3,900 services widens as the server proves it can
         // cope and narrows the moment it cannot.
-        if let remembered = try await db.capacity(serverID: serverID)?.concurrency {
+        if let remembered = try await db.serverConcurrency(serverID: serverID) {
             await client.seedConcurrency(remembered, forHost: host)
         }
         var failures = [CrawlEvent]()
@@ -457,7 +457,7 @@ public actor Crawler {
         try await db.markDeepCrawl(serverID: serverID)
         // A crawl is the longest conversation this app has with a server, so it is the best
         // evidence of what the host will take. It has nothing to say about a page size.
-        try? await db.recordCapacity(serverID: serverID, concurrency: await client.concurrencyLimit(forHost: host))
+        try? await db.recordServerConcurrency(await client.concurrencyLimit(forHost: host), serverID: serverID)
         return failures
     }
 

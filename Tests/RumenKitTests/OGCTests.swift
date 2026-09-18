@@ -366,6 +366,30 @@ final class OGCTests: XCTestCase {
         XCTAssertTrue(pages.allSatisfy { $0["srsName"] == nil }, "native coordinates are not reprojected by the server")
     }
 
+    /// A WFS run used to record nothing at all, so every download re-climbed from the floor of a
+    /// hundred. On a server where the walk to the offset is the whole cost of a request, that is
+    /// minutes spent asking for far too little, every time.
+    func testAWFSRunRecordsWhatItLearned() async throws {
+        let layer = try await towns()
+        let service = try await db.service(id: layer.serviceID)
+        let beforePage = try await db.layerPageSize(layerID: layer.id)
+        let beforeWidth = try await db.serverConcurrency(serverID: service.serverID)
+        XCTAssertNil(beforePage)
+        XCTAssertNil(beforeWidth)
+
+        var request = DownloadRequest(layerID: layer.id, outputDirectory: scratch.appendingPathComponent("out"))
+        request.outWkid = 27700
+        let planned = try await engine.start(request)
+        let record = try await engine.wait(downloadID: planned.id)
+        XCTAssertEqual(record.status, .complete, record.error ?? "")
+
+        // This endpoint's capabilities name CountDefault=2, so 2 is as high as the page can go.
+        let afterPage = try await db.layerPageSize(layerID: layer.id)
+        let afterWidth = try await db.serverConcurrency(serverID: service.serverID)
+        XCTAssertEqual(afterPage, 2, "the size it settled on, kept against the type it was learned on")
+        XCTAssertNotNil(afterWidth, "and the width, kept against the server")
+    }
+
     func testWGS84IsAskedOfTheServerWhenOffered() async throws {
         let layer = try await towns()
         var request = DownloadRequest(layerID: layer.id, outputDirectory: scratch.appendingPathComponent("out"))

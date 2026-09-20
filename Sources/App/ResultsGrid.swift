@@ -25,6 +25,8 @@ struct ResultsGrid: NSViewRepresentable {
         table.allowsMultipleSelection = true
         table.dataSource = context.coordinator
         table.delegate = context.coordinator
+        table.target = context.coordinator
+        table.doubleAction = #selector(Coordinator.copyDoubleClickedCell(_:))
         context.coordinator.table = table
         context.coordinator.rebuildColumns(for: grid)
 
@@ -50,6 +52,10 @@ struct ResultsGrid: NSViewRepresentable {
         var grid: QueryGrid
         weak var table: NSTableView?
         private var signature: [String] = []
+        /// The "COPIED" pill currently showing, and the task fading it out; a second
+        /// double-click replaces both rather than leaving one stranded.
+        private weak var flash: CopiedBadge?
+        private var flashTask: Task<Void, Never>?
 
         init(grid: QueryGrid) { self.grid = grid }
 
@@ -104,6 +110,59 @@ struct ResultsGrid: NSViewRepresentable {
             return field
         }
 
+        // MARK: - Copy a cell
+
+        /// Double-click puts the cell's whole value on the pasteboard as plain text. The grid
+        /// shows a truncated, single-line rendering — an ellipsis for a long URL, `↵` for a
+        /// line break — so what is copied comes from the row itself, not from the field.
+        @objc func copyDoubleClickedCell(_ sender: Any?) {
+            guard let table, table.clickedRow >= 0, table.clickedColumn >= 0,
+                  table.clickedColumn < table.tableColumns.count else { return }
+            let row = table.clickedRow
+            // Columns can be reordered, so the clicked position is not the data index.
+            guard let index = Int(table.tableColumns[table.clickedColumn].identifier.rawValue.dropFirst()),
+                  row < grid.rows.count, index < grid.rows[row].count else { return }
+
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(grid.rows[row][index], forType: .string)
+            flashCopied(atColumn: table.clickedColumn, row: row)
+        }
+
+        /// A "COPIED" pill over the cell: in quickly, a beat to be read, then out.
+        private func flashCopied(atColumn column: Int, row: Int) {
+            guard let table else { return }
+            flash?.removeFromSuperview()
+            flashTask?.cancel()
+
+            let badge = CopiedBadge(frame: .zero)
+            let cell = table.frameOfCell(atColumn: column, row: row)
+            let size = badge.intrinsicContentSize
+            badge.frame = NSRect(x: cell.midX - size.width / 2, y: cell.midY - size.height / 2,
+                                 width: size.width, height: size.height).integral
+            badge.alphaValue = 0
+            table.addSubview(badge)
+            flash = badge
+
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.10
+                badge.animator().alphaValue = 1
+            }
+            flashTask = Task { @MainActor [weak self, weak badge] in
+                try? await Task.sleep(for: .milliseconds(650))
+                guard let badge, !Task.isCancelled else { return }
+                // The two-argument form: inside an async context the single-closure overload
+                // resolves to the async one.
+                NSAnimationContext.runAnimationGroup({ context in
+                    context.duration = 0.30
+                    badge.animator().alphaValue = 0
+                }, completionHandler: nil)
+                try? await Task.sleep(for: .milliseconds(320))
+                guard !Task.isCancelled else { return }
+                badge.removeFromSuperview()
+                if self?.flash === badge { self?.flash = nil }
+            }
+        }
+
         /// A default width from the header and a sample of the values, capped so long strings
         /// (measured up to 64 chars) cannot run away.
         static func width(for index: Int, in grid: QueryGrid) -> CGFloat {
@@ -118,6 +177,39 @@ struct ResultsGrid: NSViewRepresentable {
             let cap: CGFloat = column.name == QueryGrid.geometryColumn ? 320 : (column.isNumeric ? 200 : 300)
             return min(max(content, 60), cap)
         }
+    }
+}
+
+/// The "COPIED" pill shown over a cell after a double-click. Drawn rather than assembled from
+/// a text field so the label sits optically centred in the pill at this size.
+final class CopiedBadge: NSView {
+    private static let text = "COPIED"
+    private static let font = sheetMonoFont(9.5, weight: 500)
+    private static let padding = NSSize(width: 9, height: 4)
+
+    override var intrinsicContentSize: NSSize {
+        let text = (Self.text as NSString).size(withAttributes: [.font: Self.font])
+        return NSSize(width: ceil(text.width) + Self.padding.width * 2,
+                      height: ceil(text.height) + Self.padding.height * 2)
+    }
+
+    override var isFlipped: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let pill = NSBezierPath(roundedRect: bounds, xRadius: bounds.height / 2, yRadius: bounds.height / 2)
+        NSPalette.accent.setFill()
+        pill.fill()
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: Self.font,
+            // Read against the accent, which is dark pink by day and light pink by night:
+            // white on the night accent measures 2.6:1, so the tone flips with the appearance.
+            // White on #B8236B is 6.0:1; #1A2128 on #F476B1 is 6.3:1.
+            .foregroundColor: NSColor.sheet(0xFFFFFF, 0x1A2128),
+        ]
+        let size = (Self.text as NSString).size(withAttributes: attributes)
+        (Self.text as NSString).draw(at: NSPoint(x: (bounds.width - size.width) / 2,
+                                                 y: (bounds.height - size.height) / 2),
+                                     withAttributes: attributes)
     }
 }
 

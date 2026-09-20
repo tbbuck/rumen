@@ -105,7 +105,10 @@ private struct QueryActions: View {
 
     var body: some View {
         HStack(spacing: 18) {
-            AsyncButton("Preview", busy: "Running…") { await session.preview() }.buttonStyle(PrimaryButtonStyle(small: true))
+            AsyncButton("Preview", busy: "Running…") { await session.preview() }
+                .buttonStyle(PrimaryButtonStyle(small: true))
+                .keyboardShortcut(.return, modifiers: .command)
+                .help("Run the query and show the first page (⌘↩)")
             AsyncButton("Count", busy: "Counting…") { await session.count() }.buttonStyle(LinkButtonStyle())
             AsyncButton("Extent", busy: "Measuring…") { await session.extent() }.buttonStyle(LinkButtonStyle())
                 .disabled(session.canExtent != nil).help(session.canExtent ?? "The bounding box of the matching features")

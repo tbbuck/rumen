@@ -387,7 +387,7 @@ public actor DownloadEngine {
                                                                  usedJSON: false, elapsed: -started.timeIntervalSinceNow, budget: budget))
                                 } catch is PBFError {
                                     // Fall through to JSON for this chunk; the run switches transport below.
-                                } catch ArcGISClientError.server(let code, _, _, _) where code != 498 && code != 499 {
+                                } catch ArcGISClientError.server(let code, _, _, _, _) where code != 498 && code != 499 {
                                     // The server refused the PBF request itself; JSON may still work.
                                 }
                             }

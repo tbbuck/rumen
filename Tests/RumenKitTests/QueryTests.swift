@@ -176,7 +176,7 @@ final class QueryTests: XCTestCase {
         XCTAssertEqual(distinct.features.count, 9)
 
         await XCTAssertThrowsErrorAsync(try await client.features(server, layerURL: layer, options: QueryOptions(whereClause: "NOPE == 1"))) { error in
-            guard case ArcGISClientError.server(let code, let message, _, _)? = error as? ArcGISClientError else {
+            guard case ArcGISClientError.server(let code, let message, _, _, _)? = error as? ArcGISClientError else {
                 return XCTFail("expected a server error, got \(error)")
             }
             XCTAssertEqual(code, 400)

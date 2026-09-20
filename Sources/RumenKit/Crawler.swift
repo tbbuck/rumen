@@ -535,7 +535,7 @@ extension Crawler {
             if assessment.viaTwin { try await db.setFeatureCount(layerID: source.id, count: count) }
             return count
         } catch let error as ArcGISClientError {
-            if case .server(_, let message, _, _) = error {
+            if case .server(_, let message, _, _, _) = error {
                 try await db.setExtractability(layerID: layerID, extractable: false,
                                                reason: "The server refused the count probe: \(message)",
                                                transport: nil, siblingLayerID: nil)

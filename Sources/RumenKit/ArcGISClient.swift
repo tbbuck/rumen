@@ -67,8 +67,10 @@ public struct RetryPolicy: Sendable, Equatable {
 public enum ArcGISClientError: Error, CustomStringConvertible, Equatable {
     /// A non-2xx HTTP status.
     case http(status: Int, url: URL)
-    /// An ArcGIS error envelope (HTTP 200 with `{"error": …}`).
-    case server(code: Int?, message: String, details: [String], url: URL)
+    /// An ArcGIS error envelope (HTTP 200 with `{"error": …}`). `sent` is the parameters the
+    /// request actually carried: a query goes out as POST, so without it a rejected where
+    /// clause never appears anywhere and a 400 leaves nothing to act on.
+    case server(code: Int?, message: String, details: [String], url: URL, sent: String?)
     /// ArcGIS codes 498 (invalid token) and 499 (token required).
     case tokenRequired(code: Int, message: String, url: URL)
     /// URLSession-level failure (DNS, TLS, timeout, offline), after retries.
@@ -81,10 +83,11 @@ public enum ArcGISClientError: Error, CustomStringConvertible, Equatable {
     public var description: String {
         switch self {
         case .http(let s, let u): return "HTTP \(s) from \(u)"
-        case .server(let c, let m, let d, let u):
+        case .server(let c, let m, let d, let u, let sent):
             let code = c.map { "\($0) " } ?? ""
             let details = d.isEmpty ? "" : " (" + d.joined(separator: "; ") + ")"
-            return "ArcGIS error \(code)\(m)\(details) from \(u)"
+            let request = sent.map { " — sent \($0)" } ?? ""
+            return "ArcGIS error \(code)\(m)\(details) from \(u)\(request)"
         case .tokenRequired(let c, let m, let u): return "ArcGIS \(c): \(m) — a token is required for \(u)"
         case .transport(let m, let u): return "network error: \(m) (\(u))"
         case .decoding(let m, let u): return "unexpected response from \(u): \(m)"
@@ -96,7 +99,7 @@ public enum ArcGISClientError: Error, CustomStringConvertible, Equatable {
     var isRetryable: Bool {
         switch self {
         case .http(let status, _): return status == 408 || status == 429 || status == 500 || (502...504).contains(status)
-        case .server(let code, let message, _, _):
+        case .server(let code, let message, _, _, _):
             if code == 429 || code == 503 { return true }
             return message.lowercased().contains("timeout") || message.lowercased().contains("timed out")
         case .transport: return true
@@ -117,7 +120,7 @@ public enum ArcGISClientError: Error, CustomStringConvertible, Equatable {
     var isPushback: Bool {
         switch self {
         case .http(let status, _): return status == 408 || status == 429 || (500...504).contains(status)
-        case .server(let code, let message, _, _):
+        case .server(let code, let message, _, _, _):
             // ArcGIS reports a refusal in an error envelope over HTTP 200, so the code here is
             // the server's, not the transport's. Its generic 500 ("Error performing query
             // operation") is the usual answer to a page the server could not build in time.
@@ -433,7 +436,8 @@ public actor ArcGISClient {
         let data = try await send(request, url: url, maxAttempts: maxAttempts, progress: progress)
         if Self.looksLikeXML(data), OGCCapabilities.isExceptionReport(data),
            let document = try? XMLDocument(data: data, options: []), let rootElement = document.rootElement() {
-            throw ArcGISClientError.server(code: nil, message: OGCCapabilities.exceptionText(rootElement), details: [], url: url)
+            throw ArcGISClientError.server(code: nil, message: OGCCapabilities.exceptionText(rootElement), details: [], url: url,
+                                           sent: Self.sentParameters(of: request))
         }
         return data
     }
@@ -580,7 +584,8 @@ public actor ArcGISClient {
                 throw SendFailure(error: .tokenRequired(code: code, message: message, url: url), retryAfter: nil)
             }
             throw SendFailure(error: .server(code: envelope.error.code, message: message,
-                                             details: envelope.error.details ?? [], url: url),
+                                             details: envelope.error.details ?? [], url: url,
+                                             sent: Self.sentParameters(of: request)),
                               retryAfter: retryAfter)
         }
         return body
@@ -680,6 +685,30 @@ public actor ArcGISClient {
 
     static func percentEncode(_ s: String) -> String {
         s.addingPercentEncoding(withAllowedCharacters: unreserved) ?? s
+    }
+
+    /// What a request actually carried, percent-decoded for reading and with any token hidden.
+    /// A feature query is a POST, so its parameters live in the body and are invisible in the
+    /// URL an error reports; decoding them here is what turns "the where parameter is invalid"
+    /// into a clause you can look at.
+    static func sentParameters(of request: URLRequest) -> String? {
+        let raw: String?
+        if let body = request.httpBody, !body.isEmpty {
+            raw = String(data: body, encoding: .utf8)
+        } else {
+            raw = request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.percentEncodedQuery }
+        }
+        guard let raw, !raw.isEmpty else { return nil }
+        return raw.split(separator: "&").map(decodePair).joined(separator: "&")
+    }
+
+    private static func decodePair(_ pair: Substring) -> String {
+        let halves = pair.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+        let key = String(halves[0]).removingPercentEncoding ?? String(halves[0])
+        guard halves.count == 2 else { return key }
+        guard key != "token" else { return "token=<redacted>" }
+        let value = String(halves[1]).removingPercentEncoding ?? String(halves[1])
+        return "\(key)=\(value)"
     }
 
     // MARK: - Per-host concurrency cap

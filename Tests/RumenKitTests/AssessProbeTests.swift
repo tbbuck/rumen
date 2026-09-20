@@ -96,7 +96,7 @@ final class AssessProbeTests: XCTestCase {
         let assessment = try await crawler.assess(layerID: layer.id)
         XCTAssertEqual(assessment.verdict, true, "rules say yes")
         await XCTAssertThrowsErrorAsync(try await self.crawler.probeCount(layerID: layer.id)) { error in
-            guard case ArcGISClientError.server(let code, _, let details, _)? = error as? ArcGISClientError else {
+            guard case ArcGISClientError.server(let code, _, let details, _, _)? = error as? ArcGISClientError else {
                 return XCTFail("expected a server error, got \(error)")
             }
             XCTAssertEqual(code, 400)

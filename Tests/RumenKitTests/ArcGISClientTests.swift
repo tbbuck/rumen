@@ -167,9 +167,30 @@ final class ArcGISClientTests: XCTestCase {
         let transport = try StubTransport(reply: .fixture("s6-census-layer99.json"))
         let url = root.appendingPathComponent("Census/MapServer/99")
         await XCTAssertThrowsErrorAsync(try await self.client(transport).layerInfo(self.server, layerURL: url)) { error in
-            XCTAssertEqual(error as? ArcGISClientError, .server(code: 500, message: "json", details: [], url: url))
+            XCTAssertEqual(error as? ArcGISClientError, .server(code: 500, message: "json", details: [], url: url, sent: "f=json"))
         }
         XCTAssertEqual(transport.count, 1, "a permanent ArcGIS error is not retried")
+    }
+
+    /// A POST keeps its parameters in the body, so the error has to decode them back out or a
+    /// rejected where clause is invisible. The token must not come with them.
+    func testSentParametersDecodeThePOSTBodyAndHideTheToken() throws {
+        let url = root.appendingPathComponent("Census/MapServer/3/query")
+        let connection = ServerConnection(rootURL: root, token: "secret-token")
+        let params = ["where": "ApplicationNoNew='WD/2004/0856/F'", "f": "json", "token": "secret-token"]
+        let request = try ArcGISClient.build(.post, url: url, params: params, server: connection)
+
+        let sent = try XCTUnwrap(ArcGISClient.sentParameters(of: request))
+        XCTAssertTrue(sent.contains("where=ApplicationNoNew='WD/2004/0856/F'"), "got: \(sent)")
+        XCTAssertTrue(sent.contains("token=<redacted>"), "got: \(sent)")
+        XCTAssertFalse(sent.contains("secret-token"), "the token must never reach an error message")
+    }
+
+    /// A GET has no body, so the parameters come from the query string instead.
+    func testSentParametersFallBackToTheQueryString() throws {
+        let url = root.appendingPathComponent("Census/MapServer/3")
+        let request = try ArcGISClient.build(.get, url: url, params: ["f": "json"], server: server)
+        XCTAssertEqual(ArcGISClient.sentParameters(of: request), "f=json")
     }
 
     func testTokenRequiredIsDistinct() async throws {

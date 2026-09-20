@@ -8,8 +8,9 @@ options:
 # Regenerate the .xcodeproj (which is gitignored) with `xcodegen generate`.
 settings:
   base:
-    SWIFT_VERSION: "6.0"
-    SWIFT_STRICT_CONCURRENCY: complete
+    SWIFT_VERSION: "6.4"
+    SWIFT_STRICT_CONCURRENCY: "complete"
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: "YES"
     # Local dev signs ad-hoc so no Apple Team is required to build/run.
     # scripts/release.sh signs the Release build with Developer ID + hardened runtime and notarizes it (M9).
     CODE_SIGN_STYLE: Manual

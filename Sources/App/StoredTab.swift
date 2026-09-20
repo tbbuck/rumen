@@ -180,15 +180,8 @@ private struct ScratchBox: View {
                 Spacer()
             }
             HStack(alignment: .top, spacing: 12) {
-                TextEditor(text: $session.sql).accessibilityLabel("SQL over the stored file")
-                    .font(.sheetMono(12.5))
-                    .foregroundStyle(Palette.ink)
-                    .scrollContentBackground(.hidden)
-                    .padding(.horizontal, 6).padding(.vertical, 4)
-                    .frame(height: 64)
-                    .background(Palette.bg, in: RoundedRectangle(cornerRadius: 7))
-                    .overlay(RoundedRectangle(cornerRadius: 7).stroke(Palette.line2, lineWidth: 1))
-                    .frame(maxWidth: 720)
+                PlainTextEditor(text: $session.sql, accessibilityLabel: "SQL over the stored file")
+                    .plainEditorChrome()
                 AsyncButton("Run", busy: "Running…") { await session.run() }
                     .buttonStyle(PrimaryButtonStyle(small: true))
                     .keyboardShortcut(.return, modifiers: .command)

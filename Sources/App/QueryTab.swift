@@ -46,15 +46,8 @@ private struct WhereEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Caption("Where")
-            TextEditor(text: $text).accessibilityLabel("Where clause")
-                .font(.sheetMono(12.5))
-                .foregroundStyle(Palette.ink)
-                .scrollContentBackground(.hidden)
-                .padding(.horizontal, 6).padding(.vertical, 4)
-                .frame(height: 64)
-                .background(Palette.bg, in: RoundedRectangle(cornerRadius: 7))
-                .overlay(RoundedRectangle(cornerRadius: 7).stroke(Palette.line2, lineWidth: 1))
-                .frame(maxWidth: 720)
+            PlainTextEditor(text: $text, accessibilityLabel: "Where clause")
+                .plainEditorChrome()
         }
     }
 }

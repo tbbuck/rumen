@@ -10,6 +10,8 @@ enum AppEntry {
         if CommandLine.arguments.contains("--selftest") {
             SelfTest.run()   // runs the packaged-engine load path, then exits; never returns
         }
+        // Before any window exists: a field editor created first would keep the old setting.
+        TextSubstitution.disableForThisApp()
         RumenApp.main()
     }
 }

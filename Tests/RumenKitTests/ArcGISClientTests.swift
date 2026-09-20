@@ -172,25 +172,22 @@ final class ArcGISClientTests: XCTestCase {
         XCTAssertEqual(transport.count, 1, "a permanent ArcGIS error is not retried")
     }
 
-    /// A POST keeps its parameters in the body, so the error has to decode them back out or a
-    /// rejected where clause is invisible. The token must not come with them.
-    func testSentParametersDecodeThePOSTBodyAndHideTheToken() throws {
-        let url = root.appendingPathComponent("Census/MapServer/3/query")
-        let connection = ServerConnection(rootURL: root, token: "secret-token")
-        let params = ["where": "ApplicationNoNew='WD/2004/0856/F'", "f": "json", "token": "secret-token"]
-        let request = try ArcGISClient.build(.post, url: url, params: params, server: connection)
-
-        let sent = try XCTUnwrap(ArcGISClient.sentParameters(of: request))
-        XCTAssertTrue(sent.contains("where=ApplicationNoNew='WD/2004/0856/F'"), "got: \(sent)")
-        XCTAssertTrue(sent.contains("token=<redacted>"), "got: \(sent)")
-        XCTAssertFalse(sent.contains("secret-token"), "the token must never reach an error message")
-    }
-
-    /// A GET has no body, so the parameters come from the query string instead.
-    func testSentParametersFallBackToTheQueryString() throws {
+    /// A query is a POST, so its where clause lives in the body and never appears in the URL
+    /// the error reports. It has to come back out on the error itself — without the token.
+    func testRejectedQueryCarriesItsWhereClauseButNotTheToken() async throws {
+        let transport = try StubTransport(reply: .fixture("s6-census-layer99.json"))
         let url = root.appendingPathComponent("Census/MapServer/3")
-        let request = try ArcGISClient.build(.get, url: url, params: ["f": "json"], server: server)
-        XCTAssertEqual(ArcGISClient.sentParameters(of: request), "f=json")
+        let connection = ServerConnection(rootURL: root, token: "secret-token")
+        let options = QueryOptions(whereClause: "ApplicationNoNew='WD/2004/0856/F'", returnGeometry: false)
+        await XCTAssertThrowsErrorAsync(try await self.client(transport).features(connection, layerURL: url, options: options)) { error in
+            guard case ArcGISClientError.server(_, _, _, _, let sent)? = error as? ArcGISClientError else {
+                return XCTFail("expected a server error envelope, got \(String(describing: error))")
+            }
+            let parameters = sent ?? ""
+            XCTAssertTrue(parameters.contains("where=ApplicationNoNew='WD/2004/0856/F'"), "got: \(parameters)")
+            XCTAssertTrue(parameters.contains("token=<redacted>"), "got: \(parameters)")
+            XCTAssertFalse(parameters.contains("secret-token"), "the token must never reach an error message")
+        }
     }
 
     func testTokenRequiredIsDistinct() async throws {

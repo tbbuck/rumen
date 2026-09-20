@@ -238,8 +238,10 @@ public actor Crawler {
             try await withThrowingTaskGroup(of: ([String], CrawlProblem?).self) { group in
                 var pending = queue[...]
                 var inFlight = 0
-                func fill() async {
-                    let width = max(1, await client.concurrencyLimit(forHost: host))
+                // `fill` stays synchronous and takes the width: an async local function that
+                // captures the group counts as sending it across an isolation boundary, which
+                // Swift 6 rejects. The width is still re-read before every refill.
+                func fill(width: Int) {
                     while inFlight < width, let path = pending.popFirst() {
                         group.addTask { [self] in
                             do {
@@ -260,14 +262,14 @@ public actor Crawler {
                         inFlight += 1
                     }
                 }
-                await fill()
+                fill(width: max(1, await client.concurrencyLimit(forHost: host)))
                 while inFlight > 0 {
                     guard let outcome = try await group.next() else { break }
                     inFlight -= 1
                     nextLevel += outcome.0
                     if let problem = outcome.1 { problems.append(problem) }
                     try Task.checkCancellation()
-                    await fill()
+                    fill(width: max(1, await client.concurrencyLimit(forHost: host)))
                 }
             }
             queue = nextLevel
@@ -356,8 +358,7 @@ public actor Crawler {
         try await withThrowingTaskGroup(of: Void.self) { group in
             var pending = remaining[...]
             var inFlight = 0
-            func fill() async {
-                let width = max(1, await client.concurrencyLimit(forHost: host))
+            func fill(width: Int) {
                 while inFlight < width, let record = pending.popFirst() {
                     group.addTask { [self] in
                         try await crawlLayer(layerID: record.id, connection: conn, serviceURL: service.url,
@@ -366,12 +367,12 @@ public actor Crawler {
                     inFlight += 1
                 }
             }
-            await fill()
+            fill(width: max(1, await client.concurrencyLimit(forHost: host)))
             while inFlight > 0 {
                 _ = try await group.next()
                 inFlight -= 1
                 try Task.checkCancellation()
-                await fill()
+                fill(width: max(1, await client.concurrencyLimit(forHost: host)))
             }
         }
     }
@@ -441,17 +442,16 @@ public actor Crawler {
                 }
                 inFlight += 1
             }
-            func fill() async {
-                let width = max(1, await client.concurrencyLimit(forHost: host))
+            func fill(width: Int) {
                 while inFlight < width, let next = pending.popFirst() { enqueue(next) }
             }
-            await fill()
+            fill(width: max(1, await client.concurrencyLimit(forHost: host)))
             while inFlight > 0 {
                 guard let outcome = try await group.next() else { break }
                 inFlight -= 1
                 if let failure = outcome { failures.append(failure) }
                 try Task.checkCancellation()
-                await fill()
+                fill(width: max(1, await client.concurrencyLimit(forHost: host)))
             }
         }
         try await db.markDeepCrawl(serverID: serverID)

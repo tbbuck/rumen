@@ -165,8 +165,9 @@ extension Crawler {
         try await withThrowingTaskGroup(of: String?.self) { group in
             var pending = layers.filter { $0.ogcName != nil }[...]
             var inFlight = 0
-            func fill() async {
-                let width = max(1, await client.concurrencyLimit(forHost: host))
+            // Synchronous, with the width passed in: an async local function that captures the
+            // group counts as sending it across an isolation boundary, which Swift 6 rejects.
+            func fill(width: Int) {
                 while inFlight < width, let layer = pending.popFirst() {
                     group.addTask { [self] in
                         guard let name = layer.ogcName else { return nil }
@@ -194,13 +195,13 @@ extension Crawler {
                     inFlight += 1
                 }
             }
-            await fill()
+            fill(width: max(1, await client.concurrencyLimit(forHost: host)))
             while inFlight > 0 {
                 guard let outcome = try await group.next() else { break }
                 inFlight -= 1
                 if let failure = outcome { failures.append(failure) }
                 try Task.checkCancellation()
-                await fill()
+                fill(width: max(1, await client.concurrencyLimit(forHost: host)))
             }
         }
         if !failures.isEmpty {

@@ -368,7 +368,10 @@ public actor DownloadEngine {
                 var useJSON = startedAsJSON
                 var inFlight = 0
                 var attempts = Dictionary(uniqueKeysWithValues: chunks.map { ($0.seq, $0.attempts) })
-                func enqueue(_ chunk: DownloadChunk) {
+                // The group travels as an `inout` argument rather than a capture: an async local
+                // function that closes over it counts as sending it across an isolation boundary,
+                // which Swift 6 rejects.
+                func enqueue(_ chunk: DownloadChunk, into group: inout ThrowingTaskGroup<ChunkOutcome, any Error>) {
                     let options = DownloadPlanner.options(for: chunk, whereClause: whereClause, outWkid: outWkid,
                                                           oidField: oidField, pageSize: pageSize, canOrderBy: source.supportsOrderBy ?? false)
                     let json = useJSON
@@ -401,29 +404,45 @@ public actor DownloadEngine {
                     inFlight += 1
                 }
 
-                /// Fills the in-flight slots from the chunks already waiting, then from the feed
-                /// at whatever page size the server has earned by now. A chunk is recorded before
-                /// it is issued, so a crash leaves it pending rather than losing its range.
-                func refill() async throws {
-                    // The run's own cap and the host's discovered one, whichever binds. Creating
-                    // more tasks than the host will take only queues them inside the client, and
-                    // makes the transfers drawer claim requests are in flight when they are not.
-                    let width = min(concurrency, await client.concurrencyLimit(forHost: host))
+                /// Chooses what should go out next to fill the in-flight slots: the chunks already
+                /// waiting first, then fresh ones from the feed at whatever page size the server
+                /// has earned by now. `fresh` are the ones not yet in the database.
+                ///
+                /// Planning is separated from issuing so that it can stay synchronous. An async
+                /// local function would capture the group and the run's mutable state, and Swift 6
+                /// counts calling it as sending all of that across an isolation boundary.
+                func planRefill(width: Int) -> (ready: [DownloadChunk], fresh: [DownloadChunk]) {
                     hostWidth = width
-                    while inFlight < max(1, width) {
+                    var ready = [DownloadChunk](), fresh = [DownloadChunk]()
+                    var slots = inFlight
+                    while slots < max(1, width) {
                         if !pending.isEmpty {
-                            enqueue(pending.removeFirst())
+                            ready.append(pending.removeFirst())
+                            slots += 1
                             continue
                         }
-                        guard let chunk = feed.next(downloadID: id, seq: nextSeq, size: pager.value) else { return }
+                        guard let chunk = feed.next(downloadID: id, seq: nextSeq, size: pager.value) else { break }
                         nextSeq += 1
-                        try await db.insertChunks([chunk])
                         chunks.append(chunk)
                         attempts[chunk.seq] = 0
-                        enqueue(chunk)
+                        fresh.append(chunk)
+                        ready.append(chunk)
+                        slots += 1
                     }
+                    return (ready, fresh)
                 }
-                try await refill()
+
+                // The run's own cap and the host's discovered one, whichever binds. Creating more
+                // tasks than the host will take only queues them inside the client, and makes the
+                // transfers drawer claim requests are in flight when they are not.
+                //
+                // A chunk is recorded before it is issued, so a crash leaves it pending rather
+                // than losing its range — hence the insert between planning and enqueuing.
+                func refillWidth() async -> Int { min(concurrency, await client.concurrencyLimit(forHost: host)) }
+
+                var batch = planRefill(width: await refillWidth())
+                if !batch.fresh.isEmpty { try await db.insertChunks(batch.fresh) }
+                for chunk in batch.ready { enqueue(chunk, into: &group) }
 
                 while inFlight > 0 {
                     guard let next = try await group.next() else { break }
@@ -450,7 +469,9 @@ public actor DownloadEngine {
                                                      attempts: attempts[seq] ?? 1, error: error.description)
                             pending.append(chunks[index])
                             report(.running, inFlight: inFlight, message: "request \(seq + 1) dropped on connect; trying again")
-                            try await refill()
+                            batch = planRefill(width: await refillWidth())
+                            if !batch.fresh.isEmpty { try await db.insertChunks(batch.fresh) }
+                            for chunk in batch.ready { enqueue(chunk, into: &group) }
                             continue
                         }
 
@@ -473,7 +494,9 @@ public actor DownloadEngine {
                             pending.append(contentsOf: halves)
                             report(.running, inFlight: inFlight,
                                    message: "request \(seq + 1) refused, split in two; asking for \(pager.value.formatted()) at a time")
-                            try await refill()
+                            batch = planRefill(width: await refillWidth())
+                            if !batch.fresh.isEmpty { try await db.insertChunks(batch.fresh) }
+                            for chunk in batch.ready { enqueue(chunk, into: &group) }
                             continue
                         }
                         outcome = (.failed, DownloadError.chunkFailed(seq: seq, message: error.description).description)
@@ -538,7 +561,9 @@ public actor DownloadEngine {
                     // Refill first: reporting between a chunk finishing and the next going out
                     // shows nothing in flight, so a run at full tilt reads as "0/1" and looks
                     // stalled.
-                    try await refill()
+                    batch = planRefill(width: await refillWidth())
+                    if !batch.fresh.isEmpty { try await db.insertChunks(batch.fresh) }
+                    for chunk in batch.ready { enqueue(chunk, into: &group) }
                     report(.running, inFlight: inFlight)
                 }
                 return useJSON && !startedAsJSON

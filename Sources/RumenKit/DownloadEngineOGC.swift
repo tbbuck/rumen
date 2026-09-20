@@ -265,24 +265,36 @@ extension DownloadEngine {
                     inFlight += 1
                 }
 
-                func refill() async throws {
-                    // As on the ArcGIS side: the run's cap and the host's, whichever binds.
-                    let width = min(concurrency, await client.concurrencyLimit(forHost: host))
+                /// As on the ArcGIS side: planning stays synchronous so it does not capture the
+                /// group and the run's state in an async function, which Swift 6 treats as
+                /// sending them across an isolation boundary. `fresh` are not yet recorded.
+                func planRefill(width: Int) -> (ready: [DownloadChunk], fresh: [DownloadChunk]) {
                     hostWidth = width
-                    while inFlight < max(1, width) {
+                    var ready = [DownloadChunk](), fresh = [DownloadChunk]()
+                    var slots = inFlight
+                    while slots < max(1, width) {
                         if !pending.isEmpty {
-                            enqueue(pending.removeFirst())
+                            ready.append(pending.removeFirst())
+                            slots += 1
                             continue
                         }
-                        guard let chunk = feed.next(downloadID: id, seq: nextSeq, size: pager.value) else { return }
+                        guard let chunk = feed.next(downloadID: id, seq: nextSeq, size: pager.value) else { break }
                         nextSeq += 1
-                        try await db.insertChunks([chunk])
                         chunks.append(chunk)
                         attempts[chunk.seq] = 0
-                        enqueue(chunk)
+                        fresh.append(chunk)
+                        ready.append(chunk)
+                        slots += 1
                     }
+                    return (ready, fresh)
                 }
-                try await refill()
+
+                // The run's cap and the host's, whichever binds.
+                func refillWidth() async -> Int { min(concurrency, await client.concurrencyLimit(forHost: host)) }
+
+                var batch = planRefill(width: await refillWidth())
+                if !batch.fresh.isEmpty { try await db.insertChunks(batch.fresh) }
+                for chunk in batch.ready { enqueue(chunk) }
 
                 while inFlight > 0 {
                     guard let page = try await group.next() else { break }
@@ -306,7 +318,9 @@ extension DownloadEngine {
                                                      attempts: attempts[page.seq] ?? 1, error: error.description)
                             pending.append(chunks[index])
                             report(.running, inFlight: inFlight, message: "request \(page.seq + 1) dropped on connect; trying again")
-                            try await refill()
+                            batch = planRefill(width: await refillWidth())
+                            if !batch.fresh.isEmpty { try await db.insertChunks(batch.fresh) }
+                            for chunk in batch.ready { enqueue(chunk) }
                             continue
                         }
 
@@ -325,7 +339,9 @@ extension DownloadEngine {
                             pending.append(contentsOf: halves)
                             report(.running, inFlight: inFlight,
                                    message: "request \(page.seq + 1) refused, split in two; asking for \(pager.value.formatted()) at a time")
-                            try await refill()
+                            batch = planRefill(width: await refillWidth())
+                            if !batch.fresh.isEmpty { try await db.insertChunks(batch.fresh) }
+                            for chunk in batch.ready { enqueue(chunk) }
                             continue
                         }
                         outcome = (.failed, DownloadError.chunkFailed(seq: page.seq, message: error.description).description)
@@ -356,9 +372,13 @@ extension DownloadEngine {
                     pager.succeeded(AdaptiveLimit.Sample(work: Double(appended), elapsed: page.elapsed,
                                                          budget: page.budget, at: index.flatMap { chunks[$0].limit }))
                     lastLatency = page.elapsed
-                    try await refill()          // before reporting, or a busy run reads as 0 in flight
+                    batch = planRefill(width: await refillWidth())          // before reporting, or a busy run reads as 0 in flight
+                    if !batch.fresh.isEmpty { try await db.insertChunks(batch.fresh) }
+                    for chunk in batch.ready { enqueue(chunk) }
                     report(.running, inFlight: inFlight)
-                    try await refill()
+                    batch = planRefill(width: await refillWidth())
+                    if !batch.fresh.isEmpty { try await db.insertChunks(batch.fresh) }
+                    for chunk in batch.ready { enqueue(chunk) }
                 }
             }
         } catch is CancellationError {

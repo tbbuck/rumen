@@ -238,6 +238,16 @@ public enum ArcGISURL {
     }
 
     /// The last path segment of a URL, or the host when the path is empty: a lone service's name.
+    /// Whether a URL ends in an ArcGIS service (optionally with a layer index after it), which
+    /// is what a portal item's `url` carries for a service item.
+    public static func looksLikeService(_ url: URL) -> Bool {
+        let segments = url.path.split(separator: "/").map(String.init)
+        let candidates = [segments.last, segments.dropLast().last].compactMap { $0 }
+        return candidates.contains { segment in
+            ["mapserver", "featureserver", "imageserver"].contains(segment.lowercased())
+        }
+    }
+
     public static func lastSegment(of url: URL) -> String {
         url.path.split(separator: "/").last.map(String.init) ?? (url.host ?? url.absoluteString)
     }

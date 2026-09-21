@@ -77,6 +77,11 @@ public actor Crawler {
                 location = owned
             } else if OGCURL.knownEndpoint(of: text, among: servers) != nil {
                 return try await openOGC(text, friendlyName: friendlyName, headerOverrides: headerOverrides, cookie: cookie, progress: progress)
+            } else if let item = PortalURL.parse(text) {
+                // A viewer URL: the item lists the services it draws, which for a proxied
+                // council map is the only place they are written down.
+                return try await openPortalItem(item, headerOverrides: headerOverrides, cookie: cookie,
+                                                proxyURL: proxyURL, progress: progress)
             } else {
                 switch try await probeArcGIS(text, headerOverrides: headerOverrides, cookie: cookie, proxyURL: proxyURL) {
                 case .found(let finding):
@@ -586,5 +591,67 @@ extension Crawler {
             }
             throw error
         }
+    }
+}
+
+// MARK: - Portal items
+
+extension Crawler {
+
+    /// The services a portal item names, following an app to the web map it draws.
+    ///
+    /// One hop only: app → web map → its layers. A web map is where layer URLs actually live,
+    /// and an app that points at another app is not a shape worth chasing.
+    public func resolvePortalItem(_ ref: PortalItemRef, proxyURL: String? = nil) async throws -> [PortalService] {
+        let connection = ServerConnection(rootURL: ref.portal, proxyURL: proxyURL)
+        let info = try await client.json(PortalItemInfo.self, url: ref.itemURL, server: connection).value
+
+        // A service item is its own answer.
+        if let text = info.url, let url = URL(string: text), ArcGISURL.looksLikeService(url) {
+            return [PortalService(title: info.title ?? url.lastPathComponent, url: url)]
+        }
+
+        let data = try await client.json(PortalItemData.self, url: ref.dataURL, server: connection).value
+        let direct = data.serviceURLs
+        if !direct.isEmpty { return direct }
+
+        if let mapID = data.referencedMapID {
+            let map = PortalItemRef(portal: ref.portal, itemID: mapID)
+            let layers = try await client.json(PortalItemData.self, url: map.dataURL, server: connection).value.serviceURLs
+            if !layers.isEmpty { return layers }
+        }
+        throw PortalItemError.noServices(itemID: ref.itemID, type: info.type)
+    }
+
+    /// Opens every service a portal item names. The first is returned as the one to land on;
+    /// the rest are registered and crawled so the tree has them, because a viewer's value is
+    /// precisely that it lists services no directory will.
+    ///
+    /// One service failing does not sink the others: its message is carried back as a problem
+    /// against the item, and the ones that opened still open.
+    public func openPortalItem(_ ref: PortalItemRef, headerOverrides: (origin: String?, referer: String?)? = nil,
+                               cookie: String? = nil, proxyURL: String? = nil,
+                               progress: (@Sendable (CrawlEvent) -> Void)? = nil) async throws -> Opened {
+        let services = try await resolvePortalItem(ref, proxyURL: proxyURL)
+        var first: Opened?
+        var problems = [CrawlProblem]()
+        for service in services {
+            do {
+                let opened = try await open(service.url.absoluteString, friendlyName: service.title,
+                                            headerOverrides: headerOverrides, cookie: cookie, proxyURL: proxyURL,
+                                            progress: progress)
+                if first == nil { first = opened }
+                problems += opened.problems
+            } catch {
+                let message = String(describing: error)
+                progress?(.failed(what: service.title, error: message))
+                problems.append(CrawlProblem(folderPath: service.title, message: message))
+            }
+        }
+        guard var opened = first else {
+            throw PortalItemError.noServices(itemID: ref.itemID, type: nil)
+        }
+        opened.problems = problems
+        return opened
     }
 }

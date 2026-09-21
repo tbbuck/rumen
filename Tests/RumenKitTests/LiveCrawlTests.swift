@@ -98,4 +98,31 @@ final class LiveCrawlTests: XCTestCase {
         XCTAssertEqual(layer.layerID, 2)
         XCTAssertTrue(layer.isCrawled)
     }
+
+    /// Cherwell's Web AppBuilder viewer. The app names a web map, the web map names five map
+    /// services, and each sits behind its own `usrsvcs` proxy with its own GUID — so nothing
+    /// enumerates them and the item is the only table of contents there is.
+    func testOpenWebAppBuilderViewerFindsEveryServiceItDraws() async throws {
+        guard ProcessInfo.processInfo.environment["ARCGIS_LIVE"] == "1" else {
+            throw XCTSkip("set ARCGIS_LIVE=1 to run against the network")
+        }
+        let scratch = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let db = try AppDatabase(path: scratch.appendingPathComponent("explorer.sqlite").path)
+        try await db.migrate()
+        try await db.loadSpatial()
+        let crawler = Crawler(client: ArcGISClient(), database: db)
+
+        let item = try XCTUnwrap(PortalURL.parse("https://cherwell.maps.arcgis.com/apps/webappviewer/index.html?id=c4ffa2d7d99949b185c6d622a0f9d8ab"))
+        let services = try await crawler.resolvePortalItem(item)
+        XCTAssertEqual(services.count, 5, "the web map draws five map services")
+        XCTAssertTrue(services.allSatisfy { $0.url.absoluteString.contains("/usrsvcs/servers/") },
+                      "every one is proxied: \(services.map(\.url.absoluteString))")
+
+        let opened = try await crawler.open("https://cherwell.maps.arcgis.com/apps/webappviewer/index.html?id=c4ffa2d7d99949b185c6d622a0f9d8ab")
+        XCTAssertNotNil(opened.service, "it lands on the first service the item named")
+        // Each proxy GUID is its own root, so all five register as separate servers.
+        let servers = try await db.servers()
+        XCTAssertEqual(servers.count, 5, "opened: \(servers.map(\.friendlyName))")
+    }
 }

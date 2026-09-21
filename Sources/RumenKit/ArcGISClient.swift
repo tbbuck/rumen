@@ -35,14 +35,25 @@ public struct ServerConnection: Sendable, Equatable {
     /// An HTTP proxy every request to this server goes through, as curl's `--proxy`:
     /// `"http://localhost:3128"`. Nil means a direct connection.
     public var proxyURL: String?
+    /// The least time between the *starts* of two requests to this server. The concurrency cap
+    /// bounds how many run at once; this bounds how fast they are begun, which is the part a
+    /// small endpoint feels. 0 is as fast as the cap allows.
+    public var minRequestSpacing: TimeInterval
+
+    /// What an OGC endpoint gets by default: four requests a second. A WFS listing sixty
+    /// feature types is sixty round trips whichever way it is done, and the servers that
+    /// publish them are usually one GeoServer behind a council's firewall rather than a
+    /// hosted tier that shrugs a burst off.
+    public static let ogcRequestSpacing: TimeInterval = 0.25
 
     public init(rootURL: URL, headers: ServerHeaders? = nil, token: String? = nil, cookie: String? = nil,
-                proxyURL: String? = nil) {
+                proxyURL: String? = nil, minRequestSpacing: TimeInterval = 0) {
         self.rootURL = rootURL
         self.headers = headers ?? .resolve(rootURL: rootURL)
         self.token = token
         self.cookie = cookie
         self.proxyURL = proxyURL
+        self.minRequestSpacing = minRequestSpacing
     }
 
     /// `https://host[:port]` — the key for the per-host concurrency cap.
@@ -397,6 +408,8 @@ public actor ArcGISClient {
     /// One transport per proxy setting, built on first use and kept: a URLSession holds its
     /// connection pool, so making one per request would give up keep-alive entirely.
     private var proxyTransports: [String: HTTPTransport] = [:]
+    /// When the next request to a host may begin, for `minRequestSpacing`.
+    private var lastRequestStart: [String: Date] = [:]
 
     /// The transport for a server: the injected one by default (a stub, under test), or one
     /// whose session routes through that server's proxy. A proxy that cannot be parsed goes
@@ -451,7 +464,7 @@ public actor ArcGISClient {
         let sent = all
         func attempt(_ method: HTTPMethod) async throws -> Data {
             let request = try Self.build(method, url: url, params: sent, server: server, timeout: timeout)
-            return try await send(request, url: url, proxy: server.proxyURL, maxAttempts: maxAttempts, progress: progress)
+            return try await send(request, url: url, proxy: server.proxyURL, spacing: server.minRequestSpacing, maxAttempts: maxAttempts, progress: progress)
         }
         let origin = ArcGISURL.origin(of: url)
         guard method == .post else { return try await attempt(method) }
@@ -481,7 +494,7 @@ public actor ArcGISClient {
         var request = try Self.build(.get, url: endpoint, params: all, server: server)
         request.setValue(accept, forHTTPHeaderField: "Accept")
         let url = request.url ?? endpoint
-        let data = try await send(request, url: url, proxy: server.proxyURL, maxAttempts: maxAttempts, progress: progress)
+        let data = try await send(request, url: url, proxy: server.proxyURL, spacing: server.minRequestSpacing, maxAttempts: maxAttempts, progress: progress)
         if Self.looksLikeXML(data), OGCCapabilities.isExceptionReport(data),
            let document = try? XMLDocument(data: data, options: []), let rootElement = document.rootElement() {
             throw ArcGISClientError.server(code: nil, message: OGCCapabilities.exceptionText(rootElement), details: [], url: url,
@@ -518,7 +531,8 @@ public actor ArcGISClient {
     /// Sends with retries, holding one of the host's slots only while a request is actually in
     /// flight. Backing off outside the slot matters: a struggling host is exactly the one whose
     /// requests retry, and sleeping on its slots starves the very requests that might succeed.
-    private func send(_ request: URLRequest, url: URL, proxy: String?, maxAttempts: Int?, progress: TransferProgressHandler?) async throws -> Data {
+    private func send(_ request: URLRequest, url: URL, proxy: String?, spacing: TimeInterval = 0,
+                      maxAttempts: Int?, progress: TransferProgressHandler?) async throws -> Data {
         let host = server(for: request)
         var attempt = 1
         /// Instant connection failures counted separately: they cost nothing, so they get their
@@ -529,6 +543,9 @@ public actor ArcGISClient {
             if let wait = retryAfterDelay(host) { try await Task.sleep(for: .seconds(wait)) }
 
             await acquire(host)
+            // Inside the slot, so a paced request holds its place in the queue rather than
+            // letting another take it while this one waits its turn.
+            await pace(host, spacing: spacing)
             // How wide the host was running when this request went out: what its latency is
             // evidence about, whatever the width has become by the time it lands.
             let width = concurrencyLimit(forHost: host)
@@ -816,6 +833,21 @@ public actor ArcGISClient {
         guard let until = capacity[host]?.retryAfter else { return nil }
         let remaining = until.timeIntervalSinceNow
         return remaining > 0 ? remaining : nil
+    }
+
+    /// Holds a request back until this host's minimum gap since the previous one has passed.
+    ///
+    /// The slot is claimed before the wait, and the claim is what the next caller measures
+    /// from, so concurrent requests queue up one gap apart instead of all reading the same
+    /// "last start" and going together — which is the burst this exists to prevent.
+    private func pace(_ host: String, spacing: TimeInterval) async {
+        guard spacing > 0 else { return }
+        let now = Date()
+        let earliest = max(now, (lastRequestStart[host] ?? .distantPast).addingTimeInterval(spacing))
+        lastRequestStart[host] = earliest
+        let wait = earliest.timeIntervalSince(now)
+        guard wait > 0 else { return }
+        try? await Task.sleep(for: .seconds(wait))
     }
 
     private func acquire(_ host: String) async {

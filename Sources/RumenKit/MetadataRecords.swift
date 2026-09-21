@@ -59,8 +59,12 @@ public struct ServerRecord: Sendable, Equatable, Identifiable {
     }
 
     /// The connection for this server; the token (from the Keychain) is supplied by the caller.
+    /// An OGC endpoint is paced by default: the walk asks one question per feature type, and
+    /// the size probe (`resultType=hits`) makes the server plan the whole query, so a WFS with
+    /// dozens of types is a burst of expensive requests at something small.
     public func connection(token: String? = nil) -> ServerConnection {
-        ServerConnection(rootURL: rootURL, headers: headers, token: token, cookie: cookie, proxyURL: proxyURL)
+        ServerConnection(rootURL: rootURL, headers: headers, token: token, cookie: cookie, proxyURL: proxyURL,
+                         minRequestSpacing: kind == .ogc ? ServerConnection.ogcRequestSpacing : 0)
     }
 
     /// The host shown in the path bar and as the default friendly name.

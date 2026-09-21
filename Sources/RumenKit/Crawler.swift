@@ -76,7 +76,7 @@ public actor Crawler {
             if let owned = try ArcGISURL.resolve(text, against: servers) {
                 location = owned
             } else if OGCURL.knownEndpoint(of: text, among: servers) != nil {
-                return try await openOGC(text, friendlyName: friendlyName, headerOverrides: headerOverrides, cookie: cookie, progress: progress)
+                return try await openOGC(text, friendlyName: friendlyName, headerOverrides: headerOverrides, cookie: cookie, proxyURL: proxyURL, progress: progress)
             } else if let item = PortalURL.parse(text) {
                 // A viewer URL: the item lists the services it draws, which for a proxied
                 // council map is the only place they are written down.
@@ -91,7 +91,7 @@ public actor Crawler {
                     throw error
                 case .notArcGIS(let reason):
                     do {
-                        return try await openOGC(text, friendlyName: friendlyName, headerOverrides: headerOverrides, cookie: cookie, progress: progress)
+                        return try await openOGC(text, friendlyName: friendlyName, headerOverrides: headerOverrides, cookie: cookie, proxyURL: proxyURL, progress: progress)
                     } catch OGCError.noServices(let url, let attempts) {
                         throw ArcGISProbeError.nothingAnswered(url: url, arcgis: reason, ogc: attempts)
                     }

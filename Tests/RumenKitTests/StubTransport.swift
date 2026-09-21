@@ -16,6 +16,8 @@ final class StubTransport: HTTPTransport, @unchecked Sendable {
     private let lock = NSLock()
     private var handler: Handler
     private(set) var requests: [URLRequest] = []
+    /// When each request reached the transport, so pacing can be measured rather than assumed.
+    private(set) var startTimes: [Date] = []
     private var concurrent = 0
     private(set) var maxConcurrent = 0
     var delay: Duration = .zero
@@ -29,6 +31,7 @@ final class StubTransport: HTTPTransport, @unchecked Sendable {
     func perform(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         let index: Int = lock.withLock {
             requests.append(request)
+            startTimes.append(Date())
             concurrent += 1
             maxConcurrent = max(maxConcurrent, concurrent)
             return requests.count

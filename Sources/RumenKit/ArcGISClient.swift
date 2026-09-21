@@ -40,11 +40,11 @@ public struct ServerConnection: Sendable, Equatable {
     /// small endpoint feels. 0 is as fast as the cap allows.
     public var minRequestSpacing: TimeInterval
 
-    /// What an OGC endpoint gets by default: four requests a second. A WFS listing sixty
+    /// What an OGC endpoint gets by default: two requests a second. A WFS listing sixty
     /// feature types is sixty round trips whichever way it is done, and the servers that
     /// publish them are usually one GeoServer behind a council's firewall rather than a
     /// hosted tier that shrugs a burst off.
-    public static let ogcRequestSpacing: TimeInterval = 0.25
+    public static let ogcRequestSpacing: TimeInterval = 0.5
 
     public init(rootURL: URL, headers: ServerHeaders? = nil, token: String? = nil, cookie: String? = nil,
                 proxyURL: String? = nil, minRequestSpacing: TimeInterval = 0) {

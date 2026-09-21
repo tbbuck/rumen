@@ -21,7 +21,8 @@ extension AppDatabase {
 
     private static let serverColumns = """
         id, root_url, friendly_name, origin_override, referer_override, auth_kind, username,
-        token_service_url, arcgis_version, created_at, last_visited_at, last_deep_crawl_at, cookie, kind
+        token_service_url, arcgis_version, created_at, last_visited_at, last_deep_crawl_at, cookie, kind,
+        proxy_url
         """
 
     /// Registers a server root, or touches `last_visited_at` on an existing one. The friendly
@@ -103,14 +104,15 @@ extension AppDatabase {
     }
 
     private static func serverRecord(_ r: [SQLValue]) throws -> ServerRecord {
-        guard r.count == 14, let id = r[0].int64, let urlText = r[1].stringValue, let url = URL(string: urlText),
+        guard r.count == 15, let id = r[0].int64, let urlText = r[1].stringValue, let url = URL(string: urlText),
               let name = r[2].stringValue, let auth = r[5].stringValue, let created = r[9].dateFromMicros
         else { throw MetadataStoreError.unexpectedRow("server") }
         return ServerRecord(id: id, rootURL: url, friendlyName: name, originOverride: r[3].stringValue,
                             refererOverride: r[4].stringValue, authKind: auth, username: r[6].stringValue,
                             tokenServiceURL: r[7].stringValue, arcgisVersion: r[8].doubleValue, createdAt: created,
                             lastVisitedAt: r[10].dateFromMicros, lastDeepCrawlAt: r[11].dateFromMicros,
-                            cookie: r[12].stringValue, kind: r[13].stringValue.flatMap(ServerKind.init(rawValue:)) ?? .arcgis)
+                            cookie: r[12].stringValue, proxyURL: r[14].stringValue,
+                            kind: r[13].stringValue.flatMap(ServerKind.init(rawValue:)) ?? .arcgis)
     }
 
     /// Blank clears it.
@@ -118,6 +120,13 @@ extension AppDatabase {
         let trimmed = cookie?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let bind: SQLBind = trimmed.isEmpty ? .null : .string(trimmed)
         try query("UPDATE server SET cookie = ? WHERE id = ?;", [bind, .int(serverID)])
+    }
+
+    /// The HTTP proxy for this server, as curl's `--proxy`. Blank clears it.
+    public func setProxy(serverID: Int64, proxyURL: String?) throws {
+        let trimmed = proxyURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let bind: SQLBind = trimmed.isEmpty ? .null : .string(trimmed)
+        try query("UPDATE server SET proxy_url = ? WHERE id = ?;", [bind, .int(serverID)])
     }
 
     // MARK: - Folders

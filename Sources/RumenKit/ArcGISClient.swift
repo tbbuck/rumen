@@ -32,12 +32,17 @@ public struct ServerConnection: Sendable, Equatable {
     /// A raw `Cookie` header sent on every request, as curl's `-b` would; the session's own
     /// cookie handling is switched off for such requests so exactly this is sent.
     public var cookie: String?
+    /// An HTTP proxy every request to this server goes through, as curl's `--proxy`:
+    /// `"http://localhost:3128"`. Nil means a direct connection.
+    public var proxyURL: String?
 
-    public init(rootURL: URL, headers: ServerHeaders? = nil, token: String? = nil, cookie: String? = nil) {
+    public init(rootURL: URL, headers: ServerHeaders? = nil, token: String? = nil, cookie: String? = nil,
+                proxyURL: String? = nil) {
         self.rootURL = rootURL
         self.headers = headers ?? .resolve(rootURL: rootURL)
         self.token = token
         self.cookie = cookie
+        self.proxyURL = proxyURL
     }
 
     /// `https://host[:port]` — the key for the per-host concurrency cap.
@@ -175,6 +180,34 @@ public final class URLSessionTransport: HTTPTransport, @unchecked Sendable {
     public init(session: URLSession = .shared) {
         self.session = session
         self.streamer = StreamingSession()
+    }
+
+    /// A transport whose every request goes through `proxy` ("http://localhost:3128"), as
+    /// curl's `--proxy` does. Both HTTP and HTTPS are pointed at it: an https endpoint reaches
+    /// the proxy by CONNECT, which is the case that matters here, and configuring only one of
+    /// the two silently leaves the other going direct.
+    public convenience init?(proxy: String) {
+        guard let parsed = URLSessionTransport.proxyEndpoint(proxy) else { return nil }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.connectionProxyDictionary = [
+            kCFNetworkProxiesHTTPEnable as String: true,
+            kCFNetworkProxiesHTTPProxy as String: parsed.host,
+            kCFNetworkProxiesHTTPPort as String: parsed.port,
+            "HTTPSEnable": true,
+            "HTTPSProxy": parsed.host,
+            "HTTPSPort": parsed.port,
+        ]
+        self.init(session: URLSession(configuration: configuration))
+    }
+
+    /// The host and port of a proxy setting. A bare "host:port" is accepted as well as a full
+    /// URL, and the port defaults to 8080 the way most proxy settings do.
+    public static func proxyEndpoint(_ proxy: String) -> (host: String, port: Int)? {
+        let trimmed = proxy.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let text = trimmed.contains("://") ? trimmed : "http://" + trimmed
+        guard let url = URL(string: text), let host = url.host, !host.isEmpty else { return nil }
+        return (host, url.port ?? 8080)
     }
 
     deinit { streamer.invalidate() }
@@ -361,6 +394,21 @@ public actor ArcGISClient {
     /// Origins that answered `405 Allow: GET` to a POST. Some proxies in front of ArcGIS route
     /// only GET; once one has said so, its later requests go out as GET without the wasted POST.
     private var getOnlyOrigins: Set<String> = []
+    /// One transport per proxy setting, built on first use and kept: a URLSession holds its
+    /// connection pool, so making one per request would give up keep-alive entirely.
+    private var proxyTransports: [String: HTTPTransport] = [:]
+
+    /// The transport for a server: the injected one by default (a stub, under test), or one
+    /// whose session routes through that server's proxy. A proxy that cannot be parsed goes
+    /// direct rather than failing the request — the setting is the user's, typed by hand, and
+    /// a typo should not take the server offline silently.
+    private func transport(forProxy proxy: String?) -> HTTPTransport {
+        guard let proxy, !proxy.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return transport }
+        if let existing = proxyTransports[proxy] { return existing }
+        guard let proxied = URLSessionTransport(proxy: proxy) else { return transport }
+        proxyTransports[proxy] = proxied
+        return proxied
+    }
 
     public init(transport: HTTPTransport = URLSessionTransport(), retry: RetryPolicy = RetryPolicy(),
                 maxConcurrentPerHost: Int = 4) {
@@ -403,7 +451,7 @@ public actor ArcGISClient {
         let sent = all
         func attempt(_ method: HTTPMethod) async throws -> Data {
             let request = try Self.build(method, url: url, params: sent, server: server, timeout: timeout)
-            return try await send(request, url: url, maxAttempts: maxAttempts, progress: progress)
+            return try await send(request, url: url, proxy: server.proxyURL, maxAttempts: maxAttempts, progress: progress)
         }
         let origin = ArcGISURL.origin(of: url)
         guard method == .post else { return try await attempt(method) }
@@ -433,7 +481,7 @@ public actor ArcGISClient {
         var request = try Self.build(.get, url: endpoint, params: all, server: server)
         request.setValue(accept, forHTTPHeaderField: "Accept")
         let url = request.url ?? endpoint
-        let data = try await send(request, url: url, maxAttempts: maxAttempts, progress: progress)
+        let data = try await send(request, url: url, proxy: server.proxyURL, maxAttempts: maxAttempts, progress: progress)
         if Self.looksLikeXML(data), OGCCapabilities.isExceptionReport(data),
            let document = try? XMLDocument(data: data, options: []), let rootElement = document.rootElement() {
             throw ArcGISClientError.server(code: nil, message: OGCCapabilities.exceptionText(rootElement), details: [], url: url,
@@ -470,7 +518,7 @@ public actor ArcGISClient {
     /// Sends with retries, holding one of the host's slots only while a request is actually in
     /// flight. Backing off outside the slot matters: a struggling host is exactly the one whose
     /// requests retry, and sleeping on its slots starves the very requests that might succeed.
-    private func send(_ request: URLRequest, url: URL, maxAttempts: Int?, progress: TransferProgressHandler?) async throws -> Data {
+    private func send(_ request: URLRequest, url: URL, proxy: String?, maxAttempts: Int?, progress: TransferProgressHandler?) async throws -> Data {
         let host = server(for: request)
         var attempt = 1
         /// Instant connection failures counted separately: they cost nothing, so they get their
@@ -487,7 +535,7 @@ public actor ArcGISClient {
             let started = Date()
             let outcome: Result<Data, SendFailure>
             do {
-                outcome = .success(try await performOnce(request, url: url, progress: progress))
+                outcome = .success(try await performOnce(request, url: url, proxy: proxy, progress: progress))
             } catch let failure as SendFailure {
                 outcome = .failure(failure)
             }
@@ -557,9 +605,10 @@ public actor ArcGISClient {
         request.url.map { ArcGISURL.origin(of: $0) } ?? ""
     }
 
-    private func performOnce(_ request: URLRequest, url: URL, progress: TransferProgressHandler?) async throws -> Data {
+    private func performOnce(_ request: URLRequest, url: URL, proxy: String?, progress: TransferProgressHandler?) async throws -> Data {
         let data: Data
         let response: HTTPURLResponse
+        let transport = transport(forProxy: proxy)
         do {
             if let progress {
                 // Compression stays on: the transport simply shows no total for an encoded body

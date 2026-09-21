@@ -59,10 +59,10 @@ public actor Crawler {
     /// Parses `text`, registers its server root (or touches an existing one), runs a
     /// shallow crawl for a new server, and — when the URL names a service or layer — crawls
     /// that service so the target rows exist. Errors surface verbatim.
-    /// `headerOverrides` (origin, referer) and `cookie` apply to a new server before its first
-    /// request.
+    /// `headerOverrides` (origin, referer), `cookie` and `proxyURL` apply to a new server
+    /// before its first request.
     public func open(_ text: String, friendlyName: String? = nil,
-                     headerOverrides: (origin: String?, referer: String?)? = nil, cookie: String? = nil,
+                     headerOverrides: (origin: String?, referer: String?)? = nil, cookie: String? = nil, proxyURL: String? = nil,
                      progress: (@Sendable (CrawlEvent) -> Void)? = nil) async throws -> Opened {
         let location: ArcGISLocation
         var kind = ServerKind.arcgis
@@ -78,7 +78,7 @@ public actor Crawler {
             } else if OGCURL.knownEndpoint(of: text, among: servers) != nil {
                 return try await openOGC(text, friendlyName: friendlyName, headerOverrides: headerOverrides, cookie: cookie, progress: progress)
             } else {
-                switch try await probeArcGIS(text, headerOverrides: headerOverrides, cookie: cookie) {
+                switch try await probeArcGIS(text, headerOverrides: headerOverrides, cookie: cookie, proxyURL: proxyURL) {
                 case .found(let finding):
                     location = finding.location
                     kind = finding.kind
@@ -103,6 +103,11 @@ public actor Crawler {
             }
             if let cookie, !cookie.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 try await db.setCookie(serverID: server.id, cookie: cookie)
+            }
+            // Before the shallow crawl, which reads the stored server: a proxy-only server is
+            // unreachable until this row says so.
+            if let proxyURL, !proxyURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                try await db.setProxy(serverID: server.id, proxyURL: proxyURL)
             }
             server = try await db.server(id: server.id)
         }

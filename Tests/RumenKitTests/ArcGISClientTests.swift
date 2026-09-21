@@ -190,6 +190,21 @@ final class ArcGISClientTests: XCTestCase {
         }
     }
 
+    /// The proxy setting is typed by hand, so it accepts what a person writes.
+    func testProxyEndpointParsing() throws {
+        func parse(_ text: String) throws -> (host: String, port: Int) {
+            try XCTUnwrap(URLSessionTransport.proxyEndpoint(text))
+        }
+        XCTAssertEqual(try parse("http://localhost:3128").host, "localhost")
+        XCTAssertEqual(try parse("http://localhost:3128").port, 3128)
+        XCTAssertEqual(try parse("  http://127.0.0.1:8888  ").host, "127.0.0.1")
+        XCTAssertEqual(try parse("proxy.example:3128").port, 3128, "a bare host:port is a proxy setting too")
+        XCTAssertEqual(try parse("proxy.example:3128").host, "proxy.example")
+        XCTAssertEqual(try parse("http://proxy.example").port, 8080, "no port means the usual proxy default")
+        XCTAssertNil(URLSessionTransport.proxyEndpoint(""))
+        XCTAssertNil(URLSessionTransport.proxyEndpoint("   "))
+    }
+
     func testTokenRequiredIsDistinct() async throws {
         let transport = StubTransport(reply: .json(#"{"error":{"code":499,"message":"Token Required","details":[]}}"#))
         await XCTAssertThrowsErrorAsync(try await self.client(transport).serviceDirectory(self.server)) { error in

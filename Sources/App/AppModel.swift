@@ -667,22 +667,24 @@ final class AppModel {
 
     /// Registers a new server from the Add-server sheet.
     func addServer(_ pending: PendingAdd, friendlyName: String, cookie: String = "",
-                   origin: String = "", referer: String = "") async {
+                   origin: String = "", referer: String = "", proxy: String = "") async {
         guard pendingAdd != nil else { return }   // Return and the button can both fire; add once
         pendingAdd = nil
-        await open(pending.text, friendlyName: friendlyName, headerOverrides: (origin, referer), cookie: cookie)
+        await open(pending.text, friendlyName: friendlyName, headerOverrides: (origin, referer), cookie: cookie, proxyURL: proxy)
     }
 
     /// Opens any ArcGIS URL: registers or touches its server, crawls as needed, and lands on
     /// the node it names.
     private func open(_ text: String, friendlyName: String?,
-                      headerOverrides: (origin: String?, referer: String?)? = nil, cookie: String? = nil) async {
+                      headerOverrides: (origin: String?, referer: String?)? = nil, cookie: String? = nil,
+                      proxyURL: String? = nil) async {
         guard let crawler else { return }
         let root = rootURL(of: text)?.absoluteString ?? text
         openingStatus = OpeningStatus(url: root, step: "Opening…")
         defer { openingStatus = nil }
         do {
-            let opened = try await crawler.open(text, friendlyName: friendlyName, headerOverrides: headerOverrides, cookie: cookie, progress: { event in
+            let opened = try await crawler.open(text, friendlyName: friendlyName, headerOverrides: headerOverrides, cookie: cookie,
+                                                proxyURL: proxyURL, progress: { event in
                 Task { @MainActor in self.openingProgress(event) }
             })
             openingStatus?.step = "Building the tree…"
@@ -762,10 +764,12 @@ final class AppModel {
         } catch { report(error) }
     }
 
-    func saveSettings(_ server: ServerRecord, name: String, origin: String, referer: String, cookie: String) async {
+    func saveSettings(_ server: ServerRecord, name: String, origin: String, referer: String, cookie: String,
+                      proxy: String = "") async {
         guard let database else { return }
         do {
             try await database.setCookie(serverID: server.id, cookie: cookie)
+            try await database.setProxy(serverID: server.id, proxyURL: proxy)
             try await database.renameServer(id: server.id, friendlyName: name)
             try await database.setHeaderOverrides(serverID: server.id, origin: origin, referer: referer)
             try await reloadServers()

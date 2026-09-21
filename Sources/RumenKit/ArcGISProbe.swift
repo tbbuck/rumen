@@ -130,13 +130,13 @@ extension Crawler {
     /// end in that id and the parent must be a service). Two attempts per request, so a dead
     /// host is quick to say so.
     public func probeArcGIS(_ text: String, headerOverrides: (origin: String?, referer: String?)? = nil,
-                            cookie: String? = nil) async throws -> ArcGISProbeOutcome {
+                            cookie: String? = nil, proxyURL: String? = nil) async throws -> ArcGISProbeOutcome {
         let bare = try ArcGISURL.bareURL(text)
         func ask(_ url: URL) async throws -> Result<Data, ArcGISClientError> {
             let connection = ServerConnection(rootURL: url,
                                               headers: .resolve(rootURL: url, originOverride: headerOverrides?.origin,
                                                                 refererOverride: headerOverrides?.referer),
-                                              cookie: cookie)
+                                              cookie: cookie, proxyURL: proxyURL)
             do {
                 return .success(try await client.request(.get, url: url, server: connection, maxAttempts: 2))
             } catch let error as ArcGISClientError {

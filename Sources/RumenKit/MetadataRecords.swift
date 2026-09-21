@@ -26,6 +26,9 @@ public struct ServerRecord: Sendable, Equatable, Identifiable {
     public var lastDeepCrawlAt: Date?
     /// A raw `Cookie` header for every request to this server, as curl's `-b` (decision 17).
     public var cookie: String?
+    /// An HTTP proxy for every request to this server, as curl's `--proxy`:
+    /// `"http://localhost:3128"`. Nil means a direct connection.
+    public var proxyURL: String?
     /// ArcGIS REST root, lone ArcGIS service, or OGC endpoint.
     public var kind: ServerKind
 
@@ -33,7 +36,8 @@ public struct ServerRecord: Sendable, Equatable, Identifiable {
                 refererOverride: String? = nil, authKind: String = "none", username: String? = nil,
                 tokenServiceURL: String? = nil, arcgisVersion: Double? = nil, createdAt: Date = Date(),
                 lastVisitedAt: Date? = nil, lastDeepCrawlAt: Date? = nil, cookie: String? = nil,
-                kind: ServerKind = .arcgis) {
+                proxyURL: String? = nil, kind: ServerKind = .arcgis) {
+        self.proxyURL = proxyURL
         self.kind = kind
         self.id = id
         self.rootURL = rootURL
@@ -56,7 +60,7 @@ public struct ServerRecord: Sendable, Equatable, Identifiable {
 
     /// The connection for this server; the token (from the Keychain) is supplied by the caller.
     public func connection(token: String? = nil) -> ServerConnection {
-        ServerConnection(rootURL: rootURL, headers: headers, token: token, cookie: cookie)
+        ServerConnection(rootURL: rootURL, headers: headers, token: token, cookie: cookie, proxyURL: proxyURL)
     }
 
     /// The host shown in the path bar and as the default friendly name.

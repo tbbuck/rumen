@@ -10,6 +10,7 @@ struct AddServerSheet: View {
     @State private var cookie = ""
     @State private var origin = ""
     @State private var referer = ""
+    @State private var proxy = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -25,7 +26,7 @@ struct AddServerSheet: View {
             }
             Button(advanced ? "Hide advanced" : "Advanced…") { advanced.toggle() }.buttonStyle(LinkButtonStyle(size: 12.5))
             if advanced {
-                AdvancedServerFields(cookie: $cookie, origin: $origin, referer: $referer, rootURL: pending.rootURL)
+                AdvancedServerFields(cookie: $cookie, origin: $origin, referer: $referer, proxy: $proxy, rootURL: pending.rootURL)
             }
             HStack {
                 Spacer()
@@ -42,7 +43,7 @@ struct AddServerSheet: View {
     }
 
     private func add() async {
-        await model.addServer(pending, friendlyName: friendlyName, cookie: cookie, origin: origin, referer: referer)
+        await model.addServer(pending, friendlyName: friendlyName, cookie: cookie, origin: origin, referer: referer, proxy: proxy)
     }
 }
 
@@ -54,13 +55,14 @@ struct ServerSettingsSheet: View {
     @State private var origin = ""
     @State private var referer = ""
     @State private var cookie = ""
+    @State private var proxy = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Server settings").font(.sheetDisplay(18))
             Text(server.rootURL.absoluteString).font(.sheetMono(12)).foregroundStyle(Palette.muted)
             field("Friendly name", text: $name, placeholder: server.host)
-            AdvancedServerFields(cookie: $cookie, origin: $origin, referer: $referer, rootURL: server.rootURL)
+            AdvancedServerFields(cookie: $cookie, origin: $origin, referer: $referer, proxy: $proxy, rootURL: server.rootURL)
             VStack(alignment: .leading, spacing: 6) {
                 Caption("Sign-in")
                 Caption("Token sign-in is not built yet. For a server behind a login, paste a signed-in browser's Cookie above.", size: 12.5, color: Palette.muted2)
@@ -70,7 +72,8 @@ struct ServerSettingsSheet: View {
                 Spacer()
                 Button("Cancel") { model.settingsServer = nil }.buttonStyle(LinkButtonStyle())
                 AsyncButton("Save", busy: "Saving…") {
-                    await model.saveSettings(server, name: name.isEmpty ? server.host : name, origin: origin, referer: referer, cookie: cookie)
+                    await model.saveSettings(server, name: name.isEmpty ? server.host : name, origin: origin, referer: referer,
+                                             cookie: cookie, proxy: proxy)
                     model.settingsServer = nil
                 }
                 .buttonStyle(PrimaryButtonStyle())
@@ -86,6 +89,7 @@ struct ServerSettingsSheet: View {
             origin = server.originOverride ?? ""
             referer = server.refererOverride ?? ""
             cookie = server.cookie ?? ""
+            proxy = server.proxyURL ?? ""
         }
     }
 
@@ -103,6 +107,7 @@ struct AdvancedServerFields: View {
     @Binding var cookie: String
     @Binding var origin: String
     @Binding var referer: String
+    @Binding var proxy: String
     let rootURL: URL
 
     var body: some View {
@@ -123,6 +128,12 @@ struct AdvancedServerFields: View {
             }
             Caption("Leave a header blank to use the default shown. Both are sent on every request to this server.", size: 11.5, color: Palette.muted2)
                 .frame(maxWidth: 440, alignment: .leading)
+            VStack(alignment: .leading, spacing: 6) {
+                Caption("Proxy")
+                TextField("http://localhost:3128", text: $proxy).textFieldStyle(SheetFieldStyle(mono: true)).accessibilityLabel("Proxy")
+                Caption("Every request to this server goes through it, like curl --proxy. Blank connects directly; a bare host:port is assumed to be http on 8080.", size: 11.5, color: Palette.muted2)
+                    .frame(maxWidth: 440, alignment: .leading)
+            }
         }
     }
 }

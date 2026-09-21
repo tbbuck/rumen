@@ -71,6 +71,14 @@ final class MetadataStoreTests: XCTestCase {
         let cleared = try await db.server(id: s.id)
         XCTAssertNil(cleared.cookie, "blank clears it")
 
+        try await db.setProxy(serverID: s.id, proxyURL: "  http://localhost:3128 ")
+        let withProxy = try await db.server(id: s.id)
+        XCTAssertEqual(withProxy.proxyURL, "http://localhost:3128", "trimmed, on the row")
+        XCTAssertEqual(withProxy.connection().proxyURL, "http://localhost:3128", "and on every connection")
+        try await db.setProxy(serverID: s.id, proxyURL: "")
+        let clearedProxy = try await db.server(id: s.id)
+        XCTAssertNil(clearedProxy.proxyURL, "blank clears it")
+
         try await db.forgetServer(id: s.id)
         let remaining = try await db.servers()
         XCTAssertEqual(remaining, [])

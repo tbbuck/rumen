@@ -29,6 +29,16 @@ public struct ServiceDirectory: Decodable, Sendable, Equatable {
         folders = try c.decodeIfPresent([String].self, forKey: .folders) ?? []
         services = try c.decodeIfPresent([Entry].self, forKey: .services) ?? []
     }
+
+    public init(currentVersion: Double? = nil, folders: [String] = [], services: [Entry] = []) {
+        self.currentVersion = currentVersion
+        self.folders = folders
+        self.services = services
+    }
+
+    /// Nothing listed at all. Distinguishing "told us nothing" from "told us it is empty" is
+    /// the caller's job: see `ArcGISClient.serviceDirectory`.
+    public var isEmpty: Bool { folders.isEmpty && services.isEmpty }
 }
 
 public struct SpatialReference: Decodable, Sendable, Equatable {

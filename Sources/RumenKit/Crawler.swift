@@ -119,6 +119,12 @@ public actor Crawler {
                 try await crawlDirectory(serverID: server.id, folderPath: location.folderPath ?? "", progress: progress)
                 service = try await db.service(serverID: server.id, url: serviceURL)
             }
+            if service == nil, let servicePath = location.servicePath {
+                // Still absent, so no directory here will name it: read it directly. This is
+                // the proxied-service case, where every listing above the service is empty.
+                service = try await adoptService(serverID: server.id, serviceURL: serviceURL, servicePath: servicePath,
+                                                 folderPath: location.folderPath ?? "", progress: progress)
+            }
             // A lone service was read in full by the shallow crawl a moment ago; any other is read now.
             if let found = service, found.type.hasLayers {
                 if !(isNew && server.kind == .service) {
@@ -175,6 +181,30 @@ public actor Crawler {
         try await storeService(service, info: info, raw: raw, connection: conn, progress: progress)
     }
 
+    /// Records a service the directory never listed, by asking the service itself what it is.
+    ///
+    /// A proxy that fronts named services (ArcGIS Online's `usrsvcs`) enumerates nothing at any
+    /// level, so a service reached by its own URL would otherwise never reach the tree: the
+    /// listing it should have appeared in came back empty. Named exactly as a listing would
+    /// have named it, so a directory that starts answering later reconciles onto the same row.
+    @discardableResult
+    public func adoptService(serverID: Int64, serviceURL: URL, servicePath: String, folderPath: String,
+                             progress: (@Sendable (CrawlEvent) -> Void)? = nil) async throws -> ServiceRecord {
+        let server = try await db.server(id: serverID)
+        let conn = await connection(server)
+        let (info, raw) = try await client.serviceInfo(conn, serviceURL: serviceURL)
+        guard case .service(let type, _)? = ArcGISProbe.classify(raw) else {
+            throw ArcGISProbeError.notAService(url: serviceURL, found: ArcGISProbe.describe(raw))
+        }
+        if let version = info.currentVersion {
+            try await db.setServerVersion(id: serverID, version: version)
+        }
+        let service = try await db.upsertService(serverID: serverID, folderPath: folderPath,
+                                                 name: servicePath, type: type, url: serviceURL)
+        try await storeService(service, info: info, raw: raw, connection: conn, progress: progress)
+        return try await db.service(id: service.id)
+    }
+
     /// Lists one directory (root when `folderPath` is empty), upserting and pruning its
     /// services. With `recursive`, descends into the folders it lists.
     @discardableResult
@@ -197,7 +227,16 @@ public actor Crawler {
     /// the sub-folder paths, for the caller to descend into or not.
     private func listLevel(serverID: Int64, server: ServerRecord, conn: ServerConnection, folderPath: String,
                            progress: (@Sendable (CrawlEvent) -> Void)?) async throws -> [String] {
-        let listing = try await client.serviceDirectory(conn, folder: folderPath.isEmpty ? nil : folderPath).value
+        let (listing, raw) = try await client.serviceDirectory(conn, folder: folderPath.isEmpty ? nil : folderPath)
+        // A proxy that fronts named services answers a directory with an empty body: it will
+        // not enumerate, which is not the same as having nothing. Reconciling against it would
+        // prune the services adopted by name (`adoptService`), so an unlistable folder changes
+        // nothing but its own mark.
+        if raw.isEmpty {
+            try await db.markFolderListed(serverID: serverID, path: folderPath)
+            progress?(.directory(folderPath: folderPath, services: 0))
+            return []
+        }
         if folderPath.isEmpty, let version = listing.currentVersion {
             try await db.setServerVersion(id: serverID, version: version)
         }

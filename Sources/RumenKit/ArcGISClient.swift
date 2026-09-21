@@ -611,10 +611,21 @@ public actor ArcGISClient {
 
     // MARK: - Endpoint helpers
 
-    /// The root directory, or a folder's listing when `folder` is given.
+    /// A directory listing. Some proxies — ArcGIS Online's `usrsvcs` among them — answer a
+    /// directory with HTTP 200 and no body at all: they front named services and will not
+    /// enumerate anything. That is not a broken server and must not read as a decode failure,
+    /// so an empty body becomes an empty listing and the raw data says which it was.
     public func serviceDirectory(_ server: ServerConnection, folder: String? = nil) async throws -> (value: ServiceDirectory, raw: Data) {
         let url = folder.map { server.rootURL.appendingPathComponent($0) } ?? server.rootURL
-        return try await json(ServiceDirectory.self, url: url, server: server)
+        let data = try await request(.get, url: url, server: server)
+        guard !data.isEmpty else { return (ServiceDirectory(), data) }
+        do {
+            return (try ArcGISJSON.decode(ServiceDirectory.self, from: data), data)
+        } catch {
+            let preview = String(decoding: data.prefix(120), as: UTF8.self)
+            let hint = preview.lowercased().contains("<html") ? "HTML page instead of JSON" : String(describing: error)
+            throw ArcGISClientError.decoding(hint, url: url)
+        }
     }
 
     public func serviceInfo(_ server: ServerConnection, serviceURL: URL) async throws -> (value: ServiceInfo, raw: Data) {

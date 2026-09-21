@@ -69,4 +69,33 @@ final class LiveCrawlTests: XCTestCase {
         let count = try await crawler.probeCount(layerID: layer.id)
         XCTAssertGreaterThan(count, 100_000)
     }
+
+    /// Cherwell's layers sit behind an ArcGIS Online `usrsvcs` proxy that fronts one named
+    /// service and enumerates nothing: the root directory and the folder both answer HTTP 200
+    /// with an empty body. The open used to die decoding that empty root; the service is
+    /// adopted by name instead.
+    func testOpenProxiedServiceWhoseDirectoryIsEmpty() async throws {
+        guard ProcessInfo.processInfo.environment["ARCGIS_LIVE"] == "1" else {
+            throw XCTSkip("set ARCGIS_LIVE=1 to run against the network")
+        }
+        let scratch = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let db = try AppDatabase(path: scratch.appendingPathComponent("explorer.sqlite").path)
+        try await db.migrate()
+        try await db.loadSpatial()
+        let crawler = Crawler(client: ArcGISClient(), database: db)
+
+        let opened = try await crawler.open("https://utility.arcgis.com/usrsvcs/servers/451c388a101c4a659a0697a6826303c7/rest/services/Public_Map_Services/Cherwell_Public_Neighbourhood_Development_Plans_and_Other_Layers/MapServer/2?f=json")
+        XCTAssertTrue(opened.isNewServer)
+        XCTAssertEqual(opened.server.rootURL.absoluteString,
+                       "https://utility.arcgis.com/usrsvcs/servers/451c388a101c4a659a0697a6826303c7/rest/services")
+        let service = try XCTUnwrap(opened.service, "the named service must be adopted when nothing lists it")
+        XCTAssertEqual(service.type, .mapServer)
+        XCTAssertEqual(service.folderPath, "Public_Map_Services")
+        let layers = try await db.layers(serviceID: service.id)
+        XCTAssertGreaterThan(layers.count, 1)
+        let layer = try XCTUnwrap(opened.layer)
+        XCTAssertEqual(layer.layerID, 2)
+        XCTAssertTrue(layer.isCrawled)
+    }
 }

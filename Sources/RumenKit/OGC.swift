@@ -150,18 +150,19 @@ public struct OGCServiceDetail: Codable, Sendable, Equatable {
 
     /// The GeoJSON output format to ask for, when one is offered: a WFS GetFeature's, or a WMS
     /// GetMap's vector output (GeoServer's `application/json;type=geojson`). UTFGrid, TopoJSON
-    /// and JSONP are JSON without being features.
+    /// and JSONP are JSON without being features. A spelling without a `+` beats
+    /// `application/geo+json`: a proxy that hands the query on unencoded delivers the `+` as a
+    /// space (see the WFS run, which asks for GML by naming no format for the same reason).
     public var geoJSONFormat: String? {
         let candidates = formats.map { ($0, $0.lowercased()) }
-        if let geo = candidates.first(where: { $0.1.contains("geojson") || $0.1.contains("geo+json") }) { return geo.0 }
+        if let geo = candidates.first(where: { $0.1.contains("geojson") }) ?? candidates.first(where: { $0.1.contains("geo+json") }) {
+            return geo.0
+        }
         return candidates.first { pair in
             let f = pair.1
             let plainJSON = f == "json" || f.hasPrefix("application/json")
             return plainJSON && !f.contains("utfgrid") && !f.contains("topojson") && !f.contains("jsonp")
         }?.0
-    }
-    public var gmlFormat: String? {
-        formats.first { $0.lowercased().contains("gml") } ?? (formats.isEmpty ? nil : nil)
     }
 }
 

@@ -193,7 +193,12 @@ extension DownloadEngine {
         let pageParams: @Sendable (DownloadChunk) -> [String: String]
         switch service.type {
         case .wfs:
-            let format = wantsGeoJSON ? detail.geoJSONFormat : detail.gmlFormat
+            // GML is asked for by naming no format: it is what every WFS version sends by default
+            // (`application/gml+xml; version=3.2` at 2.0), as the map's sample already relies on.
+            // Naming it only gives a proxy something to mangle — Elmbridge's iShare `getows.ashx`
+            // hands the query to MapServer unencoded, the `+` arrives as a space, and every page
+            // came back a 500.
+            let format = wantsGeoJSON ? detail.geoJSONFormat : nil
             let srsName = record.outWkid == 4326 && (layer.effectiveWkid ?? 4326) != 4326 ? layer.ogcDetail?.wgs84CRS : nil
             let version = detail.version
             pageParams = { chunk in

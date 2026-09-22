@@ -11,6 +11,7 @@ private final class StubEndpoint: @unchecked Sendable {
     private var _geoJSON = true
     private var _version100 = false
     private var _vectorWMS = false
+    private var _readsPlusAsSpace = false
     private var _log: [[String: String]] = []
 
     var offersWMTS: Bool { get { lock.withLock { _offersWMTS } } set { lock.withLock { _offersWMTS = newValue } } }
@@ -18,10 +19,15 @@ private final class StubEndpoint: @unchecked Sendable {
     var version100: Bool { get { lock.withLock { _version100 } } set { lock.withLock { _version100 = newValue } } }
     /// The WMS offers a GeoJSON GetMap output, as GeoServer does.
     var vectorWMS: Bool { get { lock.withLock { _vectorWMS } } set { lock.withLock { _vectorWMS = newValue } } }
+    /// Behind a proxy that decodes the query and hands it on unencoded, as Elmbridge's iShare
+    /// `getows.ashx` does to its MapServer: a `+` arrives as a space, and a GetFeature format
+    /// the server does not know is answered with IIS's HTML 500.
+    var readsPlusAsSpace: Bool { get { lock.withLock { _readsPlusAsSpace } } set { lock.withLock { _readsPlusAsSpace = newValue } } }
     var log: [[String: String]] { lock.withLock { _log } }
 
     func reply(_ request: URLRequest) throws -> StubTransport.Reply {
-        let params = Self.params(request.encodedParams)
+        var params = Self.params(request.encodedParams)
+        if readsPlusAsSpace { params = params.mapValues { $0.replacingOccurrences(of: "+", with: " ") } }
         lock.withLock { _log.append(params) }
         guard params["map"] == "pa", params["accessType"] == "PA" else {
             return .json(#"{"error":"vendor parameters missing"}"#, status: 400)
@@ -35,6 +41,10 @@ private final class StubEndpoint: @unchecked Sendable {
             return xml(OGCFixtures.describeTowns)
         case ("WFS", "GetFeature"):
             if params["resultType"] == "hits" { return xml(OGCFixtures.hits) }
+            let offered = ["application/gml+xml; version=3.2", "text/xml; subtype=gml/3.2.1"] + (geoJSON ? ["application/json"] : [])
+            if readsPlusAsSpace, let format = params["outputFormat"], !offered.contains(format) {
+                return StubTransport.Reply(status: 500, body: Data("<html><title>500 - Internal server error.</title></html>".utf8))
+            }
             let start = Int(params["startIndex"] ?? "0") ?? 0
             let count = Int(params["count"] ?? params["maxFeatures"] ?? "5") ?? 5
             if (params["outputFormat"] ?? "").lowercased().contains("json") {
@@ -168,6 +178,14 @@ final class OGCTests: XCTestCase {
         XCTAssertFalse(old.detail.paging)
         XCTAssertNil(old.detail.geoJSONFormat)
         XCTAssertEqual(old.layers[0].bboxWGS84, BoundingBox(minX: -3.5, minY: 50.2, maxX: -2.0, maxY: 51.0))
+
+        // A proxy that hands the query on unencoded turns a `+` into a space, so a GeoJSON
+        // spelling without one wins; a named GeoJSON still beats plain JSON.
+        var plus = OGCServiceDetail(version: "2.0.0")
+        plus.formats = ["application/geo+json", "application/json; subtype=geojson"]
+        XCTAssertEqual(plus.geoJSONFormat, "application/json; subtype=geojson")
+        plus.formats = ["application/geo+json", "application/json"]
+        XCTAssertEqual(plus.geoJSONFormat, "application/geo+json")
         XCTAssertEqual(old.layers[0].defaultCRS, "EPSG:27700")
 
         XCTAssertThrowsError(try OGCCapabilities.parse(Data(OGCFixtures.wms130.utf8), expecting: .wfs, url: url)) { error in
@@ -405,8 +423,13 @@ final class OGCTests: XCTestCase {
         XCTAssertTrue(text.contains("\"Town 5\""))
     }
 
+    /// GML is what a WFS sends when asked for no format, so none is named. Naming one only gives
+    /// a proxy something to mangle: Elmbridge's iShare `getows.ashx` hands the query to MapServer
+    /// unencoded, so the `+` in `application/gml+xml; version=3.2` arrives as a space, MapServer
+    /// refuses a format it has never heard of, and every page of every GML download was a 500.
     func testWFSDownloadFallsBackToGML() async throws {
         endpoint.geoJSON = false
+        endpoint.readsPlusAsSpace = true
         let layer = try await towns()
         var request = DownloadRequest(layerID: layer.id, outputDirectory: scratch.appendingPathComponent("out"))
         request.outWkid = 27700
@@ -419,7 +442,8 @@ final class OGCTests: XCTestCase {
         XCTAssertEqual(back.count, 5)
         XCTAssertTrue(back.columns.contains("NAME"))
         let pages = endpoint.log.filter { $0["request"] == "GetFeature" && $0["resultType"] == nil }
-        XCTAssertTrue(pages.allSatisfy { ($0["outputFormat"] ?? "").contains("gml") })
+        XCTAssertFalse(pages.isEmpty)
+        XCTAssertTrue(pages.allSatisfy { $0["outputFormat"] == nil }, "the server's default, which is GML")
     }
 
     func testOldWFSDownloadsInOneRequest() async throws {

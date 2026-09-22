@@ -339,10 +339,13 @@ protocol has one. No filtering, no querying.
   (tile matrix sets, `ResourceURL` templates, styles). An OGC exception report in a
   200 body is a typed error with its text verbatim.
 - **Features.** A WFS type is extractable through `GetFeature`: GeoJSON when offered,
-  GML otherwise; paged with `startIndex`/`count` when the server pages (the count from
-  `resultType=hits`), in one request when it does not. WGS 84 is asked of the server
-  (`srsName`) only when the type is offered in it; otherwise the native reference is
-  fetched and written. Pages are staged through GDAL (`ST_Read`) into the same per-run
+  GML otherwise, asked for by naming no `outputFormat` (GML is every version's default,
+  and a named `application/gml+xml` loses its `+` to a proxy that passes the query on
+  unencoded — Elmbridge's iShare `getows.ashx`); paged with `startIndex`/`count` when
+  the server pages (the count from `resultType=hits`), in one request when it does not.
+  A GeoJSON spelling without a `+` is preferred for the same reason. WGS 84 is asked of
+  the server (`srsName`) only when the type is offered in it; otherwise the native
+  reference is fetched and written. Pages are staged through GDAL (`ST_Read`) into the same per-run
   DuckDB as ArcGIS features, matched to the described fields by name and cast to their
   types, or to a schema taken from the first page when the server would not describe
   one; resume, the chunk grid, and every export format apply unchanged. A WMS layer

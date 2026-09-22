@@ -46,14 +46,14 @@ extension AppDatabase {
         let input = directory.appendingPathComponent("sample.\(fileExtension)")
         let output = directory.appendingPathComponent("sample-wgs84.geojson")
         try data.write(to: input)
-        let source = "ST_Read('\(input.path.replacingOccurrences(of: "'", with: "''"))')"
+        let source = StagingDatabase.pageSource(input.path)
         var geometry: String?
         var attributes = [String]()
         for row in try spatial.run("DESCRIBE SELECT * FROM \(source);").rows {
             guard let name = row[0].stringValue, let type = row[1].stringValue else { continue }
             let quoted = "\"" + name.replacingOccurrences(of: "\"", with: "\"\"") + "\""
             if type.uppercased().hasPrefix("GEOMETRY"), geometry == nil { geometry = quoted }
-            else if name != "OGC_FID", name != "lowerCorner", name != "upperCorner" { attributes.append(quoted) }
+            else if name != StagingDatabase.gdalFIDColumn, name != "lowerCorner", name != "upperCorner" { attributes.append(quoted) }
         }
         guard let geometry else { throw SpatialError.notLoaded }
         let wkid = sourceWkid ?? 4326

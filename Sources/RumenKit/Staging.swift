@@ -95,6 +95,17 @@ public final class StagingDatabase: @unchecked Sendable {
 
     // MARK: - OGC pages (M10)
 
+    /// What GDAL's own FID column is called in a `pageSource`.
+    static let gdalFIDColumn = "_gdal_fid"
+
+    /// `ST_Read` over a GeoJSON or GML page, GDAL's own FID column renamed out of the way. GDAL
+    /// puts it first, as `OGC_FID`, in everything it reads; a MapServer layer over a table
+    /// `ogr2ogr` loaded carries an `ogc_fid` of its own, and DuckDB, blind to case, refuses the
+    /// pair outright. A positional alias renames the first column before that check is made.
+    static func pageSource(_ file: String) -> String {
+        "ST_Read('\(file.replacingOccurrences(of: "'", with: "''"))') AS page(\(quote(gdalFIDColumn)))"
+    }
+
     /// Appends the features of a GeoJSON or GML file (read through GDAL) as chunk `seq`,
     /// matching the file's columns to the staged fields by name, case-blind, and casting each
     /// to its staged type; a staged field the file lacks is NULL, a file column no field names
@@ -103,7 +114,7 @@ public final class StagingDatabase: @unchecked Sendable {
     @discardableResult
     public func ingest(file: String, chunk seq: Int) throws -> Int {
         try db.run("SET TimeZone = 'UTC';")
-        let source = "ST_Read('\(file.replacingOccurrences(of: "'", with: "''"))')"
+        let source = Self.pageSource(file)
         var columns = [String: String]()   // lowercased name → name as GDAL spells it
         var geometryColumn: String?
         for row in try db.run("DESCRIBE SELECT * FROM \(source);").rows {
@@ -160,9 +171,9 @@ public final class StagingDatabase: @unchecked Sendable {
         try engine.run("INSTALL spatial;")
         try engine.run("LOAD spatial;")
         var fields = [OGCField]()
-        for row in try engine.run("DESCRIBE SELECT * FROM ST_Read('\(file.replacingOccurrences(of: "'", with: "''"))');").rows {
+        for row in try engine.run("DESCRIBE SELECT * FROM \(pageSource(file));").rows {
             guard let name = row[0].stringValue, let type = row[1].stringValue?.uppercased() else { continue }
-            if name == "OGC_FID" || name == "lowerCorner" || name == "upperCorner" { continue }
+            if name == gdalFIDColumn || name == "lowerCorner" || name == "upperCorner" { continue }
             let xsd: String
             if type.hasPrefix("GEOMETRY") { xsd = "GeometryPropertyType" }
             else if type.hasPrefix("VARCHAR") { xsd = "string" }

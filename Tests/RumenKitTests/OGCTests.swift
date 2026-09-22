@@ -13,6 +13,7 @@ private final class StubEndpoint: @unchecked Sendable {
     private var _vectorWMS = false
     private var _readsPlusAsSpace = false
     private var _describesOnlyByTypeName = false
+    private var _pagesCarryOGCFID = false
     private var _log: [[String: String]] = []
 
     var offersWMTS: Bool { get { lock.withLock { _offersWMTS } } set { lock.withLock { _offersWMTS = newValue } } }
@@ -27,6 +28,8 @@ private final class StubEndpoint: @unchecked Sendable {
     /// Describes a feature type only when it is named `typeName`, as the same proxy does: the
     /// 2.0 plural and the all-types form are both answered with the HTML 500.
     var describesOnlyByTypeName: Bool { get { lock.withLock { _describesOnlyByTypeName } } set { lock.withLock { _describesOnlyByTypeName = newValue } } }
+    /// GML pages whose features carry an `ogc_fid` of their own (see `OGCFixtures.gmlPage`).
+    var pagesCarryOGCFID: Bool { get { lock.withLock { _pagesCarryOGCFID } } set { lock.withLock { _pagesCarryOGCFID = newValue } } }
     var log: [[String: String]] { lock.withLock { _log } }
 
     private static let iisError = StubTransport.Reply(status: 500, body: Data("<html><title>500 - Internal server error.</title></html>".utf8))
@@ -55,7 +58,7 @@ private final class StubEndpoint: @unchecked Sendable {
             if (params["outputFormat"] ?? "").lowercased().contains("json") {
                 return .json(OGCFixtures.geoJSONPage(start..<(start + count), wgs84: params["srsName"] != nil))
             }
-            return xml(OGCFixtures.gmlPage(start..<(start + count)))
+            return xml(OGCFixtures.gmlPage(start..<(start + count), ogcFID: pagesCarryOGCFID))
         case ("WMS", "GetCapabilities"):
             return xml(vectorWMS ? OGCFixtures.wms130Vector : OGCFixtures.wms130)
         case ("WMS", "GetMap"):
@@ -465,6 +468,40 @@ final class OGCTests: XCTestCase {
         let pages = endpoint.log.filter { $0["request"] == "GetFeature" && $0["resultType"] == nil }
         XCTAssertFalse(pages.isEmpty)
         XCTAssertTrue(pages.allSatisfy { $0["outputFormat"] == nil }, "the server's default, which is GML")
+    }
+
+    /// A MapServer layer over a table `ogr2ogr` loaded carries an `ogc_fid` attribute of its own,
+    /// and GDAL puts its own FID column, `OGC_FID`, first in everything it reads. DuckDB, blind to
+    /// case, refused the pair: such a page could not be staged, described or drawn (Elmbridge's
+    /// wards, and every layer like them).
+    func testAPageWithItsOwnOGCFIDIsRead() async throws {
+        endpoint.geoJSON = false
+        endpoint.pagesCarryOGCFID = true
+        let layer = try await towns()
+        var request = DownloadRequest(layerID: layer.id, outputDirectory: scratch.appendingPathComponent("out"))
+        request.outWkid = 27700
+        let planned = try await engine.start(request)
+        let record = try await engine.wait(downloadID: planned.id)
+        XCTAssertEqual(record.status, .complete, record.error ?? "")
+        XCTAssertEqual(record.featureCount, 5)
+
+        // The schema taken from a page, and the map's sample, read it the same way.
+        let gml = OGCFixtures.gmlPage(0..<5, ogcFID: true)
+        let page = scratch.appendingPathComponent("page.gml")
+        try Data(gml.utf8).write(to: page)
+        let names = try StagingDatabase.describeFields(file: page.path).map(\.name)
+        XCTAssertEqual(names.filter { $0.lowercased().contains("fid") }, ["ogc_fid"], "the page's own, and not GDAL's: \(names)")
+        let sample = try await db.geoJSONInWGS84(data: Data(gml.utf8), fileExtension: "gml", sourceWkid: 27700)
+        let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(sample.utf8)) as? [String: Any])
+        let first = try XCTUnwrap((object["features"] as? [[String: Any]])?.first?["properties"] as? [String: Any])
+        XCTAssertEqual(first["ogc_fid"] as? Int, 101)
+        XCTAssertEqual(first.keys.filter { $0.lowercased().contains("fid") }, ["ogc_fid"])
+
+        // GDAL's FID is taken to be the first column; a GeoJSON whose first property is the
+        // page's own ogc_fid would lose it the day that stopped being so.
+        let json = scratch.appendingPathComponent("page.json")
+        try Data(#"{"type":"FeatureCollection","features":[{"type":"Feature","id":7,"properties":{"ogc_fid":41,"name":"Esher"},"geometry":{"type":"Point","coordinates":[-0.36,51.37]}}]}"#.utf8).write(to: json)
+        XCTAssertEqual(try StagingDatabase.describeFields(file: json.path).map(\.name), ["ogc_fid", "name", "geom"])
     }
 
     func testOldWFSDownloadsInOneRequest() async throws {

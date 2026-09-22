@@ -165,13 +165,14 @@ enum OGCFixtures {
         return #"{"type":"FeatureCollection","numberMatched":5,"numberReturned":\#(features.count)\#(crs),"features":[\#(features.joined(separator: ","))]}"#
     }
 
-    /// A GML 3.2 page of towns `range` in British National Grid.
-    static func gmlPage(_ range: Range<Int>) -> String {
+    /// A GML 3.2 page of towns `range` in British National Grid. `ogcFID` gives each town the
+    /// `ogc_fid` attribute (100 more than its id) that MapServer publishes for a table `ogr2ogr` loaded.
+    static func gmlPage(_ range: Range<Int>, ogcFID: Bool = false) -> String {
         let members = towns[range.clamped(to: towns.indices)].map { t in """
               <wfs:member>
                 <ms:towns gml:id="towns.\(t.id)">
                   <ms:msGeometry><gml:Point srsName="urn:ogc:def:crs:EPSG::27700" gml:id="towns.\(t.id).g"><gml:pos>\(t.x) \(t.y)</gml:pos></gml:Point></ms:msGeometry>
-                  <ms:OBJECTID>\(t.id)</ms:OBJECTID><ms:NAME>\(t.name)</ms:NAME><ms:POP>\(t.pop)</ms:POP>
+                  \(ogcFID ? "<ms:ogc_fid>\(100 + t.id)</ms:ogc_fid>" : "")<ms:OBJECTID>\(t.id)</ms:OBJECTID><ms:NAME>\(t.name)</ms:NAME><ms:POP>\(t.pop)</ms:POP>
                 </ms:towns>
               </wfs:member>
             """ }.joined(separator: "\n")

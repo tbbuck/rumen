@@ -12,6 +12,7 @@ private final class StubEndpoint: @unchecked Sendable {
     private var _version100 = false
     private var _vectorWMS = false
     private var _readsPlusAsSpace = false
+    private var _describesOnlyByTypeName = false
     private var _log: [[String: String]] = []
 
     var offersWMTS: Bool { get { lock.withLock { _offersWMTS } } set { lock.withLock { _offersWMTS = newValue } } }
@@ -23,7 +24,12 @@ private final class StubEndpoint: @unchecked Sendable {
     /// `getows.ashx` does to its MapServer: a `+` arrives as a space, and a GetFeature format
     /// the server does not know is answered with IIS's HTML 500.
     var readsPlusAsSpace: Bool { get { lock.withLock { _readsPlusAsSpace } } set { lock.withLock { _readsPlusAsSpace = newValue } } }
+    /// Describes a feature type only when it is named `typeName`, as the same proxy does: the
+    /// 2.0 plural and the all-types form are both answered with the HTML 500.
+    var describesOnlyByTypeName: Bool { get { lock.withLock { _describesOnlyByTypeName } } set { lock.withLock { _describesOnlyByTypeName = newValue } } }
     var log: [[String: String]] { lock.withLock { _log } }
+
+    private static let iisError = StubTransport.Reply(status: 500, body: Data("<html><title>500 - Internal server error.</title></html>".utf8))
 
     func reply(_ request: URLRequest) throws -> StubTransport.Reply {
         var params = Self.params(request.encodedParams)
@@ -38,13 +44,12 @@ private final class StubEndpoint: @unchecked Sendable {
             if version100 { return xml(OGCFixtures.wfs100) }
             return xml(geoJSON ? OGCFixtures.wfs200 : OGCFixtures.wfs200.replacingOccurrences(of: "<ows:Value>application/json</ows:Value>", with: ""))
         case ("WFS", "DescribeFeatureType"):
+            if describesOnlyByTypeName, params["typeName"] == nil { return Self.iisError }
             return xml(OGCFixtures.describeTowns)
         case ("WFS", "GetFeature"):
             if params["resultType"] == "hits" { return xml(OGCFixtures.hits) }
             let offered = ["application/gml+xml; version=3.2", "text/xml; subtype=gml/3.2.1"] + (geoJSON ? ["application/json"] : [])
-            if readsPlusAsSpace, let format = params["outputFormat"], !offered.contains(format) {
-                return StubTransport.Reply(status: 500, body: Data("<html><title>500 - Internal server error.</title></html>".utf8))
-            }
+            if readsPlusAsSpace, let format = params["outputFormat"], !offered.contains(format) { return Self.iisError }
             let start = Int(params["startIndex"] ?? "0") ?? 0
             let count = Int(params["count"] ?? params["maxFeatures"] ?? "5") ?? 5
             if (params["outputFormat"] ?? "").lowercased().contains("json") {
@@ -239,6 +244,22 @@ final class OGCTests: XCTestCase {
         XCTAssertEqual(layer.tileMatrixSetLinks, ["webmercator"])
         XCTAssertEqual(layer.resourceURLTemplates.count, 1)
         XCTAssertTrue(layer.supportsWebMercator)
+    }
+
+    /// WFS 2.0 contradicts itself over DescribeFeatureType's keyword — `TYPENAME` in its KVP
+    /// table, `TYPENAMES` in the parameter's own section — and servers take sides. Elmbridge's
+    /// proxy answers only the singular, and never the all-types form, so every type's schema was
+    /// a 500 until both spellings went out together, as QGIS sends them.
+    func testDescribeFeatureTypeNamesTheTypeBothWays() async throws {
+        endpoint.describesOnlyByTypeName = true
+        let opened = try await crawler.open(pasted + "&typeNames=ms:towns")
+        XCTAssertTrue(opened.problems.isEmpty, "\(opened.problems)")
+        let layer = try XCTUnwrap(opened.layer)
+        let fields = try await db.fields(layerID: layer.id)
+        XCTAssertEqual(fields.map(\.name), ["msGeometry", "OBJECTID", "NAME", "POP", "WHEN"])
+        let named = endpoint.log.filter { $0["request"] == "DescribeFeatureType" && ($0["typeName"] ?? $0["typeNames"]) != nil }
+        XCTAssertFalse(named.isEmpty)
+        XCTAssertTrue(named.allSatisfy { $0["typeName"] != nil && $0["typeName"] == $0["typeNames"] }, "\(named)")
     }
 
     func testDescribeFeatureTypeAndHits() throws {

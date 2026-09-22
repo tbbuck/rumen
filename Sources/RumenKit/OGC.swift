@@ -351,9 +351,16 @@ public enum OGCRequests {
         }
     }
 
+    /// One type described, or every type when none is named. WFS 2.0 contradicts itself over the
+    /// keyword — `TYPENAME` in its KVP table, `TYPENAMES` in the parameter's own section — and
+    /// servers take sides (Elmbridge's iShare `getows.ashx` answers the plural with a 500), so at
+    /// 2.0 both are sent, as QGIS sends them.
     public static func describeFeatureType(version: String, typeName: String? = nil) -> [String: String] {
         var params = ["service": "WFS", "request": "DescribeFeatureType", "version": version]
-        if let typeName { params[version.hasPrefix("2") ? "typeNames" : "typeName"] = typeName }
+        if let typeName {
+            params["typeName"] = typeName
+            if version.hasPrefix("2") { params["typeNames"] = typeName }
+        }
         return params
     }
 

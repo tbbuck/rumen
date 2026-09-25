@@ -667,24 +667,25 @@ final class AppModel {
 
     /// Registers a new server from the Add-server sheet.
     func addServer(_ pending: PendingAdd, friendlyName: String, cookie: String = "",
-                   origin: String = "", referer: String = "", proxy: String = "") async {
+                   origin: String = "", referer: String = "", proxy: String = "", insecureTLS: Bool = false) async {
         guard pendingAdd != nil else { return }   // Return and the button can both fire; add once
         pendingAdd = nil
-        await open(pending.text, friendlyName: friendlyName, headerOverrides: (origin, referer), cookie: cookie, proxyURL: proxy)
+        await open(pending.text, friendlyName: friendlyName, headerOverrides: (origin, referer), cookie: cookie, proxyURL: proxy,
+                   insecureTLS: insecureTLS)
     }
 
     /// Opens any ArcGIS URL: registers or touches its server, crawls as needed, and lands on
     /// the node it names.
     private func open(_ text: String, friendlyName: String?,
                       headerOverrides: (origin: String?, referer: String?)? = nil, cookie: String? = nil,
-                      proxyURL: String? = nil) async {
+                      proxyURL: String? = nil, insecureTLS: Bool = false) async {
         guard let crawler else { return }
         let root = rootURL(of: text)?.absoluteString ?? text
         openingStatus = OpeningStatus(url: root, step: "Opening…")
         defer { openingStatus = nil }
         do {
             let opened = try await crawler.open(text, friendlyName: friendlyName, headerOverrides: headerOverrides, cookie: cookie,
-                                                proxyURL: proxyURL, progress: { event in
+                                                proxyURL: proxyURL, insecureTLS: insecureTLS, progress: { event in
                 Task { @MainActor in self.openingProgress(event) }
             })
             openingStatus?.step = "Building the tree…"
@@ -727,7 +728,8 @@ final class AppModel {
             }
         } catch {
             report(error, retry: { [weak self] in
-                await self?.open(text, friendlyName: friendlyName, headerOverrides: headerOverrides, cookie: cookie)
+                await self?.open(text, friendlyName: friendlyName, headerOverrides: headerOverrides, cookie: cookie,
+                                 proxyURL: proxyURL, insecureTLS: insecureTLS)
             })
             // The server may have been registered before the failure: go there rather than
             // leaving the user on whatever was open before.
@@ -765,11 +767,12 @@ final class AppModel {
     }
 
     func saveSettings(_ server: ServerRecord, name: String, origin: String, referer: String, cookie: String,
-                      proxy: String = "") async {
+                      proxy: String = "", insecureTLS: Bool = false) async {
         guard let database else { return }
         do {
             try await database.setCookie(serverID: server.id, cookie: cookie)
             try await database.setProxy(serverID: server.id, proxyURL: proxy)
+            try await database.setInsecureTLS(serverID: server.id, insecure: insecureTLS)
             try await database.renameServer(id: server.id, friendlyName: name)
             try await database.setHeaderOverrides(serverID: server.id, origin: origin, referer: referer)
             try await reloadServers()

@@ -79,6 +79,15 @@ final class MetadataStoreTests: XCTestCase {
         let clearedProxy = try await db.server(id: s.id)
         XCTAssertNil(clearedProxy.proxyURL, "blank clears it")
 
+        XCTAssertFalse(clearedProxy.insecureTLS, "certificates are checked by default")
+        try await db.setInsecureTLS(serverID: s.id, insecure: true)
+        let insecure = try await db.server(id: s.id)
+        XCTAssertTrue(insecure.insecureTLS, "on the row")
+        XCTAssertTrue(insecure.connection().insecureTLS, "and on every connection")
+        try await db.setInsecureTLS(serverID: s.id, insecure: false)
+        let verified = try await db.server(id: s.id)
+        XCTAssertFalse(verified.insecureTLS, "and off again")
+
         try await db.forgetServer(id: s.id)
         let remaining = try await db.servers()
         XCTAssertEqual(remaining, [])

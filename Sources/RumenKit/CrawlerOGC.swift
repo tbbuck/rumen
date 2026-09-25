@@ -10,7 +10,7 @@ extension Crawler {
     /// on the service or layer the URL's parameters named. A new endpoint that answers none of
     /// the three services is forgotten again, and the attempts are reported verbatim.
     func openOGC(_ text: String, friendlyName: String?, headerOverrides: (origin: String?, referer: String?)?,
-                 cookie: String?, proxyURL: String? = nil,
+                 cookie: String?, proxyURL: String? = nil, insecureTLS: Bool = false,
                  progress: (@Sendable (CrawlEvent) -> Void)?) async throws -> Opened {
         let location = try OGCURL.parse(text)
         let existing = try await db.server(rootURL: location.rootURL)
@@ -29,6 +29,7 @@ extension Crawler {
             if let proxyURL, !proxyURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 try await db.setProxy(serverID: server.id, proxyURL: proxyURL)
             }
+            if insecureTLS { try await db.setInsecureTLS(serverID: server.id, insecure: true) }
             server = try await db.server(id: server.id)
         }
         var problems = [CrawlProblem]()

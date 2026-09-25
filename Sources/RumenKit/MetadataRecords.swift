@@ -29,6 +29,8 @@ public struct ServerRecord: Sendable, Equatable, Identifiable {
     /// An HTTP proxy for every request to this server, as curl's `--proxy`:
     /// `"http://localhost:3128"`. Nil means a direct connection.
     public var proxyURL: String?
+    /// Accept any certificate this server presents, as curl's `--insecure`.
+    public var insecureTLS: Bool
     /// ArcGIS REST root, lone ArcGIS service, or OGC endpoint.
     public var kind: ServerKind
 
@@ -36,8 +38,9 @@ public struct ServerRecord: Sendable, Equatable, Identifiable {
                 refererOverride: String? = nil, authKind: String = "none", username: String? = nil,
                 tokenServiceURL: String? = nil, arcgisVersion: Double? = nil, createdAt: Date = Date(),
                 lastVisitedAt: Date? = nil, lastDeepCrawlAt: Date? = nil, cookie: String? = nil,
-                proxyURL: String? = nil, kind: ServerKind = .arcgis) {
+                proxyURL: String? = nil, insecureTLS: Bool = false, kind: ServerKind = .arcgis) {
         self.proxyURL = proxyURL
+        self.insecureTLS = insecureTLS
         self.kind = kind
         self.id = id
         self.rootURL = rootURL
@@ -64,7 +67,7 @@ public struct ServerRecord: Sendable, Equatable, Identifiable {
     /// dozens of types is a burst of expensive requests at something small.
     public func connection(token: String? = nil) -> ServerConnection {
         ServerConnection(rootURL: rootURL, headers: headers, token: token, cookie: cookie, proxyURL: proxyURL,
-                         minRequestSpacing: kind == .ogc ? ServerConnection.ogcRequestSpacing : 0)
+                         insecureTLS: insecureTLS, minRequestSpacing: kind == .ogc ? ServerConnection.ogcRequestSpacing : 0)
     }
 
     /// The host shown in the path bar and as the default friendly name.

@@ -59,10 +59,11 @@ public actor Crawler {
     /// Parses `text`, registers its server root (or touches an existing one), runs a
     /// shallow crawl for a new server, and — when the URL names a service or layer — crawls
     /// that service so the target rows exist. Errors surface verbatim.
-    /// `headerOverrides` (origin, referer), `cookie` and `proxyURL` apply to a new server
-    /// before its first request.
+    /// `headerOverrides` (origin, referer), `cookie`, `proxyURL` and `insecureTLS` apply to a
+    /// new server before its first request.
     public func open(_ text: String, friendlyName: String? = nil,
                      headerOverrides: (origin: String?, referer: String?)? = nil, cookie: String? = nil, proxyURL: String? = nil,
+                     insecureTLS: Bool = false,
                      progress: (@Sendable (CrawlEvent) -> Void)? = nil) async throws -> Opened {
         let location: ArcGISLocation
         var kind = ServerKind.arcgis
@@ -76,14 +77,14 @@ public actor Crawler {
             if let owned = try ArcGISURL.resolve(text, against: servers) {
                 location = owned
             } else if OGCURL.knownEndpoint(of: text, among: servers) != nil {
-                return try await openOGC(text, friendlyName: friendlyName, headerOverrides: headerOverrides, cookie: cookie, proxyURL: proxyURL, progress: progress)
+                return try await openOGC(text, friendlyName: friendlyName, headerOverrides: headerOverrides, cookie: cookie, proxyURL: proxyURL, insecureTLS: insecureTLS, progress: progress)
             } else if let item = PortalURL.parse(text) {
                 // A viewer URL: the item lists the services it draws, which for a proxied
                 // council map is the only place they are written down.
                 return try await openPortalItem(item, headerOverrides: headerOverrides, cookie: cookie,
-                                                proxyURL: proxyURL, progress: progress)
+                                                proxyURL: proxyURL, insecureTLS: insecureTLS, progress: progress)
             } else {
-                switch try await probeArcGIS(text, headerOverrides: headerOverrides, cookie: cookie, proxyURL: proxyURL) {
+                switch try await probeArcGIS(text, headerOverrides: headerOverrides, cookie: cookie, proxyURL: proxyURL, insecureTLS: insecureTLS) {
                 case .found(let finding):
                     location = finding.location
                     kind = finding.kind
@@ -91,7 +92,7 @@ public actor Crawler {
                     throw error
                 case .notArcGIS(let reason):
                     do {
-                        return try await openOGC(text, friendlyName: friendlyName, headerOverrides: headerOverrides, cookie: cookie, proxyURL: proxyURL, progress: progress)
+                        return try await openOGC(text, friendlyName: friendlyName, headerOverrides: headerOverrides, cookie: cookie, proxyURL: proxyURL, insecureTLS: insecureTLS, progress: progress)
                     } catch OGCError.noServices(let url, let attempts) {
                         throw ArcGISProbeError.nothingAnswered(url: url, arcgis: reason, ogc: attempts)
                     }
@@ -114,6 +115,7 @@ public actor Crawler {
             if let proxyURL, !proxyURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 try await db.setProxy(serverID: server.id, proxyURL: proxyURL)
             }
+            if insecureTLS { try await db.setInsecureTLS(serverID: server.id, insecure: true) }
             server = try await db.server(id: server.id)
         }
         var problems = [CrawlProblem]()
@@ -602,8 +604,8 @@ extension Crawler {
     ///
     /// One hop only: app → web map → its layers. A web map is where layer URLs actually live,
     /// and an app that points at another app is not a shape worth chasing.
-    public func resolvePortalItem(_ ref: PortalItemRef, proxyURL: String? = nil) async throws -> [PortalService] {
-        let connection = ServerConnection(rootURL: ref.portal, proxyURL: proxyURL)
+    public func resolvePortalItem(_ ref: PortalItemRef, proxyURL: String? = nil, insecureTLS: Bool = false) async throws -> [PortalService] {
+        let connection = ServerConnection(rootURL: ref.portal, proxyURL: proxyURL, insecureTLS: insecureTLS)
         let info = try await client.json(PortalItemInfo.self, url: ref.itemURL, server: connection).value
 
         // A service item is its own answer.
@@ -630,15 +632,15 @@ extension Crawler {
     /// One service failing does not sink the others: its message is carried back as a problem
     /// against the item, and the ones that opened still open.
     public func openPortalItem(_ ref: PortalItemRef, headerOverrides: (origin: String?, referer: String?)? = nil,
-                               cookie: String? = nil, proxyURL: String? = nil,
+                               cookie: String? = nil, proxyURL: String? = nil, insecureTLS: Bool = false,
                                progress: (@Sendable (CrawlEvent) -> Void)? = nil) async throws -> Opened {
-        let services = try await resolvePortalItem(ref, proxyURL: proxyURL)
+        let services = try await resolvePortalItem(ref, proxyURL: proxyURL, insecureTLS: insecureTLS)
         var first: Opened?
         var problems = [CrawlProblem]()
         for service in services {
             do {
                 let opened = try await open(service.url.absoluteString, friendlyName: service.title,
-                                            headerOverrides: headerOverrides, cookie: cookie, proxyURL: proxyURL,
+                                            headerOverrides: headerOverrides, cookie: cookie, proxyURL: proxyURL, insecureTLS: insecureTLS,
                                             progress: progress)
                 if first == nil { first = opened }
                 problems += opened.problems

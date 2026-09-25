@@ -91,6 +91,24 @@ final class URLSessionTransportTests: XCTestCase {
         XCTAssertEqual(resultB.0, second)
     }
 
+    /// A proxy transport sends both kinds of request through the proxy. The loopback server
+    /// stands in for it — a proxied plain-http request reaches the proxy as an absolute URI,
+    /// which it answers like any other — and the target host does not exist, so a request that
+    /// went direct could only fail. The streamed path used to build its session from `.default`
+    /// and go direct, so every download ignored the server's proxy.
+    func testBothPathsGoThroughTheProxy() async throws {
+        let body = Data(#"{"via":"proxy"}"#.utf8)
+        let proxy = try LoopbackServer(body: body)
+        defer { proxy.stop() }
+        let transport = try XCTUnwrap(URLSessionTransport(proxy: "http://127.0.0.1:\(proxy.port)"))
+        let target = request(URL(string: "http://rumen-proxy-test.invalid/thing")!)
+
+        let (plain, _) = try await transport.perform(target)
+        XCTAssertEqual(plain, body, "a plain request must go through the proxy")
+        let (streamed, _) = try await transport.perform(target) { _ in }
+        XCTAssertEqual(streamed, body, "a streamed request must go through the proxy too")
+    }
+
     /// Progress handlers are called from the session's delegate queue, so collect under a lock.
     private final class Reports: @unchecked Sendable {
         private let lock = NSLock()

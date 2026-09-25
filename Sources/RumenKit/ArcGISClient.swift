@@ -35,6 +35,9 @@ public struct ServerConnection: Sendable, Equatable {
     /// An HTTP proxy every request to this server goes through, as curl's `--proxy`:
     /// `"http://localhost:3128"`. Nil means a direct connection.
     public var proxyURL: String?
+    /// Accept any certificate this server presents, as curl's `--insecure`: self-signed,
+    /// expired, or issued for another name. False verifies as normal.
+    public var insecureTLS: Bool
     /// The least time between the *starts* of two requests to this server. The concurrency cap
     /// bounds how many run at once; this bounds how fast they are begun, which is the part a
     /// small endpoint feels. 0 is as fast as the cap allows.
@@ -47,12 +50,13 @@ public struct ServerConnection: Sendable, Equatable {
     public static let ogcRequestSpacing: TimeInterval = 0.5
 
     public init(rootURL: URL, headers: ServerHeaders? = nil, token: String? = nil, cookie: String? = nil,
-                proxyURL: String? = nil, minRequestSpacing: TimeInterval = 0) {
+                proxyURL: String? = nil, insecureTLS: Bool = false, minRequestSpacing: TimeInterval = 0) {
         self.rootURL = rootURL
         self.headers = headers ?? .resolve(rootURL: rootURL)
         self.token = token
         self.cookie = cookie
         self.proxyURL = proxyURL
+        self.insecureTLS = insecureTLS
         self.minRequestSpacing = minRequestSpacing
     }
 
@@ -188,27 +192,41 @@ public final class URLSessionTransport: HTTPTransport, @unchecked Sendable {
     /// object so this transport is not in the session's retain cycle and can be torn down.
     private let streamer: StreamingSession
 
+    /// The streaming session copies this one's configuration, so a streamed request goes the
+    /// same way as a plain one — it used to be built from `.default`, and every download sent
+    /// through a proxy transport quietly went direct.
     public init(session: URLSession = .shared) {
         self.session = session
-        self.streamer = StreamingSession()
+        self.streamer = StreamingSession(configuration: session.configuration, insecure: false)
     }
 
-    /// A transport whose every request goes through `proxy` ("http://localhost:3128"), as
-    /// curl's `--proxy` does. Both HTTP and HTTPS are pointed at it: an https endpoint reaches
-    /// the proxy by CONNECT, which is the case that matters here, and configuring only one of
-    /// the two silently leaves the other going direct.
+    /// A transport with sessions of its own: through `proxy` when there is one, as curl's
+    /// `--proxy`, and accepting any certificate when `insecure`, as curl's `--insecure`.
+    ///
+    /// Both HTTP and HTTPS are pointed at the proxy: an https endpoint reaches it by CONNECT,
+    /// which is the case that matters here, and configuring only one of the two silently leaves
+    /// the other going direct.
+    public init(proxy: (host: String, port: Int)?, insecure: Bool) {
+        let configuration = URLSessionConfiguration.ephemeral
+        if let proxy {
+            configuration.connectionProxyDictionary = [
+                kCFNetworkProxiesHTTPEnable as String: true,
+                kCFNetworkProxiesHTTPProxy as String: proxy.host,
+                kCFNetworkProxiesHTTPPort as String: proxy.port,
+                "HTTPSEnable": true,
+                "HTTPSProxy": proxy.host,
+                "HTTPSPort": proxy.port,
+            ]
+        }
+        self.session = URLSession(configuration: configuration, delegate: insecure ? CertificateWaiver() : nil,
+                                  delegateQueue: nil)
+        self.streamer = StreamingSession(configuration: configuration, insecure: insecure)
+    }
+
+    /// A transport whose every request goes through `proxy` ("http://localhost:3128").
     public convenience init?(proxy: String) {
         guard let parsed = URLSessionTransport.proxyEndpoint(proxy) else { return nil }
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.connectionProxyDictionary = [
-            kCFNetworkProxiesHTTPEnable as String: true,
-            kCFNetworkProxiesHTTPProxy as String: parsed.host,
-            kCFNetworkProxiesHTTPPort as String: parsed.port,
-            "HTTPSEnable": true,
-            "HTTPSProxy": parsed.host,
-            "HTTPSPort": parsed.port,
-        ]
-        self.init(session: URLSession(configuration: configuration))
+        self.init(proxy: parsed, insecure: false)
     }
 
     /// The host and port of a proxy setting. A bare "host:port" is accepted as well as a full
@@ -254,13 +272,20 @@ private final class StreamingSession: NSObject, URLSessionDataDelegate, @uncheck
     /// thread-safe: two concurrent streams raced to build it and one lost its session, so its
     /// task never reported back and the caller waited for ever.
     private var session: URLSession!
+    private let insecure: Bool
 
-    override init() {
+    init(configuration: URLSessionConfiguration, insecure: Bool) {
+        self.insecure = insecure
         super.init()
-        session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
+        session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
     }
 
     func invalidate() { session.finishTasksAndInvalidate() }
+
+    func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge) async
+        -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+        insecure ? CertificateWaiver.answer(challenge) : (.performDefaultHandling, nil)
+    }
 
     func perform(_ request: URLRequest, progress: @escaping TransferProgressHandler) async throws -> (Data, HTTPURLResponse) {
         let task = session.dataTask(with: request)
@@ -331,6 +356,22 @@ private final class StreamingSession: NSObject, URLSessionDataDelegate, @uncheck
         }
         finished.progress(TransferProgress(received: Int64(finished.data.count), expected: finished.expected))
         finished.continuation.resume(returning: (finished.data, http))
+    }
+}
+
+/// Accepts whatever certificate a server presents: the whole of curl's `--insecure`. The trust
+/// the server offered is handed straight back as the credential, so self-signed, expired and
+/// wrongly-named certificates all pass; every other challenge is left to the system.
+private final class CertificateWaiver: NSObject, URLSessionDelegate, Sendable {
+    func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge) async
+        -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+        Self.answer(challenge)
+    }
+
+    static func answer(_ challenge: URLAuthenticationChallenge) -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let trust = challenge.protectionSpace.serverTrust else { return (.performDefaultHandling, nil) }
+        return (.useCredential, URLCredential(trust: trust))
     }
 }
 
@@ -405,22 +446,31 @@ public actor ArcGISClient {
     /// Origins that answered `405 Allow: GET` to a POST. Some proxies in front of ArcGIS route
     /// only GET; once one has said so, its later requests go out as GET without the wasted POST.
     private var getOnlyOrigins: Set<String> = []
-    /// One transport per proxy setting, built on first use and kept: a URLSession holds its
-    /// connection pool, so making one per request would give up keep-alive entirely.
-    private var proxyTransports: [String: HTTPTransport] = [:]
+    /// One transport per proxy and certificate setting, built on first use and kept: a
+    /// URLSession holds its connection pool, so making one per request would give up keep-alive
+    /// entirely.
+    private var routedTransports: [TransportRoute: HTTPTransport] = [:]
+
+    private struct TransportRoute: Hashable {
+        let proxy: String?
+        let insecure: Bool
+    }
     /// When the next request to a host may begin, for `minRequestSpacing`.
     private var lastRequestStart: [String: Date] = [:]
 
     /// The transport for a server: the injected one by default (a stub, under test), or one
-    /// whose session routes through that server's proxy. A proxy that cannot be parsed goes
-    /// direct rather than failing the request — the setting is the user's, typed by hand, and
-    /// a typo should not take the server offline silently.
-    private func transport(forProxy proxy: String?) -> HTTPTransport {
-        guard let proxy, !proxy.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return transport }
-        if let existing = proxyTransports[proxy] { return existing }
-        guard let proxied = URLSessionTransport(proxy: proxy) else { return transport }
-        proxyTransports[proxy] = proxied
-        return proxied
+    /// whose sessions route through that server's proxy and waive its certificate check as its
+    /// settings say. A proxy that cannot be parsed goes direct rather than failing the request
+    /// — the setting is the user's, typed by hand, and a typo should not take the server
+    /// offline silently.
+    private func transport(for connection: ServerConnection) -> HTTPTransport {
+        let proxy = connection.proxyURL.flatMap(URLSessionTransport.proxyEndpoint)
+        guard proxy != nil || connection.insecureTLS else { return transport }
+        let route = TransportRoute(proxy: proxy.map { "\($0.host):\($0.port)" }, insecure: connection.insecureTLS)
+        if let existing = routedTransports[route] { return existing }
+        let routed = URLSessionTransport(proxy: proxy, insecure: connection.insecureTLS)
+        routedTransports[route] = routed
+        return routed
     }
 
     public init(transport: HTTPTransport = URLSessionTransport(), retry: RetryPolicy = RetryPolicy(),
@@ -464,7 +514,7 @@ public actor ArcGISClient {
         let sent = all
         func attempt(_ method: HTTPMethod) async throws -> Data {
             let request = try Self.build(method, url: url, params: sent, server: server, timeout: timeout)
-            return try await send(request, url: url, proxy: server.proxyURL, spacing: server.minRequestSpacing, maxAttempts: maxAttempts, progress: progress)
+            return try await send(request, url: url, connection: server, maxAttempts: maxAttempts, progress: progress)
         }
         let origin = ArcGISURL.origin(of: url)
         guard method == .post else { return try await attempt(method) }
@@ -494,7 +544,7 @@ public actor ArcGISClient {
         var request = try Self.build(.get, url: endpoint, params: all, server: server)
         request.setValue(accept, forHTTPHeaderField: "Accept")
         let url = request.url ?? endpoint
-        let data = try await send(request, url: url, proxy: server.proxyURL, spacing: server.minRequestSpacing, maxAttempts: maxAttempts, progress: progress)
+        let data = try await send(request, url: url, connection: server, maxAttempts: maxAttempts, progress: progress)
         if Self.looksLikeXML(data), OGCCapabilities.isExceptionReport(data),
            let document = try? XMLDocument(data: data, options: []), let rootElement = document.rootElement() {
             throw ArcGISClientError.server(code: nil, message: OGCCapabilities.exceptionText(rootElement), details: [], url: url,
@@ -531,7 +581,7 @@ public actor ArcGISClient {
     /// Sends with retries, holding one of the host's slots only while a request is actually in
     /// flight. Backing off outside the slot matters: a struggling host is exactly the one whose
     /// requests retry, and sleeping on its slots starves the very requests that might succeed.
-    private func send(_ request: URLRequest, url: URL, proxy: String?, spacing: TimeInterval = 0,
+    private func send(_ request: URLRequest, url: URL, connection: ServerConnection,
                       maxAttempts: Int?, progress: TransferProgressHandler?) async throws -> Data {
         let host = server(for: request)
         var attempt = 1
@@ -545,14 +595,14 @@ public actor ArcGISClient {
             await acquire(host)
             // Inside the slot, so a paced request holds its place in the queue rather than
             // letting another take it while this one waits its turn.
-            await pace(host, spacing: spacing)
+            await pace(host, spacing: connection.minRequestSpacing)
             // How wide the host was running when this request went out: what its latency is
             // evidence about, whatever the width has become by the time it lands.
             let width = concurrencyLimit(forHost: host)
             let started = Date()
             let outcome: Result<Data, SendFailure>
             do {
-                outcome = .success(try await performOnce(request, url: url, proxy: proxy, progress: progress))
+                outcome = .success(try await performOnce(request, url: url, connection: connection, progress: progress))
             } catch let failure as SendFailure {
                 outcome = .failure(failure)
             }
@@ -622,10 +672,10 @@ public actor ArcGISClient {
         request.url.map { ArcGISURL.origin(of: $0) } ?? ""
     }
 
-    private func performOnce(_ request: URLRequest, url: URL, proxy: String?, progress: TransferProgressHandler?) async throws -> Data {
+    private func performOnce(_ request: URLRequest, url: URL, connection: ServerConnection, progress: TransferProgressHandler?) async throws -> Data {
         let data: Data
         let response: HTTPURLResponse
-        let transport = transport(forProxy: proxy)
+        let transport = self.transport(for: connection)
         do {
             if let progress {
                 // Compression stays on: the transport simply shows no total for an encoded body

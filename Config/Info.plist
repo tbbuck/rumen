@@ -30,6 +30,15 @@
     <true/>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <!-- Plain http endpoints are ordinary among the servers this app reads (council GeoServers,
+         old ArcGIS boxes), and the URL is the user's own choice, so App Transport Security
+         would only refuse what they asked for. Certificate checks stay on unless a server's
+         own setting says otherwise. -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+    </dict>
     <key>MapTilerAPIKey</key>
     <string>$(MAPTILER_API_KEY)</string>
 </dict>

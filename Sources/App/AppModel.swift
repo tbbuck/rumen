@@ -88,7 +88,11 @@ final class AppModel {
     private(set) var searchUncrawled = 0
     private(set) var searchFailedFolders = 0
     private(set) var searchError: String?
-    var focusColumnSearch = false
+    /// Bumped to put the caret in "Find a column" (⌘F); a counter, so every press acts.
+    private(set) var columnSearchFocusRequest = 0
+    func focusColumnSearch() { columnSearchFocusRequest += 1 }
+    /// Bumped to put the caret in the location box (⌘L, a click on it) and select what is there.
+    private(set) var urlFocusRequest = 0
     var treeFilter = ""
     /// Bumped to hand keyboard focus to the tree (after a server opens, on Escape or Down from a
     /// text field); the outline view watches it.
@@ -540,10 +544,15 @@ final class AppModel {
 
     // MARK: - URL intake
 
+    /// ⌘L or a click on the location box. Already editing, it only takes the keyboard back and
+    /// selects the draft, as a browser's address bar does; the draft is not thrown away.
     func beginURLEdit() {
-        urlDraft = pathContent?.url.absoluteString ?? ""
-        isEditingURL = true
-        urlEditStartedAt = Date()
+        if !isEditingURL {
+            urlDraft = pathContent?.url.absoluteString ?? ""
+            isEditingURL = true
+            urlEditStartedAt = Date()
+        }
+        urlFocusRequest += 1
     }
 
     func cancelURLEdit() {

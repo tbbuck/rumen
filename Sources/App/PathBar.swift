@@ -5,21 +5,21 @@ import RumenKit
 /// takes any pasted ArcGIS URL. Fills the title bar.
 struct PathBar: View {
     @Environment(AppModel.self) private var model
-    @FocusState private var editing: Bool
 
     var body: some View {
         @Bindable var model = model
         HStack(spacing: 2) {
             if model.isEditingURL {
-                TextField("Paste an ArcGIS URL", text: $model.urlDraft)
-                    .textFieldStyle(.plain)
-                    .font(.sheetMono(12.5))
-                    .foregroundStyle(Palette.ink)
-                    .accessibilityLabel("URL")
-                    .focused($editing)
-                    .onSubmit { Task { await model.submitURL() } }
-                    .onExitCommand { model.cancelURLEdit() }
-                    .onAppear { editing = true }
+                // Leaving the field by any route ends the edit, as a browser's address bar does:
+                // a box left lit without the keyboard is what made ⌘L look like it had worked.
+                ChromeTextField(text: $model.urlDraft, placeholder: "Paste an ArcGIS URL",
+                                font: SheetFonts.mono(size: 12.5, weight: 400) ?? .monospacedSystemFont(ofSize: 12.5, weight: .regular),
+                                accessibilityLabel: "URL", identifier: "location-field",
+                                focusRequest: model.urlFocusRequest, focusOnAppear: true,
+                                focusArea: model.chromeFrames["path"],
+                                onFocusChange: { if !$0 { model.cancelURLEdit() } },
+                                onSubmit: { Task { await model.submitURL() } },
+                                onCancel: { model.cancelURLEdit() })
             } else if let content = model.pathContent, let server = model.currentServer {
                 HostSegment(server: server)
                 ForEach(Array(content.segments.dropFirst().enumerated()), id: \.offset) { index, segment in
@@ -118,24 +118,27 @@ private struct PathSegmentView: View {
     }
 }
 
-/// 190px "Find a column" field. Column search itself arrives in M5; the field is here so
-/// the chrome is complete, and it says so when used.
+/// 190px "Find a column" field (⌘F). Escape clears it and hands the keyboard to the tree.
 struct ColumnSearchField: View {
     @Environment(AppModel.self) private var model
-    @FocusState private var focused: Bool
+    @State private var focused = false
 
     var body: some View {
         @Bindable var model = model
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(Palette.muted2)
-            TextField("Find a column", text: $model.columnSearch)
-                .textFieldStyle(.plain)
-                .font(.sheetUI(12.5))
-                .foregroundStyle(Palette.ink)
-                .accessibilityLabel("Find a column")
-                .focused($focused)
-                .onExitCommand { model.columnSearch = ""; focused = false; model.focusTree() }
-                .onChange(of: model.focusColumnSearch) { if model.focusColumnSearch { focused = true; model.focusColumnSearch = false } }
+            ChromeTextField(text: $model.columnSearch, placeholder: "Find a column",
+                            font: SheetFonts.ui(size: 12.5) ?? .systemFont(ofSize: 12.5),
+                            accessibilityLabel: "Find a column", identifier: "column-search-field",
+                            focusRequest: model.columnSearchFocusRequest,
+                            focusArea: model.chromeFrames["search"],
+                            onFocusChange: { focused = $0 },
+                            onCancel: {
+                                model.columnSearch = ""
+                                // Out of the field first, so Escape leaves it even with no tree to take over.
+                                NSApp.keyWindow?.makeFirstResponder(nil)
+                                model.focusTree()
+                            })
             if !model.columnSearch.isEmpty {
                 Button { model.columnSearch = "" } label: {
                     Image(systemName: "xmark.circle.fill").font(.system(size: 11)).foregroundStyle(Palette.muted2)

@@ -232,6 +232,8 @@ private struct FatalView: View {
 
 /// A click anywhere outside the text field being edited ends the edit (AppKit leaves the
 /// field editor in place until something else takes first responder, which plain views never do).
+/// A title-bar field counts its whole box as inside — the padding, the magnifier, the clear
+/// button — so a click that misses the text by a few points does not throw the edit away.
 @MainActor
 enum FieldFocus {
     private static var monitor: Any?
@@ -257,7 +259,11 @@ enum FieldFocus {
             guard let window = event.window,
                   let editor = window.firstResponder as? NSTextView, editor.isFieldEditor,
                   let field = editor.delegate as? NSView else { return event }
-            let inField = field.convert(field.bounds, to: nil).contains(event.locationInWindow)
+            var inField = field.convert(field.bounds, to: nil).contains(event.locationInWindow)
+            if !inField, let area = (field as? ChromeNSTextField)?.focusArea, let content = window.contentView {
+                let point = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)
+                inField = area.contains(point)
+            }
             if !inField { window.makeFirstResponder(nil) }
             return event
         }

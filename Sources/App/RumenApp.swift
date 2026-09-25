@@ -95,7 +95,7 @@ struct RumenApp: App {
                     .keyboardShortcut("h", modifiers: [.command, .shift])
                 Button("Open URL…") { model.beginURLEdit() }
                     .keyboardShortcut("l", modifiers: .command)
-                Button("Find column…") { model.focusColumnSearch = true }
+                Button("Find column…") { model.focusColumnSearch() }
                     .keyboardShortcut("f", modifiers: .command)
                 Button("Transfers") { model.showTransfers.toggle() }
                     .keyboardShortcut("t", modifiers: [.command, .shift])

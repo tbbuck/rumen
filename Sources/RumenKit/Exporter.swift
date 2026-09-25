@@ -68,23 +68,26 @@ public enum Exporter {
                               domainLabels: Bool, overwrite: Bool) throws -> ExportResult {
         guard !format.isRaster else { throw ExportError.unsupportedFormat(format) }
         try prepare(url, overwrite: overwrite)
-        let selectList = try columns(staging, format: format, domainLabels: domainLabels)
+        let attributes = try columns(staging, format: format, domainLabels: domainLabels)
+        // A geometry-only layer has no attributes, so the geometry joins the list rather than
+        // following a comma.
+        func selectList(_ geometry: String) -> String { (attributes + ["\(geometry) AS geometry"]).joined(separator: ", ") }
         let orderBy = staging.oidField.map { " ORDER BY \(StagingDatabase.quote($0))" } ?? ""
         let invalid = try staging.countInvalidGeometries()
         switch format {
         case .geoParquet:
             let metadata = try geoMetadata(staging, outWkid: outWkid)
             try staging.run("""
-                COPY (SELECT \(selectList), geom_wkb AS geometry FROM features\(orderBy))
+                COPY (SELECT \(selectList("geom_wkb")) FROM features\(orderBy))
                 TO '\(escape(url.path))' (FORMAT PARQUET, KV_METADATA {geo: '\(escape(metadata))'});
                 """)
         case .geoJSON:
             try staging.run("SET geometry_always_xy = true;")
             try staging.run(geoJSONCopy(
-                select: "\(selectList), \(wgs84("ST_GeomFromWKB(geom_wkb)", from: outWkid)) AS geometry FROM features\(orderBy)",
+                select: "\(selectList(wgs84("ST_GeomFromWKB(geom_wkb)", from: outWkid))) FROM features\(orderBy)",
                 to: url))
         case .csv:
-            try staging.run(csvCopy(select: "\(selectList), ST_AsText(ST_GeomFromWKB(geom_wkb)) AS geometry FROM features\(orderBy)", to: url))
+            try staging.run(csvCopy(select: "\(selectList("ST_AsText(ST_GeomFromWKB(geom_wkb))")) FROM features\(orderBy)", to: url))
         case .png, .geoTIFF:
             throw ExportError.unsupportedFormat(format)
         }
@@ -96,7 +99,7 @@ public enum Exporter {
     /// The exported columns: staged types with GUIDs cast to UUID (GeoParquet) or trimmed to
     /// plain text (the other writers), time-ish strings cast to their types, and optional
     /// `<field>_label` columns decoded from coded-value domains.
-    static func columns(_ staging: StagingDatabase, format: ExportFormat, domainLabels: Bool) throws -> String {
+    static func columns(_ staging: StagingDatabase, format: ExportFormat, domainLabels: Bool) throws -> [String] {
         var parts = [String]()
         for field in staging.stagedFields {
             let q = StagingDatabase.quote(field.name)
@@ -114,7 +117,7 @@ public enum Exporter {
                 parts.append("CASE \(q) \(cases) END AS \(StagingDatabase.quote(field.name + "_label"))")
             }
         }
-        return parts.joined(separator: ", ")
+        return parts
     }
 
     static func codedValueCases(_ field: FieldRecord) -> String? {

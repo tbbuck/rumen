@@ -128,7 +128,9 @@ public final class StagingDatabase: @unchecked Sendable {
         }
         let geometry = geometryColumn.map { "ST_AsWKB(\(Self.quote($0)))::BLOB" } ?? "NULL::BLOB"
         let before = try rowCount()
-        try db.run("INSERT INTO features SELECT \(selects.joined(separator: ", ")), \(geometry), \(seq) FROM \(source);")
+        // A layer can publish its geometry and nothing else (South Derbyshire's planning
+        // applications), leaving no field to select: the list is joined whole, never prefixed.
+        try db.run("INSERT INTO features SELECT \((selects + [geometry, String(seq)]).joined(separator: ", ")) FROM \(source);")
         let appended = Int(try rowCount() - before)
         if geometryColumn != nil, appended > 0 {
             let extent = try db.run("""

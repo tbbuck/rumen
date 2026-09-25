@@ -165,14 +165,28 @@ enum OGCFixtures {
         return #"{"type":"FeatureCollection","numberMatched":5,"numberReturned":\#(features.count)\#(crs),"features":[\#(features.joined(separator: ","))]}"#
     }
 
+    /// Towns as a layer that publishes its geometry and nothing else, as South Derbyshire's
+    /// iShare MapServer does its planning applications.
+    static let describeGeometryOnlyTowns = """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:ms="http://mapserver.gis.umn.edu/mapserver" xmlns:gml="http://www.opengis.net/gml/3.2" targetNamespace="http://mapserver.gis.umn.edu/mapserver" elementFormDefault="qualified" version="0.1">
+      <import namespace="http://www.opengis.net/gml/3.2" schemaLocation="http://schemas.opengis.net/gml/3.2.1/gml.xsd"/>
+      <element name="towns" type="ms:townsType" substitutionGroup="gml:AbstractFeature"/>
+      <complexType name="townsType"><complexContent><extension base="gml:AbstractFeatureType"><sequence>
+        <element name="msGeometry" type="gml:PointPropertyType" minOccurs="0" maxOccurs="1"/>
+      </sequence></extension></complexContent></complexType>
+    </schema>
+    """
+
     /// A GML 3.2 page of towns `range` in British National Grid. `ogcFID` gives each town the
-    /// `ogc_fid` attribute (100 more than its id) that MapServer publishes for a table `ogr2ogr` loaded.
-    static func gmlPage(_ range: Range<Int>, ogcFID: Bool = false) -> String {
+    /// `ogc_fid` attribute (100 more than its id) that MapServer publishes for a table `ogr2ogr` loaded;
+    /// without `attributes` a town is its geometry alone.
+    static func gmlPage(_ range: Range<Int>, ogcFID: Bool = false, attributes: Bool = true) -> String {
         let members = towns[range.clamped(to: towns.indices)].map { t in """
               <wfs:member>
                 <ms:towns gml:id="towns.\(t.id)">
                   <ms:msGeometry><gml:Point srsName="urn:ogc:def:crs:EPSG::27700" gml:id="towns.\(t.id).g"><gml:pos>\(t.x) \(t.y)</gml:pos></gml:Point></ms:msGeometry>
-                  \(ogcFID ? "<ms:ogc_fid>\(100 + t.id)</ms:ogc_fid>" : "")<ms:OBJECTID>\(t.id)</ms:OBJECTID><ms:NAME>\(t.name)</ms:NAME><ms:POP>\(t.pop)</ms:POP>
+                  \(ogcFID ? "<ms:ogc_fid>\(100 + t.id)</ms:ogc_fid>" : "")\(attributes ? "<ms:OBJECTID>\(t.id)</ms:OBJECTID><ms:NAME>\(t.name)</ms:NAME><ms:POP>\(t.pop)</ms:POP>" : "")
                 </ms:towns>
               </wfs:member>
             """ }.joined(separator: "\n")

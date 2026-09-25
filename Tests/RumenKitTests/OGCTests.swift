@@ -14,6 +14,7 @@ private final class StubEndpoint: @unchecked Sendable {
     private var _readsPlusAsSpace = false
     private var _describesOnlyByTypeName = false
     private var _pagesCarryOGCFID = false
+    private var _geometryOnly = false
     private var _log: [[String: String]] = []
 
     var offersWMTS: Bool { get { lock.withLock { _offersWMTS } } set { lock.withLock { _offersWMTS = newValue } } }
@@ -30,6 +31,8 @@ private final class StubEndpoint: @unchecked Sendable {
     var describesOnlyByTypeName: Bool { get { lock.withLock { _describesOnlyByTypeName } } set { lock.withLock { _describesOnlyByTypeName = newValue } } }
     /// GML pages whose features carry an `ogc_fid` of their own (see `OGCFixtures.gmlPage`).
     var pagesCarryOGCFID: Bool { get { lock.withLock { _pagesCarryOGCFID } } set { lock.withLock { _pagesCarryOGCFID = newValue } } }
+    /// Towns publishes its geometry and no attribute, in its schema and its pages alike.
+    var geometryOnly: Bool { get { lock.withLock { _geometryOnly } } set { lock.withLock { _geometryOnly = newValue } } }
     var log: [[String: String]] { lock.withLock { _log } }
 
     private static let iisError = StubTransport.Reply(status: 500, body: Data("<html><title>500 - Internal server error.</title></html>".utf8))
@@ -48,7 +51,7 @@ private final class StubEndpoint: @unchecked Sendable {
             return xml(geoJSON ? OGCFixtures.wfs200 : OGCFixtures.wfs200.replacingOccurrences(of: "<ows:Value>application/json</ows:Value>", with: ""))
         case ("WFS", "DescribeFeatureType"):
             if describesOnlyByTypeName, params["typeName"] == nil { return Self.iisError }
-            return xml(OGCFixtures.describeTowns)
+            return xml(geometryOnly ? OGCFixtures.describeGeometryOnlyTowns : OGCFixtures.describeTowns)
         case ("WFS", "GetFeature"):
             if params["resultType"] == "hits" { return xml(OGCFixtures.hits) }
             let offered = ["application/gml+xml; version=3.2", "text/xml; subtype=gml/3.2.1"] + (geoJSON ? ["application/json"] : [])
@@ -58,7 +61,7 @@ private final class StubEndpoint: @unchecked Sendable {
             if (params["outputFormat"] ?? "").lowercased().contains("json") {
                 return .json(OGCFixtures.geoJSONPage(start..<(start + count), wgs84: params["srsName"] != nil))
             }
-            return xml(OGCFixtures.gmlPage(start..<(start + count), ogcFID: pagesCarryOGCFID))
+            return xml(OGCFixtures.gmlPage(start..<(start + count), ogcFID: pagesCarryOGCFID, attributes: !geometryOnly))
         case ("WMS", "GetCapabilities"):
             return xml(vectorWMS ? OGCFixtures.wms130Vector : OGCFixtures.wms130)
         case ("WMS", "GetMap"):
@@ -502,6 +505,29 @@ final class OGCTests: XCTestCase {
         let json = scratch.appendingPathComponent("page.json")
         try Data(#"{"type":"FeatureCollection","features":[{"type":"Feature","id":7,"properties":{"ogc_fid":41,"name":"Esher"},"geometry":{"type":"Point","coordinates":[-0.36,51.37]}}]}"#.utf8).write(to: json)
         XCTAssertEqual(try StagingDatabase.describeFields(file: json.path).map(\.name), ["ogc_fid", "name", "geom"])
+    }
+
+    /// A feature type can publish its geometry and nothing else (South Derbyshire's iShare
+    /// planning applications). With no field to stage, the staging insert and every export
+    /// began their select list with a comma, and DuckDB refused it.
+    func testAGeometryOnlyLayerDownloads() async throws {
+        endpoint.geoJSON = false
+        endpoint.geometryOnly = true
+        let layer = try await towns()
+        for format in [ExportFormat.geoParquet, .geoJSON, .csv] {
+            var request = DownloadRequest(layerID: layer.id, outputDirectory: scratch.appendingPathComponent("out-\(format.fileExtension)"))
+            request.outWkid = 27700
+            request.format = format
+            let planned = try await engine.start(request)
+            let record = try await engine.wait(downloadID: planned.id)
+            XCTAssertEqual(record.status, .complete, "\(format): \(record.error ?? "")")
+            XCTAssertEqual(record.featureCount, 5, "\(format)")
+            if format == .geoParquet {
+                let back = try readBack(try XCTUnwrap(record.outputPath))
+                XCTAssertEqual(back.count, 5)
+                XCTAssertEqual(back.columns, ["geometry"])
+            }
+        }
     }
 
     func testOldWFSDownloadsInOneRequest() async throws {

@@ -455,8 +455,11 @@ public actor ArcGISClient {
         let proxy: String?
         let insecure: Bool
     }
-    /// When the next request to a host may begin, for `minRequestSpacing`.
+    /// When the last paced request to a host actually began, for `minRequestSpacing`.
     private var lastRequestStart: [String: Date] = [:]
+    /// Hosts where a request holds the pacing turn, and the requests queued for it in order.
+    private var pacingHosts: Set<String> = []
+    private var paceWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
 
     /// The transport for a server: the injected one by default (a stub, under test), or one
     /// whose sessions route through that server's proxy and waive its certificate check as its
@@ -887,17 +890,45 @@ public actor ArcGISClient {
 
     /// Holds a request back until this host's minimum gap since the previous one has passed.
     ///
-    /// The slot is claimed before the wait, and the claim is what the next caller measures
-    /// from, so concurrent requests queue up one gap apart instead of all reading the same
-    /// "last start" and going together — which is the burst this exists to prevent.
+    /// Requests take turns in the order they arrive, so a download's pages still go out in
+    /// order. The one whose turn it is waits until the gap has passed since the previous
+    /// request *actually* went, claims its own start, and passes the turn on. It used to book
+    /// every request a slot in advance and measure the next from the booking: a request that
+    /// woke late (a busy machine oversleeps) then went out almost together with the one booked
+    /// after it — the burst this exists to prevent, and what failed the spacing tests on CI.
     private func pace(_ host: String, spacing: TimeInterval) async {
         guard spacing > 0 else { return }
-        let now = Date()
-        let earliest = max(now, (lastRequestStart[host] ?? .distantPast).addingTimeInterval(spacing))
-        lastRequestStart[host] = earliest
-        let wait = earliest.timeIntervalSince(now)
-        guard wait > 0 else { return }
-        try? await Task.sleep(for: .seconds(wait))
+        if pacingHosts.contains(host) {
+            await withCheckedContinuation { continuation in
+                paceWaiters[host, default: []].append(continuation)
+            }
+            // Handed the turn; the host stays marked as pacing on our behalf.
+        } else {
+            pacingHosts.insert(host)
+        }
+        defer { passTurn(host) }
+        while true {
+            let now = Date()
+            let next = (lastRequestStart[host] ?? .distantPast).addingTimeInterval(spacing)
+            if now >= next {
+                lastRequestStart[host] = now
+                return
+            }
+            // Cancelled: a cancelled sleep returns at once, so looping again would spin. Stop
+            // holding the request back, as the one-shot wait did; the turn passes on.
+            do { try await Task.sleep(for: .seconds(next.timeIntervalSince(now))) } catch { return }
+        }
+    }
+
+    /// The next request queued for this host's pacing turn goes, or the host is idle again.
+    private func passTurn(_ host: String) {
+        if var queue = paceWaiters[host], !queue.isEmpty {
+            let next = queue.removeFirst()
+            paceWaiters[host] = queue.isEmpty ? nil : queue
+            next.resume()
+        } else {
+            pacingHosts.remove(host)
+        }
     }
 
     private func acquire(_ host: String) async {

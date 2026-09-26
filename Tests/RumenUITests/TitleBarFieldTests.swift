@@ -28,8 +28,9 @@ final class TitleBarFieldTests: XCTestCase {
 
     private var location: XCUIElement { app.textFields["location-field"] }
     private var find: XCUIElement { app.textFields["column-search-field"] }
-    /// Somewhere plain on the start page: no control, no field.
-    private var elsewhere: XCUIElement { app.staticTexts["Open a server"] }
+    /// Somewhere plain: no control, no field. The tree pane's empty-state heading, which stays
+    /// put when a column search replaces the start page (the page's own text does not).
+    private var elsewhere: XCUIElement { app.staticTexts["No servers yet"] }
 
     private func hasFocus(_ element: XCUIElement) -> Bool {
         element.exists && ((element.value(forKey: "hasKeyboardFocus") as? Bool) ?? false)

@@ -121,7 +121,14 @@ final class ChromeNSTextField: NSTextField {
         // made first responder mid-update can be dropped again by the same update.
         DispatchQueue.main.async { [weak self] in
             guard let self, self.window === window else { return }
-            window.makeFirstResponder(self)
+            // Already editing: select what is there. Making the field first responder again
+            // would first make its own field editor resign, which ends the edit — a second ⌘L
+            // closed the location box it was meant to reselect.
+            if let editor = self.currentEditor(), window.firstResponder === editor {
+                editor.selectAll(nil)
+            } else {
+                window.makeFirstResponder(self)
+            }
         }
     }
 

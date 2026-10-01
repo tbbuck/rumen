@@ -246,17 +246,19 @@ extension CrawlerTests {
                       "each one either listed or recorded why it could not")
     }
 
-    /// A crawl is the longest conversation the app has with a server, so what it learns about
-    /// that server is worth keeping for the next one.
-    func testADeepCrawlRecordsWhatTheServerCouldTake() async throws {
+    /// What `server_capacity` remembers is how wide a download could run. A crawl earns its
+    /// width on definitions, which says nothing about pages of features, so it neither writes
+    /// that record nor overwrites one a download left.
+    func testADeepCrawlLeavesWhatDownloadsLearnedAlone() async throws {
         let opened = try await crawler.open(root)
-        let before = try await db.serverConcurrency(serverID: opened.server.id)
-        XCTAssertNil(before, "nothing known before the first crawl")
-
         _ = try await crawler.deepCrawl(serverID: opened.server.id)
+        let untouched = try await db.serverConcurrency(serverID: opened.server.id)
+        XCTAssertNil(untouched, "a crawl records nothing about downloads")
 
-        let after = try await db.serverConcurrency(serverID: opened.server.id)
-        XCTAssertNotNil(after, "the crawl recorded what the server sustained")
+        try await db.recordServerConcurrency(2, serverID: opened.server.id)
+        _ = try await crawler.deepCrawl(serverID: opened.server.id, skipFresh: 0)
+        let kept = try await db.serverConcurrency(serverID: opened.server.id)
+        XCTAssertEqual(kept, 2, "and leaves a download's record as it found it")
     }
 
     func testDeepCrawlSkipsFreshServicesSoItResumes() async throws {
@@ -344,17 +346,45 @@ extension CrawlerTests {
 // MARK: - Deep crawl parallelism
 
 extension CrawlerTests {
-    /// Services are crawled several at a time, bounded by the crawl's width and the client's
-    /// per-host cap, and the result is the same set of crawled services and failures.
+    /// Services are crawled several at a time, bounded by the host's metadata lane, and the
+    /// result is the same set of crawled services and failures.
     func testDeepCrawlRunsServicesInParallel() async throws {
         let opened = try await crawler.open(root)
         transport.delay = .milliseconds(15)
         let failures = try await crawler.deepCrawl(serverID: opened.server.id)
         XCTAssertEqual(failures.count, 1)
         XCTAssertGreaterThan(transport.maxConcurrent, 1, "service crawls overlap")
-        XCTAssertLessThanOrEqual(transport.maxConcurrent, 4, "never beyond the client's per-host cap")
+        XCTAssertLessThanOrEqual(transport.maxConcurrent, ArcGISClient.metadataConcurrencyCeiling,
+                                 "never beyond the metadata ceiling")
         let services = try await db.services(serverID: opened.server.id)
         let crawled = services.filter { $0.type.hasLayers && $0.name != "Hurricanes" }
         XCTAssertTrue(crawled.allSatisfy(\.isCrawled), "every service that can be crawled was")
+    }
+
+    /// The preference caps pages of features. A crawl asks for definitions, which a server
+    /// hands over far more readily, so it is not held to a number chosen for downloads: ONS
+    /// took six minutes at the preference's four and answers thirty-two as quickly as one.
+    func testADeepCrawlGoesWiderThanTheDownloadPreference() async throws {
+        let listing = #"{"currentVersion":11.1,"folders":[],"services":["#
+            + (0..<120).map { #"{"name":"S\#($0)","type":"FeatureServer"}"# }.joined(separator: ",") + "]}"
+        let healthy = StubTransport { request, _ in
+            let path = request.url!.path
+            if path.hasSuffix("/layers") { return .json(#"{"layers":[],"tables":[]}"#) }
+            if path.hasSuffix("/FeatureServer") { return .json(#"{"currentVersion":11.1,"capabilities":"Query","layers":[],"tables":[]}"#) }
+            return .json(listing)
+        }
+        let client = ArcGISClient(transport: healthy, retry: RetryPolicy(maxAttempts: 2, baseDelay: 0), maxConcurrentPerHost: 2)
+        let crawler = Crawler(client: client, database: db)
+        let opened = try await crawler.open("https://wide.example/arcgis/rest/services")
+        healthy.delay = .milliseconds(20)
+
+        _ = try await crawler.deepCrawl(serverID: opened.server.id)
+
+        XCTAssertGreaterThan(healthy.maxConcurrent, 8, "a healthy host earns far more than the preference of 2")
+        XCTAssertLessThanOrEqual(healthy.maxConcurrent, ArcGISClient.metadataConcurrencyCeiling)
+        let services = try await db.services(serverID: opened.server.id)
+        XCTAssertEqual(services.filter(\.isCrawled).count, 120)
+        let dataWidth = await client.concurrencyLimit(forHost: "https://wide.example")
+        XCTAssertEqual(dataWidth, 1, "and none of it was earned on the data lane's account")
     }
 }

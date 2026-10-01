@@ -256,7 +256,7 @@ final class ArcGISClientTests: XCTestCase {
         let server = self.server
         try await withThrowingTaskGroup(of: Void.self) { group in
             for _ in 0..<12 {
-                group.addTask { _ = try await client.serviceDirectory(server) }
+                group.addTask { _ = try await client.request(.get, url: server.rootURL, server: server) }
             }
             try await group.waitForAll()
         }
@@ -286,6 +286,11 @@ private actor OpenGate {
 }
 
 extension ArcGISClientTests {
+    /// A request on the data lane, the one the preference caps: what a query or a page is.
+    private func dataRequest(_ client: ArcGISClient) async throws {
+        _ = try await client.request(.get, url: root, server: server)
+    }
+
     /// The preference is a ceiling, not a starting point: a host opens at one slot and earns
     /// the rest. With every response held open, nothing has succeeded, so nothing has been
     /// earned — raising the ceiling alone must not let the waiters through.
@@ -295,7 +300,7 @@ extension ArcGISClientTests {
         transport.gate = { _ in try await gate.waitUntilOpen() }
         let client = client(transport, concurrency: 1)
         let server = self.server
-        let tasks = (0..<3).map { _ in Task { _ = try await client.serviceDirectory(server) } }
+        let tasks = (0..<3).map { _ in Task { _ = try await client.request(.get, url: server.rootURL, server: server) } }
         try await Task.sleep(for: .milliseconds(200))
         XCTAssertEqual(transport.count, 1, "one in flight, two waiting behind the learned cap of 1")
 
@@ -319,7 +324,7 @@ extension ArcGISClientTests {
         var limit = await client.concurrencyLimit(forHost: host)
         XCTAssertEqual(limit, 1, "a host starts at one slot")
 
-        for _ in 0..<6 { _ = try await client.serviceDirectory(server) }
+        for _ in 0..<6 { try await dataRequest(client) }
 
         limit = await client.concurrencyLimit(forHost: host)
         XCTAssertEqual(limit, 4, "six clean responses should have reached the ceiling")
@@ -334,11 +339,11 @@ extension ArcGISClientTests {
         }
         let client = client(transport, attempts: 1, concurrency: 8)
         let host = ArcGISURL.origin(of: root)
-        for _ in 0..<8 { _ = try await client.serviceDirectory(server) }
+        for _ in 0..<8 { try await dataRequest(client) }
         let before = await client.concurrencyLimit(forHost: host)
         XCTAssertEqual(before, 8, "clean responses reach the ceiling")
 
-        _ = try? await client.serviceDirectory(server)
+        _ = try? await dataRequest(client)
 
         let after = await client.concurrencyLimit(forHost: host)
         XCTAssertEqual(after, 4, "503 is the host saying too much; the cap halves")
@@ -349,7 +354,7 @@ extension ArcGISClientTests {
         let transport = try StubTransport(reply: .fixture("s6-root.json"))
         let client = client(transport, concurrency: 6)
         let host = ArcGISURL.origin(of: root)
-        for _ in 0..<8 { _ = try await client.serviceDirectory(server) }
+        for _ in 0..<8 { try await dataRequest(client) }
         let climbed = await client.concurrencyLimit(forHost: host)
         XCTAssertEqual(climbed, 6)
 
@@ -370,6 +375,52 @@ extension ArcGISClientTests {
         await client.seedConcurrency(99, forHost: host)
         let clamped = await client.concurrencyLimit(forHost: host)
         XCTAssertEqual(clamped, 4, "clamped to the ceiling")
+    }
+
+    // MARK: - The metadata lane
+
+    /// Definitions have a budget of their own: it climbs past the preference to its own
+    /// ceiling, and what it earns is not the data lane's to spend.
+    func testMetadataRequestsClimbPastThePreferenceOnALaneOfTheirOwn() async throws {
+        let transport = try StubTransport(reply: .fixture("s6-root.json"))
+        let client = client(transport, concurrency: 2)
+        let host = ArcGISURL.origin(of: root)
+
+        for _ in 0..<8 { _ = try await client.serviceDirectory(server) }
+
+        let metadata = await client.concurrencyLimit(forHost: host, lane: .metadata)
+        XCTAssertEqual(metadata, ArcGISClient.metadataConcurrencyCeiling, "eight clean answers double 1 to 32")
+        let data = await client.concurrencyLimit(forHost: host)
+        XCTAssertEqual(data, 1, "the data lane has earned nothing yet")
+
+        for _ in 0..<8 { try await dataRequest(client) }
+        let dataAfter = await client.concurrencyLimit(forHost: host)
+        XCTAssertEqual(dataAfter, 2, "and still stops at the preference")
+    }
+
+    /// The preference is the user's say over downloads; lowering it does not touch the
+    /// metadata lane, and a metadata pushback does not cost the data lane its width.
+    func testTheLanesDoNotMoveEachOther() async throws {
+        let fixture = try StubTransport.Reply.fixture("s6-root.json")
+        let transport = StubTransport { _, index in
+            index <= 16 ? fixture : StubTransport.Reply.json("{}", status: 503)
+        }
+        let client = client(transport, attempts: 1, concurrency: 4)
+        let host = ArcGISURL.origin(of: root)
+        for _ in 0..<8 { _ = try await client.serviceDirectory(server) }
+        for _ in 0..<8 { try await dataRequest(client) }
+
+        await client.setLimits(maxConcurrentPerHost: 2, retry: RetryPolicy(maxAttempts: 1, baseDelay: 0))
+        let metadata = await client.concurrencyLimit(forHost: host, lane: .metadata)
+        XCTAssertEqual(metadata, ArcGISClient.metadataConcurrencyCeiling, "the preference is not this lane's ceiling")
+        let data = await client.concurrencyLimit(forHost: host)
+        XCTAssertEqual(data, 2, "the data lane follows the preference down")
+
+        _ = try? await client.serviceDirectory(server)
+        let metadataAfter = await client.concurrencyLimit(forHost: host, lane: .metadata)
+        XCTAssertEqual(metadataAfter, ArcGISClient.metadataConcurrencyCeiling / 2, "a 503 halves the lane it arrived on")
+        let dataAfter = await client.concurrencyLimit(forHost: host)
+        XCTAssertEqual(dataAfter, 2, "and leaves the other where it was")
     }
 
     // MARK: - Timeouts

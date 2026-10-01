@@ -313,14 +313,14 @@ public actor Crawler {
                         inFlight += 1
                     }
                 }
-                fill(width: max(1, await client.concurrencyLimit(forHost: host)))
+                fill(width: max(1, await client.concurrencyLimit(forHost: host, lane: .metadata)))
                 while inFlight > 0 {
                     guard let outcome = try await group.next() else { break }
                     inFlight -= 1
                     nextLevel += outcome.0
                     if let problem = outcome.1 { problems.append(problem) }
                     try Task.checkCancellation()
-                    fill(width: max(1, await client.concurrencyLimit(forHost: host)))
+                    fill(width: max(1, await client.concurrencyLimit(forHost: host, lane: .metadata)))
                 }
             }
             queue = nextLevel
@@ -418,12 +418,12 @@ public actor Crawler {
                     inFlight += 1
                 }
             }
-            fill(width: max(1, await client.concurrencyLimit(forHost: host)))
+            fill(width: max(1, await client.concurrencyLimit(forHost: host, lane: .metadata)))
             while inFlight > 0 {
                 _ = try await group.next()
                 inFlight -= 1
                 try Task.checkCancellation()
-                fill(width: max(1, await client.concurrencyLimit(forHost: host)))
+                fill(width: max(1, await client.concurrencyLimit(forHost: host, lane: .metadata)))
             }
         }
     }
@@ -450,10 +450,10 @@ public actor Crawler {
 
     // MARK: - Deep crawl
 
-    /// Re-lists the directory, then crawls every Map/Feature service, `concurrency` at a time
-    /// (the client's per-host cap still bounds the requests in flight). Failures of individual
-    /// services are reported through `progress` and collected; the crawl continues past them
-    /// so one broken service doesn't hide a whole server. Returns the failures.
+    /// Re-lists the directory, then crawls every Map/Feature service, as many at a time as the
+    /// host's metadata lane has shown it will take. Failures of individual services are
+    /// reported through `progress` and collected; the crawl continues past them so one broken
+    /// service doesn't hide a whole server. Returns the failures.
     /// Services crawled within `skipFresh` are skipped, so re-running after a cancel resumes
     /// where it stopped rather than starting over.
     @discardableResult
@@ -468,10 +468,9 @@ public actor Crawler {
         }
         // What this used to declare as a fixed 4 is now the host's own discovered limit, read
         // afresh on every refill so a crawl of 3,900 services widens as the server proves it can
-        // cope and narrows the moment it cannot.
-        if let remembered = try await db.serverConcurrency(serverID: serverID) {
-            await client.seedConcurrency(remembered, forHost: host)
-        }
+        // cope and narrows the moment it cannot. Nothing is seeded from `server_capacity` and
+        // nothing is written back to it: that is what a download learned about pages of
+        // features, and a width earned on definitions says nothing about those.
         var failures = [CrawlEvent]()
         try await withThrowingTaskGroup(of: CrawlEvent?.self) { group in
             var pending = services[...]
@@ -496,19 +495,16 @@ public actor Crawler {
             func fill(width: Int) {
                 while inFlight < width, let next = pending.popFirst() { enqueue(next) }
             }
-            fill(width: max(1, await client.concurrencyLimit(forHost: host)))
+            fill(width: max(1, await client.concurrencyLimit(forHost: host, lane: .metadata)))
             while inFlight > 0 {
                 guard let outcome = try await group.next() else { break }
                 inFlight -= 1
                 if let failure = outcome { failures.append(failure) }
                 try Task.checkCancellation()
-                fill(width: max(1, await client.concurrencyLimit(forHost: host)))
+                fill(width: max(1, await client.concurrencyLimit(forHost: host, lane: .metadata)))
             }
         }
         try await db.markDeepCrawl(serverID: serverID)
-        // A crawl is the longest conversation this app has with a server, so it is the best
-        // evidence of what the host will take. It has nothing to say about a page size.
-        try? await db.recordServerConcurrency(await client.concurrencyLimit(forHost: host), serverID: serverID)
         return failures
     }
 

@@ -625,6 +625,16 @@ owned by `AppDatabase`). DuckDB never holds app state.
     rather than the registered server, so an ArcGIS service and a WFS on one box share
     what either learned. Request timeouts scale with the number of features asked for
     (§5.6), rather than one flat 120 s for 25 features and 2,000 alike.
+21. **Metadata has its own per-host budget, up to 32 at once** — accepted 2026-10-01. A
+    deep crawl of ONS (3,927 services, two requests each) took 6.3 minutes at the
+    concurrency preference's default of 4, while the server answered 32 definitions at
+    once as quickly as one. A service definition is not a page of features, so the client
+    keeps two lanes per host: *data* (queries, counts, downloads), capped by the
+    preference, and *metadata* (directory listings, service and layer definitions), capped
+    at 32 whatever the preference says. Both are still discovered as decision 20 has it:
+    open at one slot, double while the host keeps up, halve on pushback. A crawl neither
+    seeds from nor writes `server_capacity`, which stays what downloads learned. OGC
+    capabilities and DescribeFeatureType stay on the data lane, paced as before.
 
 ## 10. Open questions
 1. ~~**Design direction**: reuse DuckLake Explorer's Stratum system or give this app

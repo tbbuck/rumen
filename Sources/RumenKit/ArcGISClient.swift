@@ -377,6 +377,20 @@ private final class CertificateWaiver: NSObject, URLSessionDelegate, Sendable {
 
 public enum HTTPMethod: String, Sendable { case get = "GET", post = "POST" }
 
+/// Which of a host's two budgets a request draws on.
+///
+/// A service definition and a page of features are not the same weight. A definition is a few
+/// kilobytes the server keeps to hand; a page is a query it has to run. One cap for both meant
+/// a crawl of 3,900 services queued behind a number chosen for downloads: ONS answers thirty-two
+/// definitions at once as quickly as it answers one, and was being asked for four.
+public enum RequestLane: Sendable, Hashable {
+    /// Features: queries, counts, downloads. Capped by the user's preference.
+    case data
+    /// Definitions: directory listings, service and layer documents. Capped by
+    /// `ArcGISClient.metadataConcurrencyCeiling`, whatever the preference says.
+    case metadata
+}
+
 /// The one path to any ArcGIS server (SPEC §7.3). Sets the Origin/Referer headers on every
 /// request, appends the token, caps in-flight requests per host, retries transient failures
 /// with backoff, and turns HTTP failures and ArcGIS error envelopes into typed errors.
@@ -422,27 +436,31 @@ public actor ArcGISClient {
         return min(300, 90 + Double(count) * 0.05)
     }
 
-    /// What one host has shown it can actually take. The climb, the halving and the ceiling all
-    /// live in `AdaptiveLimit`, which answers the same question for a download's page size —
-    /// deliberately, because both are "how hard can I lean on this box" and the box is the same
-    /// one whether the request is ArcGIS or OGC.
-    struct HostCapacity: Sendable {
-        var concurrency: AdaptiveLimit
-        /// When the host asked us to come back later (`Retry-After`), the earliest time to try.
-        var retryAfter: Date?
+    /// The most metadata requests one host is ever sent at once. A ceiling like the preference
+    /// is: a host still opens at one slot and has to earn the rest, and gives them back the
+    /// moment it pushes back.
+    public static let metadataConcurrencyCeiling = 32
 
-        init(ceiling: Int) {
-            concurrency = .concurrency(ceiling: ceiling)
-        }
+    /// One host's budget for one kind of request.
+    private struct Slot: Hashable {
+        let host: String
+        let lane: RequestLane
     }
 
     private let transport: HTTPTransport
     private var retry: RetryPolicy
-    /// The user's preference: the ceiling a host may climb to, never the starting point.
+    /// The user's preference: the ceiling a host's data lane may climb to, never the starting point.
     private var maxConcurrentPerHost: Int
-    private var capacity: [String: HostCapacity] = [:]
-    private var inFlight: [String: Int] = [:]
-    private var waiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+    /// What each host has shown it can actually take, per lane. The climb, the halving and the
+    /// ceiling all live in `AdaptiveLimit`, which answers the same question for a download's
+    /// page size — deliberately, because both are "how hard can I lean on this box" and the box
+    /// is the same one whether the request is ArcGIS or OGC.
+    private var capacity: [Slot: AdaptiveLimit] = [:]
+    private var inFlight: [Slot: Int] = [:]
+    private var waiters: [Slot: [CheckedContinuation<Void, Never>]] = [:]
+    /// When a host asked us to come back later (`Retry-After`), the earliest time to try. The
+    /// host's, not a lane's: a box that has said "not now" means it for every request.
+    private var comeBackAt: [String: Date] = [:]
     /// Origins that answered `405 Allow: GET` to a POST. Some proxies in front of ArcGIS route
     /// only GET; once one has said so, its later requests go out as GET without the wasted POST.
     private var getOnlyOrigins: Set<String> = []
@@ -491,15 +509,14 @@ public actor ArcGISClient {
         self.maxConcurrentPerHost = max(1, maxConcurrentPerHost)
         self.retry = retry
         // Snapshot the keys: mutating the dictionary while iterating its own `keys` view is an
-        // exclusivity violation, and traps at runtime.
-        for host in Array(capacity.keys) {
-            var state = capacity[host] ?? HostCapacity(ceiling: self.maxConcurrentPerHost)
+        // exclusivity violation, and traps at runtime. The metadata lane has its own ceiling,
+        // which is not the user's to move.
+        for slot in Array(capacity.keys) where slot.lane == .data {
             // A lowered ceiling takes effect at once for new requests; those already in flight
             // finish and their slots retire rather than passing on (see `release`).
-            state.concurrency.setCeiling(self.maxConcurrentPerHost)
-            capacity[host] = state
+            capacity[slot]?.setCeiling(self.maxConcurrentPerHost)
         }
-        for host in Array(waiters.keys) { wake(host) }
+        for slot in Array(waiters.keys) { wake(slot) }
     }
 
     // MARK: - Raw requests
@@ -508,7 +525,7 @@ public actor ArcGISClient {
     /// `params` are query parameters for GET and the form body for POST; `f=json` is added
     /// unless the caller set `f`.
     public func request(_ method: HTTPMethod, url: URL, params: [String: String] = [:],
-                        server: ServerConnection, maxAttempts: Int? = nil,
+                        server: ServerConnection, lane: RequestLane = .data, maxAttempts: Int? = nil,
                         timeout: TimeInterval = ArcGISClient.defaultTimeout,
                         progress: TransferProgressHandler? = nil) async throws -> Data {
         var all = params
@@ -517,7 +534,7 @@ public actor ArcGISClient {
         let sent = all
         func attempt(_ method: HTTPMethod) async throws -> Data {
             let request = try Self.build(method, url: url, params: sent, server: server, timeout: timeout)
-            return try await send(request, url: url, connection: server, maxAttempts: maxAttempts, progress: progress)
+            return try await send(request, url: url, connection: server, lane: lane, maxAttempts: maxAttempts, progress: progress)
         }
         let origin = ArcGISURL.origin(of: url)
         guard method == .post else { return try await attempt(method) }
@@ -547,7 +564,7 @@ public actor ArcGISClient {
         var request = try Self.build(.get, url: endpoint, params: all, server: server)
         request.setValue(accept, forHTTPHeaderField: "Accept")
         let url = request.url ?? endpoint
-        let data = try await send(request, url: url, connection: server, maxAttempts: maxAttempts, progress: progress)
+        let data = try await send(request, url: url, connection: server, lane: .data, maxAttempts: maxAttempts, progress: progress)
         if Self.looksLikeXML(data), OGCCapabilities.isExceptionReport(data),
            let document = try? XMLDocument(data: data, options: []), let rootElement = document.rootElement() {
             throw ArcGISClientError.server(code: nil, message: OGCCapabilities.exceptionText(rootElement), details: [], url: url,
@@ -584,9 +601,10 @@ public actor ArcGISClient {
     /// Sends with retries, holding one of the host's slots only while a request is actually in
     /// flight. Backing off outside the slot matters: a struggling host is exactly the one whose
     /// requests retry, and sleeping on its slots starves the very requests that might succeed.
-    private func send(_ request: URLRequest, url: URL, connection: ServerConnection,
+    private func send(_ request: URLRequest, url: URL, connection: ServerConnection, lane: RequestLane,
                       maxAttempts: Int?, progress: TransferProgressHandler?) async throws -> Data {
         let host = server(for: request)
+        let slot = Slot(host: host, lane: lane)
         var attempt = 1
         /// Instant connection failures counted separately: they cost nothing, so they get their
         /// own allowance rather than burning the one meant for a server that is struggling.
@@ -595,13 +613,13 @@ public actor ArcGISClient {
             if Task.isCancelled { throw ArcGISClientError.cancelled }
             if let wait = retryAfterDelay(host) { try await Task.sleep(for: .seconds(wait)) }
 
-            await acquire(host)
+            await acquire(slot)
             // Inside the slot, so a paced request holds its place in the queue rather than
             // letting another take it while this one waits its turn.
             await pace(host, spacing: connection.minRequestSpacing)
             // How wide the host was running when this request went out: what its latency is
             // evidence about, whatever the width has become by the time it lands.
-            let width = concurrencyLimit(forHost: host)
+            let width = limit(for: slot).value
             let started = Date()
             let outcome: Result<Data, SendFailure>
             do {
@@ -612,13 +630,13 @@ public actor ArcGISClient {
 
             switch outcome {
             case .success(let data):
-                noteSuccess(host, elapsed: -started.timeIntervalSinceNow,
+                noteSuccess(slot, elapsed: -started.timeIntervalSinceNow,
                             budget: request.timeoutInterval > 0 ? request.timeoutInterval : Self.defaultTimeout,
                             at: width)
-                release(host)
+                release(slot)
                 return data
             case .failure(let failure):
-                release(host)          // free the slot before any backoff
+                release(slot)          // free the slot before any backoff
                 let elapsed = -started.timeIntervalSinceNow
 
                 // A connection that died instantly never reached the server's work. Try again
@@ -632,7 +650,7 @@ public actor ArcGISClient {
                 }
 
                 if Self.isPushback(failure.error, after: elapsed) {
-                    notePushback(host, retryAfter: failure.retryAfter)
+                    notePushback(slot, retryAfter: failure.retryAfter)
                 }
                 guard failure.error.isRetryable, attempt < (maxAttempts ?? retry.maxAttempts) else { throw failure.error }
                 // The host's own Retry-After beats our guess at a delay.
@@ -714,10 +732,10 @@ public actor ArcGISClient {
     /// cache it verbatim.
     public func json<T: Decodable>(_ type: T.Type, _ method: HTTPMethod = .get, url: URL,
                                    params: [String: String] = [:],
-                                   server: ServerConnection, maxAttempts: Int? = nil,
+                                   server: ServerConnection, lane: RequestLane = .data, maxAttempts: Int? = nil,
                                    timeout: TimeInterval = ArcGISClient.defaultTimeout,
                                    progress: TransferProgressHandler? = nil) async throws -> (value: T, raw: Data) {
-        let data = try await request(method, url: url, params: params, server: server, maxAttempts: maxAttempts,
+        let data = try await request(method, url: url, params: params, server: server, lane: lane, maxAttempts: maxAttempts,
                                      timeout: timeout, progress: progress)
         do {
             return (try ArcGISJSON.decode(type, from: data), data)
@@ -736,7 +754,7 @@ public actor ArcGISClient {
     /// so an empty body becomes an empty listing and the raw data says which it was.
     public func serviceDirectory(_ server: ServerConnection, folder: String? = nil) async throws -> (value: ServiceDirectory, raw: Data) {
         let url = folder.map { server.rootURL.appendingPathComponent($0) } ?? server.rootURL
-        let data = try await request(.get, url: url, server: server)
+        let data = try await request(.get, url: url, server: server, lane: .metadata)
         guard !data.isEmpty else { return (ServiceDirectory(), data) }
         do {
             return (try ArcGISJSON.decode(ServiceDirectory.self, from: data), data)
@@ -748,16 +766,16 @@ public actor ArcGISClient {
     }
 
     public func serviceInfo(_ server: ServerConnection, serviceURL: URL) async throws -> (value: ServiceInfo, raw: Data) {
-        try await json(ServiceInfo.self, url: serviceURL, server: server)
+        try await json(ServiceInfo.self, url: serviceURL, server: server, lane: .metadata)
     }
 
     /// The bulk `layers` endpoint: every layer and table definition in one response.
     public func layers(_ server: ServerConnection, serviceURL: URL) async throws -> (value: LayersResponse, raw: Data) {
-        try await json(LayersResponse.self, url: serviceURL.appendingPathComponent("layers"), server: server)
+        try await json(LayersResponse.self, url: serviceURL.appendingPathComponent("layers"), server: server, lane: .metadata)
     }
 
     public func layerInfo(_ server: ServerConnection, layerURL: URL) async throws -> (value: LayerInfo, raw: Data) {
-        try await json(LayerInfo.self, url: layerURL, server: server)
+        try await json(LayerInfo.self, url: layerURL, server: server, lane: .metadata)
     }
 
     /// `query?returnCountOnly=true` — the extractability probe and the pre-download count.
@@ -843,47 +861,52 @@ public actor ArcGISClient {
 
     // MARK: - Per-host concurrency cap
 
-    /// This host's learned capacity, opened at one slot on first sight and climbed from there.
-    private func capacity(for host: String) -> HostCapacity {
-        if let existing = capacity[host] { return existing }
-        let fresh = HostCapacity(ceiling: maxConcurrentPerHost)
-        capacity[host] = fresh
+    /// This host's learned capacity in one lane, opened at one slot on first sight and climbed
+    /// from there: towards the preference for data, towards the fixed ceiling for metadata.
+    private func limit(for slot: Slot) -> AdaptiveLimit {
+        if let existing = capacity[slot] { return existing }
+        let ceiling = slot.lane == .metadata ? Self.metadataConcurrencyCeiling : maxConcurrentPerHost
+        let fresh = AdaptiveLimit.concurrency(ceiling: ceiling)
+        capacity[slot] = fresh
         return fresh
     }
 
-    /// What a host has been allowed to reach, for the UI, the record, and the tests.
-    public func concurrencyLimit(forHost host: String) -> Int { capacity(for: host).concurrency.value }
+    /// What a host has been allowed to reach in a lane, for the UI, the record, and the tests.
+    public func concurrencyLimit(forHost host: String, lane: RequestLane = .data) -> Int {
+        limit(for: Slot(host: host, lane: lane)).value
+    }
 
-    /// Seeds a host's cap from what a previous run learned, clamped to the current ceiling.
-    /// A remembered cap skips the climb; it never exceeds the user's preference.
-    public func seedConcurrency(_ limit: Int, forHost host: String) {
-        var state = capacity(for: host)
-        state.concurrency.adopt(limit)
-        capacity[host] = state
-        wake(host)
+    /// Seeds a host's data cap from what a previous download learned, clamped to the current
+    /// ceiling. A remembered cap skips the climb; it never exceeds the user's preference.
+    public func seedConcurrency(_ remembered: Int, forHost host: String) {
+        let slot = Slot(host: host, lane: .data)
+        var limit = limit(for: slot)
+        limit.adopt(remembered)
+        capacity[slot] = limit
+        wake(slot)
     }
 
     /// A clean response, and what it cost. Latency is the signal that matters for concurrency:
     /// adding a slot to a host that is already saturated does not raise throughput, it just puts
     /// the extra request in a queue, and the queue shows up as time.
-    private func noteSuccess(_ host: String, elapsed: TimeInterval, budget: TimeInterval, at width: Int) {
-        var state = capacity(for: host)
-        state.retryAfter = nil
-        state.concurrency.succeeded(AdaptiveLimit.Sample(work: 1, elapsed: elapsed, budget: budget, at: width))
-        capacity[host] = state
-        wake(host)
+    private func noteSuccess(_ slot: Slot, elapsed: TimeInterval, budget: TimeInterval, at width: Int) {
+        comeBackAt[slot.host] = nil
+        var limit = limit(for: slot)
+        limit.succeeded(AdaptiveLimit.Sample(work: 1, elapsed: elapsed, budget: budget, at: width))
+        capacity[slot] = limit
+        wake(slot)
     }
 
-    private func notePushback(_ host: String, retryAfter: TimeInterval?) {
-        var state = capacity(for: host)
-        state.concurrency.pushedBack()
-        if let retryAfter { state.retryAfter = Date().addingTimeInterval(retryAfter) }
-        capacity[host] = state
+    private func notePushback(_ slot: Slot, retryAfter: TimeInterval?) {
+        var limit = limit(for: slot)
+        limit.pushedBack()
+        capacity[slot] = limit
+        if let retryAfter { comeBackAt[slot.host] = Date().addingTimeInterval(retryAfter) }
     }
 
     /// How long this host asked us to wait, if it did and the moment has not passed.
     private func retryAfterDelay(_ host: String) -> TimeInterval? {
-        guard let until = capacity[host]?.retryAfter else { return nil }
+        guard let until = comeBackAt[host] else { return nil }
         let remaining = until.timeIntervalSinceNow
         return remaining > 0 ? remaining : nil
     }
@@ -931,35 +954,35 @@ public actor ArcGISClient {
         }
     }
 
-    private func acquire(_ host: String) async {
-        if inFlight[host, default: 0] < capacity(for: host).concurrency.value {
-            inFlight[host, default: 0] += 1
+    private func acquire(_ slot: Slot) async {
+        if inFlight[slot, default: 0] < limit(for: slot).value {
+            inFlight[slot, default: 0] += 1
             return
         }
         await withCheckedContinuation { continuation in
-            waiters[host, default: []].append(continuation)
+            waiters[slot, default: []].append(continuation)
         }
         // A releaser handed us its slot; the count was left incremented on our behalf.
     }
 
-    private func release(_ host: String) {
+    private func release(_ slot: Slot) {
         // Hand the slot straight on only while the cap still allows it: after a halving the
         // in-flight count can sit above the new limit, and those slots must retire, not pass on.
-        if inFlight[host, default: 0] <= capacity(for: host).concurrency.value, var queue = waiters[host], !queue.isEmpty {
+        if inFlight[slot, default: 0] <= limit(for: slot).value, var queue = waiters[slot], !queue.isEmpty {
             let next = queue.removeFirst()
-            waiters[host] = queue
+            waiters[slot] = queue
             next.resume()          // slot passes straight to the waiter; inFlight unchanged
         } else {
-            inFlight[host, default: 1] -= 1
+            inFlight[slot, default: 1] -= 1
         }
     }
 
-    /// Lets waiters in up to the host's current cap.
-    private func wake(_ host: String) {
-        while inFlight[host, default: 0] < capacity(for: host).concurrency.value, var queue = waiters[host], !queue.isEmpty {
+    /// Lets waiters in up to the host's current cap in this lane.
+    private func wake(_ slot: Slot) {
+        while inFlight[slot, default: 0] < limit(for: slot).value, var queue = waiters[slot], !queue.isEmpty {
             let next = queue.removeFirst()
-            waiters[host] = queue
-            inFlight[host, default: 0] += 1
+            waiters[slot] = queue
+            inFlight[slot, default: 0] += 1
             next.resume()
         }
     }

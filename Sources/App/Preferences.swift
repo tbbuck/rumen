@@ -120,7 +120,7 @@ struct PreferencesView: View {
                         Text("\(model.preferences.retryAttempts)").font(.sheetMono(12.5)).foregroundStyle(Palette.ink).frame(width: 24, alignment: .trailing)
                     }
                 }
-                Caption("Crawls, queries, and downloads share the per-host cap. Retries back off with jitter; a token error never retries.", size: 11.5, color: Palette.muted2)
+                Caption("Queries and downloads share the per-host cap. Crawls read metadata on a budget of their own, up to \(ArcGISClient.metadataConcurrencyCeiling) at once. Retries back off with jitter; a token error never retries.", size: 11.5, color: Palette.muted2)
                     .frame(maxWidth: 400, alignment: .leading)
             }
             section("Appearance") {

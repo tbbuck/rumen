@@ -572,7 +572,7 @@ final class TreeCellView: NSView {
         switch node.kind {
         case .table: return "A table: no geometry, so no extent."
         default:
-            if node.extent == nil { return "No extent known yet; it arrives when the node is crawled." }
+            if node.extent == nil { return "No WGS 84 extent known: not crawled yet, or the server reports its extent in another spatial reference." }
             if node.kind != .folder, node.extent?.isDefaultLike == true {
                 return "The server reports an extent covering most of the world (or a speck at 0,0), which looks like a default rather than data, so nothing is drawn."
             }

@@ -6,7 +6,7 @@ import DuckDBKit
 /// SQLite. Downloaded data never lives here — see `SPEC.md` §5.7.
 ///
 /// Owns one SQLite connection behind an actor so all access is serialised and off the main
-/// thread, plus an in-memory DuckDB with the spatial extension for extent reprojection.
+/// thread, plus an in-memory DuckDB with the spatial extension for reading stored downloads.
 /// Open it, then call `migrate()` before anything else.
 public actor AppDatabase {
     private nonisolated let db: SQLite
@@ -120,8 +120,8 @@ public enum SpatialError: Error, CustomStringConvertible, Equatable {
 
 extension AppDatabase {
     /// Starts the spatial engine: an in-memory DuckDB with the `spatial` extension installed
-    /// (if needed) and loaded. Needed for WGS 84 extents; the download engine opens its own
-    /// staging connections.
+    /// (if needed) and loaded. Needed to read stored downloads back for the map; the download
+    /// engine opens its own staging connections.
     public func loadSpatial() throws {
         let engine = try DuckDB()
         try engine.run("INSTALL spatial;")
@@ -130,41 +130,4 @@ extension AppDatabase {
     }
 
     public var isSpatialLoaded: Bool { spatial != nil }
-
-    /// Reprojects a native-SR extent to a WGS 84 box for the extent locators. Returns nil —
-    /// deliberately, not as an error — when the extent is empty or PROJ does not know the
-    /// spatial reference: the locator then draws no box, which is the honest display.
-    /// Throws if the spatial engine has not been loaded.
-    public func wgs84Extent(of extent: Extent?, wkid: Int?) throws -> BoundingBox? {
-        guard let spatial else { throw SpatialError.notLoaded }
-        guard let e = extent, let xmin = e.xmin, let ymin = e.ymin, let xmax = e.xmax, let ymax = e.ymax,
-              let wkid = wkid ?? e.spatialReference?.effectiveWkid else { return nil }
-        // Seen on ArcGIS Online: an extent in degrees tagged Web Mercator. Metre coordinates that
-        // all fit inside lon/lat range would be a few hundred metres around Null Island, which no
-        // real layer is, so such a box is read as degrees. Only for the Mercator family: an
-        // unknown CRS must still come back as unknown.
-        let webMercator: Set<Int> = [3857, 102100, 102113, 900913, 3785]
-        let looksLikeDegrees = webMercator.contains(wkid)
-            && abs(xmin) <= 180 && abs(xmax) <= 180 && abs(ymin) <= 90 && abs(ymax) <= 90
-        if wkid == 4326 || looksLikeDegrees {
-            return BoundingBox(minX: xmin, minY: ymin, maxX: xmax, maxY: ymax).clampedToWorld
-        }
-        let sql = """
-            WITH g AS (
-                SELECT ST_Transform(ST_MakeEnvelope(?, ?, ?, ?), ?, 'EPSG:4326', always_xy := true) AS geom
-            )
-            SELECT ST_XMin(geom), ST_YMin(geom), ST_XMax(geom), ST_YMax(geom) FROM g;
-            """
-        let rows: [[DuckValue]]
-        do {
-            rows = try spatial.run(sql, [.double(xmin), .double(ymin), .double(xmax), .double(ymax),
-                                         .string("EPSG:\(wkid)")]).rows
-        } catch {
-            return nil   // unknown CRS to PROJ — no box, by design (see doc comment)
-        }
-        guard let r = rows.first, r.count == 4, let a = r[0].doubleValue, let b = r[1].doubleValue,
-              let c = r[2].doubleValue, let d = r[3].doubleValue, a.isFinite, b.isFinite, c.isFinite, d.isFinite
-        else { return nil }
-        return BoundingBox(minX: a, minY: b, maxX: c, maxY: d).clampedToWorld
-    }
 }

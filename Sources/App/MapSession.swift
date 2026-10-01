@@ -111,9 +111,12 @@ final class MapSession {
                 content.fit = extent ?? bounds(of: page) ?? layer.extentWGS84
                 content.fitToken += 1
                 let total = layer.featureCount.map { $0.grouped } ?? "an unknown number of"
-                caption = "\(features.count.grouped) of \(total) features, drawn in WGS 84. Dashed box is the layer extent in \(nativeName)."
+                // The box is only there when the server gave its extent in WGS 84: nothing is
+                // reprojected to draw one.
+                let box = content.extent == nil ? "" : " Dashed box is the layer extent in \(nativeName)."
+                caption = "\(features.count.grouped) of \(total) features, drawn in WGS 84.\(box)"
                 if set.exceededTransferLimit == false, layer.featureCount == nil {
-                    caption = "All \(features.count.grouped) features, drawn in WGS 84. Dashed box is the layer extent in \(nativeName)."
+                    caption = "All \(features.count.grouped) features, drawn in WGS 84.\(box)"
                 }
             case .stored(let id):
                 guard let run = storedRuns.first(where: { $0.id == id }), let path = run.outputPath else {

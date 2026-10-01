@@ -194,7 +194,7 @@ final class ProbeTests: XCTestCase {
         XCTAssertEqual(service.url, opened.server.rootURL)
         XCTAssertTrue(service.isCrawled)
         XCTAssertEqual(service.maxRecordCount, 1000)
-        XCTAssertNotNil(service.extentWGS84, "the British National Grid extent was reprojected")
+        XCTAssertNil(service.extentWGS84, "a British National Grid extent is kept as it is, not reprojected")
         let serviceRows = try await db.services(serverID: opened.server.id)
         XCTAssertEqual(serviceRows.count, 1)
         let folderRows = try await db.folders(serverID: opened.server.id)

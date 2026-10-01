@@ -364,7 +364,7 @@ public actor Crawler {
     func storeService(_ service: ServiceRecord, info: ServiceInfo, raw: Data, connection conn: ServerConnection,
                       progress: (@Sendable (CrawlEvent) -> Void)?) async throws {
         let serviceID = service.id
-        let serviceBox = try await db.wgs84Extent(of: info.fullExtent, wkid: info.spatialReference?.effectiveWkid)
+        let serviceBox = BoundingBox.wgs84(of: info.fullExtent, wkid: info.spatialReference?.effectiveWkid)
         try await db.updateService(id: serviceID, info: info, raw: raw, extentWGS84: serviceBox)
         let summaries = try await db.upsertLayers(serviceID: serviceID, layers: info.layers, tables: info.tables)
         try await db.pruneLayers(serviceID: serviceID, keeping: summaries.map(\.layerID))
@@ -393,7 +393,7 @@ public actor Crawler {
                 guard let record = summaries.first(where: { $0.layerID == definition.id }) else { continue }
                 let rawLayer = try Self.rawElement(for: definition.id, in: bulk.raw) ?? Data()
                 try await db.updateLayer(id: record.id, info: definition, raw: rawLayer,
-                                         extentWGS84: try await wgs84(definition))
+                                         extentWGS84: Self.wgs84(definition))
                 stored.insert(definition.id)
                 progress?(.layer(name: definition.name))
             }
@@ -444,7 +444,7 @@ public actor Crawler {
         let layer = try await db.layer(id: layerID)
         let url = serviceURL.appendingPathComponent(String(layer.layerID))
         let (info, raw) = try await client.layerInfo(connection, layerURL: url)
-        try await db.updateLayer(id: layerID, info: info, raw: raw, extentWGS84: try await wgs84(info))
+        try await db.updateLayer(id: layerID, info: info, raw: raw, extentWGS84: Self.wgs84(info))
         progress?(.layer(name: info.name))
     }
 
@@ -508,10 +508,9 @@ public actor Crawler {
         return failures
     }
 
-    /// The WGS 84 box for a layer definition (nil when empty or the SR is unknown to PROJ).
-    /// Requires `AppDatabase.loadSpatial()` to have run; the app does that at launch.
-    private func wgs84(_ info: LayerInfo) async throws -> BoundingBox? {
-        try await db.wgs84Extent(of: info.extent, wkid: info.spatialReference?.effectiveWkid)
+    /// The WGS 84 box for a layer definition: its extent when that is already WGS 84, else nil.
+    private static func wgs84(_ info: LayerInfo) -> BoundingBox? {
+        BoundingBox.wgs84(of: info.extent, wkid: info.spatialReference?.effectiveWkid)
     }
 
     // MARK: - Raw JSON slicing

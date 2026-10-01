@@ -412,7 +412,7 @@ protocol has one. No filtering, no querying.
     statements, typed values) and the **migration runner**. The app database lives here.
   - `CDuckDB` system module + **`DuckDBKit`**: copied from DuckLake Explorer as the
     starting point, plus an **Appender** wrapper and prepared statements. DuckDB is the
-    spatial and data engine only: extent reprojection, download staging, export, map.
+    spatial and data engine only: download staging, export, map.
     Extracting a shared package across the two apps is a later, optional refactor.
   - **`RumenKit`**: URL normalisation, REST DTOs, the client (headers, retries,
     error envelopes, token refresh), the crawler, extractability rules, the PBF
@@ -460,9 +460,11 @@ Tables (initial):
   duration_ms.
 - `setting` — key, value.
 
-Extents are stored as JSON text: the native one verbatim and a WGS 84 box reprojected at
-crawl time through an in-memory DuckDB with the spatial extension (the "spatial engine",
-owned by `AppDatabase`). DuckDB never holds app state.
+Extents are stored as JSON text: the native one verbatim, and a WGS 84 box only when the
+server's extent is already WGS 84 (decision 22; an OGC layer's comes from its
+capabilities). The in-memory DuckDB with the spatial extension (the "spatial engine",
+owned by `AppDatabase`) reads stored downloads back for the map. DuckDB never holds app
+state.
 
 ### 7.3 Networking
 - `URLSession` with a per-server `Origin` / `Referer` header set, a shared per-host
@@ -635,6 +637,15 @@ owned by `AppDatabase`). DuckDB never holds app state.
     open at one slot, double while the host keeps up, halve on pushback. A crawl neither
     seeds from nor writes `server_capacity`, which stays what downloads learned. OGC
     capabilities and DescribeFeatureType stay on the data lane, paced as before.
+22. **Extents are not reprojected** — accepted 2026-10-01. The crawl used to push every
+    service and layer extent through PROJ (one DuckDB statement each, 10 ms) to give each
+    tree node a WGS 84 box: 21 ms of serialised work per service, a ceiling of 47 services
+    a second whatever the width, for a 22 × 15 locator. It is gone, not batched. An ArcGIS
+    extent keeps a WGS 84 box only when it is already WGS 84 (wkid 4326, or the ArcGIS
+    Online quirk of degrees under a Web Mercator tag); any other reference has none, so
+    its locator is empty, its page shows no WGS 84 extent, and its map frames the features
+    it draws. Boxes stored by earlier crawls stay until the layer is crawled again. This
+    revises decision 16's "extent reprojection now".
 
 ## 10. Open questions
 1. ~~**Design direction**: reuse DuckLake Explorer's Stratum system or give this app

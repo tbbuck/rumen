@@ -68,7 +68,28 @@ public struct BoundingBox: Sendable, Equatable, Codable {
         return result
     }
 
-    /// Clamped to valid lon/lat so a slightly-out-of-range PROJ result cannot break layout.
+    /// The WGS 84 box of an extent a server reported, when the extent is already in WGS 84
+    /// degrees; nil for every other spatial reference, and for an empty extent.
+    ///
+    /// Nothing is reprojected. A crawl used to push every extent through PROJ to give each
+    /// tree node a locator, at 10 ms a time and two a service: 80 seconds of a crawl of ONS,
+    /// one at a time, for a 22 × 15 pixel box. A layer in a projected reference now simply has
+    /// no box, and the map frames it from the features it draws.
+    public static func wgs84(of extent: Extent?, wkid: Int?) -> BoundingBox? {
+        guard let e = extent, let xmin = e.xmin, let ymin = e.ymin, let xmax = e.xmax, let ymax = e.ymax,
+              let wkid = wkid ?? e.spatialReference?.effectiveWkid else { return nil }
+        // Seen on ArcGIS Online: an extent in degrees tagged Web Mercator. Metre coordinates that
+        // all fit inside lon/lat range would be a few hundred metres around Null Island, which no
+        // real layer is, so such a box is read as degrees. Only for the Mercator family: an
+        // unknown CRS must still come back as unknown.
+        let webMercator: Set<Int> = [3857, 102100, 102113, 900913, 3785]
+        let looksLikeDegrees = webMercator.contains(wkid)
+            && abs(xmin) <= 180 && abs(xmax) <= 180 && abs(ymin) <= 90 && abs(ymax) <= 90
+        guard wkid == 4326 || looksLikeDegrees else { return nil }
+        return BoundingBox(minX: xmin, minY: ymin, maxX: xmax, maxY: ymax).clampedToWorld
+    }
+
+    /// Clamped to valid lon/lat so a slightly-out-of-range extent cannot break layout.
     public var clampedToWorld: BoundingBox {
         BoundingBox(minX: max(-180, minX), minY: max(-90, minY), maxX: min(180, maxX), maxY: min(90, maxY))
     }

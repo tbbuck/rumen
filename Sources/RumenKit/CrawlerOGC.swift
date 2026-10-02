@@ -143,8 +143,11 @@ extension Crawler {
         func local(_ name: String?) -> String { name.map { $0.split(separator: ":").last.map(String.init) ?? $0 } ?? "" }
         func apply(_ types: [OGCFeatureType], to layers: [LayerRecord]) async throws -> Int {
             var applied = 0
+            // By name, built once: searching the described types afresh for every layer made
+            // a WFS of n types cost n² comparisons.
+            let described = Dictionary(types.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
             for layer in layers {
-                guard let match = types.first(where: { $0.name == local(layer.ogcName) }) else { continue }
+                guard let match = described[local(layer.ogcName)] else { continue }
                 try await db.setOGCFields(layerID: layer.id, fields: match.fields)
                 progress?(.layer(name: layer.name))
                 applied += 1

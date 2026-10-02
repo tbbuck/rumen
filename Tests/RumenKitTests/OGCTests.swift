@@ -235,6 +235,91 @@ final class OGCTests: XCTestCase {
         XCTAssertEqual(old.layers[0].bboxWGS84, BoundingBox(minX: -3.5, minY: 50.2, maxX: -2.0, maxY: 51.0))
     }
 
+    /// Inheritance runs through every enclosing layer, named or not: CRS lists accumulate from
+    /// the outside in, the nearest box wins, and a group with no CRS anywhere above it borrows
+    /// what its children answer in.
+    func testWMSLineageIsCarriedThroughNestedGroups() throws {
+        func box(_ west: Double, _ east: Double) -> String {
+            "<EX_GeographicBoundingBox><westBoundLongitude>\(west)</westBoundLongitude><eastBoundLongitude>\(east)</eastBoundLongitude><southBoundLatitude>50</southBoundLatitude><northBoundLatitude>51</northBoundLatitude></EX_GeographicBoundingBox>"
+        }
+        func capabilities(_ layers: String) -> Data {
+            Data(#"<WMS_Capabilities version="1.3.0" xmlns="http://www.opengis.net/wms"><Service><Title>Nested</Title></Service><Capability><Request><GetMap><Format>image/png</Format></GetMap></Request>\#(layers)</Capability></WMS_Capabilities>"#.utf8)
+        }
+        let url = URL(string: root)!
+        let nested = try OGCCapabilities.parse(capabilities("""
+            <Layer><Title>Root</Title><CRS>EPSG:27700</CRS>\(box(-4, -1))
+              <Layer><Name>group</Name><Title>Group</Title>\(box(-3, -2))
+                <Layer><Name>leaf</Name><Title>Leaf</Title><CRS>EPSG:4326</CRS><CRS>EPSG:27700</CRS></Layer>
+              </Layer>
+              <Layer><Name>other</Name><Title>Other</Title></Layer>
+            </Layer>
+            """), expecting: .wms, url: url)
+        XCTAssertEqual(nested.layers.map(\.name), ["group", "leaf", "other"], "document order")
+        XCTAssertEqual(nested.layers[0].crs, ["EPSG:27700"])
+        XCTAssertEqual(nested.layers[0].bboxWGS84, BoundingBox(minX: -3, minY: 50, maxX: -2, maxY: 51))
+        XCTAssertEqual(nested.layers[1].crs, ["EPSG:27700", "EPSG:4326"], "the root's first, then its own, without repeats")
+        XCTAssertEqual(nested.layers[1].bboxWGS84, BoundingBox(minX: -3, minY: 50, maxX: -2, maxY: 51), "the nearest enclosing box")
+        XCTAssertEqual(nested.layers[2].bboxWGS84, BoundingBox(minX: -4, minY: 50, maxX: -1, maxY: 51), "a sibling group's box is not inherited")
+
+        let borrowing = try OGCCapabilities.parse(capabilities("""
+            <Layer><Name>all</Name><Title>All</Title>
+              <Layer><Name>a</Name><Title>A</Title><CRS>EPSG:3857</CRS></Layer>
+              <Layer><Name>b</Name><Title>B</Title><CRS>EPSG:27700</CRS></Layer>
+            </Layer>
+            """), expecting: .wms, url: url)
+        XCTAssertEqual(borrowing.layers[0].crs, ["EPSG:3857", "EPSG:27700"], "a group that declares none borrows its children's")
+        XCTAssertEqual(borrowing.layers[1].crs, ["EPSG:3857"])
+    }
+
+    /// A GeoServer with a couple of thousand layers is ordinary, and reading its documents
+    /// used to cost the square of that: each WMS layer asked XPath for its lineage, searching
+    /// its parent's children again, and each feature type searched the whole schema for its
+    /// complex type. 500 of either took two seconds; an endpoint of 5,000 was still being
+    /// read ten minutes later.
+    func testALargeEndpointIsReadInTimeProportionalToItsSize() throws {
+        let n = 2_000
+        let url = URL(string: root)!
+        let wms = #"<WMS_Capabilities version="1.3.0" xmlns="http://www.opengis.net/wms"><Service><Title>Big</Title></Service><Capability><Request><GetMap><Format>image/png</Format></GetMap></Request><Layer><Title>Everything</Title><CRS>EPSG:27700</CRS><CRS>EPSG:3857</CRS>"#
+            + (0..<n).map { #"<Layer queryable="1"><Name>t\#($0)</Name><Title>Type \#($0)</Title></Layer>"# }.joined()
+            + "</Layer></Capability></WMS_Capabilities>"
+        let schema = #"<schema xmlns="http://www.w3.org/2001/XMLSchema" xmlns:ms="http://mapserver.gis.umn.edu/mapserver" xmlns:gml="http://www.opengis.net/gml/3.2">"#
+            + (0..<n).map { #"<element name="t\#($0)" type="ms:t\#($0)Type"/><complexType name="t\#($0)Type"><complexContent><extension base="gml:AbstractFeatureType"><sequence><element name="msGeometry" type="gml:PointPropertyType"/><element name="NAME" type="string"/></sequence></extension></complexContent></complexType>"# }.joined()
+            + "</schema>"
+
+        var start = Date()
+        let document = try OGCCapabilities.parse(Data(wms.utf8), expecting: .wms, url: url)
+        XCTAssertLessThan(-start.timeIntervalSinceNow, 10, "under a second when linear; sixteen times the two seconds 500 took when it was not")
+        XCTAssertEqual(document.layers.count, n)
+        XCTAssertEqual(document.layers[n - 1].crs, ["EPSG:27700", "EPSG:3857"])
+
+        start = Date()
+        let types = try OGCCapabilities.parseFeatureTypes(Data(schema.utf8), url: url)
+        XCTAssertLessThan(-start.timeIntervalSinceNow, 10)
+        XCTAssertEqual(types.count, n)
+        XCTAssertEqual(types[n - 1].fields.map(\.name), ["msGeometry", "NAME"])
+    }
+
+    /// A re-crawl finds each layer's row by its name, so ids (and the downloads hanging off
+    /// them) stay put, and a layer the endpoint has added takes the next free number.
+    func testRecrawlingAnOGCServiceKeepsItsLayerRows() async throws {
+        let url = URL(string: root)!
+        let server = try await db.addServer(rootURL: url, friendlyName: "planning", kind: .ogc)
+        let document = try OGCCapabilities.parse(Data(OGCFixtures.wms130.utf8), expecting: .wms, url: url)
+        let service = try await db.upsertOGCService(serverID: server.id, rootURL: url, document: document)
+        let first = try await db.upsertOGCLayers(serviceID: service.id, document: document)
+        XCTAssertEqual(first.map(\.layerID), [0, 1])
+
+        let grown = OGCFixtures.wms130.replacingOccurrences(
+            of: #"<Layer queryable="0"><Name>roads</Name>"#,
+            with: #"<Layer queryable="1"><Name>rivers</Name><Title>Rivers</Title></Layer><Layer queryable="0"><Name>roads</Name>"#)
+        let second = try await db.upsertOGCLayers(serviceID: service.id,
+                                                  document: try OGCCapabilities.parse(Data(grown.utf8), expecting: .wms, url: url))
+        XCTAssertEqual(second.map(\.ogcName), ["towns", "rivers", "roads"])
+        XCTAssertEqual(second[0].id, first[0].id, "towns keeps its row")
+        XCTAssertEqual(second[2].id, first[1].id, "roads keeps its row")
+        XCTAssertEqual(second.map(\.layerID), [0, 2, 1], "the newcomer takes the next free number")
+    }
+
     func testWMTSCapabilitiesParse() throws {
         let document = try OGCCapabilities.parse(Data(OGCFixtures.wmts100.utf8), expecting: .wmts, url: URL(string: root)!)
         XCTAssertEqual(document.detail.title, "Planning tiles")

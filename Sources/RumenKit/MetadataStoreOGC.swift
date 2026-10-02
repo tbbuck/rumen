@@ -45,13 +45,20 @@ extension AppDatabase {
         var ids = [Int64]()
         try execScript("BEGIN IMMEDIATE;")
         do {
+            // The service's rows by name, and the next free layer id, read once. Each layer
+            // used to look itself up, and `ogc_name` has no index, so every lookup read the
+            // whole service: n layers, n² rows.
+            var known = [String: Int64]()
+            var next: Int64 = 0
+            for row in try query("SELECT id, ogc_name, layer_id FROM layer WHERE service_id = ? ORDER BY layer_id;", [.int(serviceID)]).rows {
+                if let id = row[0].int64, let name = row[1].stringValue, known[name] == nil { known[name] = id }
+                if let layerID = row[2].int64 { next = max(next, layerID + 1) }
+            }
             for (index, layer) in document.layers.enumerated() {
                 let json = try String(decoding: JSONEncoder().encode(layer), as: UTF8.self)
                 let raw = index < document.layerXML.count ? document.layerXML[index] : ""
                 let wkid = layer.defaultCRS.flatMap(OGCURL.epsgCode)
-                let existing = try query("SELECT id FROM layer WHERE service_id = ? AND ogc_name = ?;",
-                                         [.int(serviceID), .string(layer.name)]).rows.first?.first?.int64
-                if let existing {
+                if let existing = known[layer.name] {
                     try query("""
                         UPDATE layer SET name = ?, type = ?, geometry_type = COALESCE(?, geometry_type), extent_wgs84_json = ?,
                             wkid = ?, supported_query_formats = ?, capabilities = ?, raw_json = ?, ogc_json = ?, fetched_at = ?
@@ -61,8 +68,6 @@ extension AppDatabase {
                               .string(raw), .string(json), fetchedAt.bindValue, .int(existing)])
                     ids.append(existing)
                 } else {
-                    let next = (try query("SELECT COALESCE(MAX(layer_id), -1) + 1 FROM layer WHERE service_id = ?;", [.int(serviceID)])
-                        .rows.first?.first?.int64) ?? 0
                     let id = try query("""
                         INSERT INTO layer (service_id, layer_id, name, type, is_table, geometry_type, extent_wgs84_json, wkid,
                             supported_query_formats, capabilities, raw_json, ogc_name, ogc_json, fetched_at)
@@ -72,6 +77,8 @@ extension AppDatabase {
                               .string(document.type == .wfs ? "Query" : ""), .string(raw), .string(layer.name), .string(json),
                               fetchedAt.bindValue]).rows.first?.first?.int64
                     guard let id else { throw MetadataStoreError.unexpectedRow("ogc layer insert") }
+                    known[layer.name] = id
+                    next += 1
                     ids.append(id)
                 }
             }

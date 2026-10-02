@@ -463,8 +463,13 @@ public enum OGCCapabilities {
         detail.formats = request.map { XMLSupport.texts($0, "./*[local-name()='GetMap']/*[local-name()='Format']") } ?? []
         var layers = [OGCLayerDetail]()
         var xml = [String]()
-        for node in XMLSupport.nodes(root, ".//*[local-name()='Layer'][*[local-name()='Name']]") {
-            guard let element = node as? XMLElement, let name = XMLSupport.text(element, "./*[local-name()='Name']"), !name.isEmpty else { continue }
+        /// What one Layer element declares for itself; the layers inside it inherit all of it.
+        struct Declared {
+            var crs = [String]()
+            var geographicBox: XMLNode?
+            var latLonBox: XMLNode?
+        }
+        func record(_ element: XMLElement, name: String, lineage: [Declared]) {
             var layer = OGCLayerDetail(name: name, title: XMLSupport.text(element, "./*[local-name()='Title']") ?? name)
             layer.abstract = XMLSupport.text(element, "./*[local-name()='Abstract']")
             layer.keywords = XMLSupport.texts(element, "./*[local-name()='KeywordList']/*[local-name()='Keyword']")
@@ -472,30 +477,54 @@ public enum OGCCapabilities {
             // CRS and the geographic box are inherited from enclosing layers. A group layer
             // that declares none of its own (MapServer writes an empty element) can only be
             // asked for in what its children answer, so it borrows theirs.
-            let lineage = "ancestor-or-self::*[local-name()='Layer']"
             var crs = [String]()
-            func collect(_ xpath: String) {
-                for value in XMLSupport.texts(element, xpath) {
+            func collect(_ values: [String]) {
+                for value in values {
                     for part in value.split(whereSeparator: { $0.isWhitespace }) where !crs.contains(String(part)) { crs.append(String(part)) }
                 }
             }
-            collect("\(lineage)/*[local-name()='CRS' or local-name()='SRS']")
-            if crs.isEmpty { collect("descendant::*[local-name()='Layer']/*[local-name()='CRS' or local-name()='SRS']") }
+            collect(lineage.flatMap(\.crs))
+            if crs.isEmpty { collect(XMLSupport.texts(element, "descendant::*[local-name()='Layer']/*[local-name()='CRS' or local-name()='SRS']")) }
             layer.crs = crs
             layer.defaultCRS = crs.first
-            if let box = XMLSupport.nodes(element, "\(lineage)/*[local-name()='EX_GeographicBoundingBox']").last,
+            if let box = lineage.last(where: { $0.geographicBox != nil })?.geographicBox,
                let west = XMLSupport.text(box, "./*[local-name()='westBoundLongitude']").flatMap(Double.init),
                let east = XMLSupport.text(box, "./*[local-name()='eastBoundLongitude']").flatMap(Double.init),
                let south = XMLSupport.text(box, "./*[local-name()='southBoundLatitude']").flatMap(Double.init),
                let north = XMLSupport.text(box, "./*[local-name()='northBoundLatitude']").flatMap(Double.init) {
                 layer.bboxWGS84 = BoundingBox(minX: west, minY: south, maxX: east, maxY: north)
-            } else if let box = XMLSupport.nodes(element, "\(lineage)/*[local-name()='LatLonBoundingBox']").last {
+            } else if let box = lineage.last(where: { $0.latLonBox != nil })?.latLonBox {
                 layer.bboxWGS84 = XMLSupport.box(fromAttributes: box)
             }
             layer.styles = XMLSupport.texts(element, "./*[local-name()='Style']/*[local-name()='Name']")
             layers.append(layer)
             xml.append(element.xmlString(options: [.nodePrettyPrint]))
         }
+        // One walk from the top, in document order, carrying each layer's lineage down with
+        // it. The lineage used to be an `ancestor-or-self` XPath asked of every layer, which
+        // searches a parent's children again for each child: two seconds of parsing for 500
+        // layers under one group, and four times that for every doubling.
+        func walk(_ node: XMLNode, lineage: [Declared]) {
+            var lineage = lineage
+            if let element = node as? XMLElement, (element.localName ?? element.name) == "Layer" {
+                var own = Declared()
+                var name: String?
+                var sawName = false
+                for child in element.children ?? [] where child.kind == .element {
+                    switch child.localName ?? child.name ?? "" {
+                    case "CRS", "SRS": if let text = XMLSupport.ownText(child) { own.crs.append(text) }
+                    case "EX_GeographicBoundingBox": own.geographicBox = child
+                    case "LatLonBoundingBox": own.latLonBox = child
+                    case "Name": if !sawName { sawName = true; name = XMLSupport.ownText(child) }
+                    default: break
+                    }
+                }
+                lineage.append(own)
+                if let name { record(element, name: name, lineage: lineage) }
+            }
+            for child in node.children ?? [] where child.kind == .element { walk(child, lineage: lineage) }
+        }
+        walk(root, lineage: [])
         return OGCCapabilitiesDocument(type: .wms, detail: detail, layers: layers, layerXML: xml)
     }
 
@@ -611,13 +640,20 @@ public enum OGCCapabilities {
         let rootName = root.localName ?? root.name ?? ""
         if rootName.hasSuffix("ExceptionReport") { throw OGCError.exception(exceptionText(root), url: url) }
         guard rootName == "schema" else { throw OGCError.malformedXML("expected an XML Schema, got \(rootName)", url: url) }
+        // Every named complex type, read once. Each element used to find its own with an XPath
+        // over the whole schema, so a WFS of n feature types searched n types n times: two
+        // seconds for 500, and four times that for every doubling.
+        var complexTypes = [String: XMLNode]()
+        for node in XMLSupport.nodes(root, "./*[local-name()='complexType']") {
+            if let name = XMLSupport.attr(node, "name"), complexTypes[name] == nil { complexTypes[name] = node }
+        }
         var types = [OGCFeatureType]()
         for element in XMLSupport.nodes(root, "./*[local-name()='element']") {
             guard let name = XMLSupport.attr(element, "name") else { continue }
             let typeName = XMLSupport.attr(element, "type").map(XMLSupport.localPart)
             let complex: XMLNode?
             if let typeName {
-                complex = XMLSupport.nodes(root, "./*[local-name()='complexType'][@name='\(typeName)']").first
+                complex = complexTypes[typeName]
             } else {
                 complex = XMLSupport.nodes(element, "./*[local-name()='complexType']").first
             }
@@ -665,6 +701,12 @@ enum XMLSupport {
 
     static func text(_ node: XMLNode, _ xpath: String) -> String? {
         let value = nodes(node, xpath).first?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    /// A node's own text, trimmed; nil when it has none.
+    static func ownText(_ node: XMLNode) -> String? {
+        let value = node.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
         return value.flatMap { $0.isEmpty ? nil : $0 }
     }
 

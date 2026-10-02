@@ -88,6 +88,9 @@ final class AppModel {
     private(set) var searchUncrawled = 0
     private(set) var searchFailedFolders = 0
     private(set) var searchError: String?
+    /// Counts the column searches started, so one that finishes late can tell it has been
+    /// overtaken (see `runColumnSearch`).
+    @ObservationIgnored private var searchGeneration = 0
     /// Bumped to put the caret in "Find a column" (⌘F); a counter, so every press acts.
     private(set) var columnSearchFocusRequest = 0
     func focusColumnSearch() { columnSearchFocusRequest += 1 }
@@ -1094,19 +1097,32 @@ extension AppModel {
 extension AppModel {
     var isSearching: Bool { !columnSearch.trimmingCharacters(in: .whitespaces).isEmpty }
 
+    /// Runs the search for what is in the box now. Every keystroke starts one, and the one
+    /// before it is cancelled while still part-way through its three reads; a cancelled read
+    /// throws, and that used to land in the `catch` below and empty the results — sometimes
+    /// after the newer search had already filled them, so typing at normal speed often ended
+    /// on "No columns match". Only the latest search started may write what the page shows.
     func runColumnSearch() async {
         guard let database else { return }
+        searchGeneration += 1
+        let generation = searchGeneration
         let text = columnSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { searchHits = []; searchError = nil; return }
         var options = search
         options.text = text
         options.serverID = searchAllServers ? nil : currentServer?.id
         do {
-            searchHits = try await database.searchFields(options)
-            searchUncrawled = try await database.uncrawledServiceCount(serverID: options.serverID)
-            searchFailedFolders = try await database.failedFolders(serverID: options.serverID).count
+            let hits = try await database.searchFields(options)
+            let uncrawled = try await database.uncrawledServiceCount(serverID: options.serverID)
+            let failedFolders = try await database.failedFolders(serverID: options.serverID).count
+            guard generation == searchGeneration else { return }
+            searchHits = hits
+            searchUncrawled = uncrawled
+            searchFailedFolders = failedFolders
             searchError = nil
         } catch {
+            // Overtaken, or stopped because the page went away: not this search's page to change.
+            guard generation == searchGeneration, !(error is CancellationError) else { return }
             searchHits = []
             searchError = String(describing: error)
         }

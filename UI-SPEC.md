@@ -11,9 +11,9 @@
 The **URL is the spine**: the title bar holds the parsed path of whatever you are
 looking at, every segment is a node, and pasting any ArcGIS URL into it takes you
 there. The **layer page reads like a document** and answers "can I get this out?" in
-one sentence before anything else. **Extents are the subject**: every node in the tree
-carries a locator, and the map is drawn as a survey sheet with grid coordinates in its
-margins.
+one sentence before anything else. **Extents are the subject**: the map is drawn as a
+survey sheet with grid coordinates in its margins. (The tree carried a locator on every
+row until 2026-10-02; it was removed as adding little.)
 
 ## Architecture anchors
 
@@ -78,17 +78,17 @@ margins.
   14 minutes ago"; context menu: Rename, Refresh, Deep crawl, Settings, Forget.
   *The server at a glance.*
 - **`TreeRow`** — chevron, layer id (mono, right-aligned), name, `KindLabel` for
-  services, `ExtentLocator` at the right. Non-extractable layers are dimmed; an
-  uncrawled service shows a chevron and crawls on expand; a stale node gets a `warn`
-  caption; a folder whose listing failed, or a service whose crawl failed, shows the
-  error glyph in place of the locator with the message as its tooltip, and its page
-  offers Retry. *One node, its kind, its extent, its verdict, in one row.*
+  services. Non-extractable layers are dimmed; an uncrawled service shows a chevron and
+  crawls on expand; a stale node gets a `warn` caption; a folder whose listing failed,
+  or a service whose crawl failed, shows the error glyph at the right with the message
+  as its tooltip, and its page offers Retry. *One node, its kind, its verdict, in one
+  row.*
 - **`KindLabel`** — `MapServer` / `FeatureServer` / `ImageServer` in 9.5 `muted2`
   after a service name. *Kind without a glyph.*
 - **`ExtentLocator`** — 22 × 15 `Canvas`: frame = the server's union extent, filled
   rect = this node's extent. Dashed and empty for non-extractable; frame-only dashed
-  for tables. *See where a layer is and how big before you touch it; a world-sized
-  or empty extent is spotted from the tree.*
+  for tables. On the child rows of a folder or service page only, not in the tree.
+  *See where a layer is and how big before you touch it.*
 - **`ServerNode` / `FolderNode` / `ServiceNode` / `LayerNode` (models)** — from the
   `server` / `service` / `layer` tables, with `fetchedAt`, `extractable`,
   `extractableReason`, `extent`, `siblingLayerId`. *Backing data for the tree.*

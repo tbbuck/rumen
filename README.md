@@ -96,9 +96,8 @@ still works, over a blank background, and says so.
    WMTS. The URL is asked what it is rather than assumed, so a council portal that fronts a
    MapServer behind its own path opens as that service. A new server is registered with a
    friendly name and listed to the bottom of its folders.
-2. The tree on the left is the server: folders, services, layers, tables, each with a small
-   locator showing where its extent sits within the server's data. Arrow keys, Home and End,
-   type-ahead, and Return all work. Drag the tree's right edge to resize it.
+2. The tree on the left is the server: folders, services, layers, tables. Arrow keys, Home
+   and End, type-ahead, and Return all work. Drag the tree's right edge to resize it.
 3. The layer page has seven tabs: **Overview** (the verdict, facts, fields), **Fields**,
    **Query** (where, fields, spatial reference, ordering; Count, Extent, Preview, Distinct,
    Statistics, each enabled only when the layer supports it), **Download** (format, spatial

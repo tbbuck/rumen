@@ -106,7 +106,7 @@ Expose as `Font.sheetDisplay(_:)`, `Font.sheetUI(_:)`, `Font.sheetMono(_:)`.
   or dragging; double-click resets to 288; the width is remembered), 14px top padding. Server header
   (name + caption) with 16px side padding. Rows 27px; indents 14 / 32 / 52px for
   folder / service / layer; chevron 10px; layer id column 14px; 7px gaps; 14px
-  right padding. **Extent locator** 22 × 15 right-aligned in every row.
+  right padding. A failed row carries a 13px error glyph at the right; no locator.
 - **Layer page 1fr**, padding 22px top / 36px sides, vertical gap 18px.
   Tabs row: 24px gap, 8px bottom padding, 1px `line` rule. Extraction block
   max-width 720px. Actions row gap 18px. Fact list: 4-column grid

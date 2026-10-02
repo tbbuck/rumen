@@ -17,7 +17,7 @@ struct TreeState: Equatable {
 /// The server tree on `NSOutlineView` (M8): cells are reused, so filtering costs only the
 /// visible rows, and arrows, Home and End, type-ahead, and Return-to-open come with it.
 /// The row keeps the Sheet look: chevron or spinner, mono layer id, name, kind label, stale
-/// caption, locator or error glyph, and the selection rail. The model stays the source of
+/// caption, an error glyph when it failed, and the selection rail. The model stays the source of
 /// truth for expansion and selection; the outline mirrors it and reports the user's changes.
 struct TreeOutline: NSViewRepresentable {
     let model: AppModel
@@ -90,7 +90,6 @@ struct TreeOutline: NSViewRepresentable {
         weak var outline: TreeOutlineView?
         private var items: [NodeID: OutlineItem] = [:]
         private var roots: [OutlineItem] = []
-        private var frameExtent: BoundingBox?
         private var filtering = false
         private var structureKey = ""
         private var appliedExpanded: Set<NodeID> = []
@@ -153,7 +152,6 @@ struct TreeOutline: NSViewRepresentable {
         /// Rebuilds the item tree from the model, reusing objects by node id.
         private func rebuild(filtering: Bool) {
             self.filtering = filtering
-            frameExtent = model.tree?.extent
             var seen = Set<NodeID>()
             func item(for node: TreeNode, indent: CGFloat) -> OutlineItem {
                 let existing = items[node.id] ?? OutlineItem(id: node.id, node: node)
@@ -273,7 +271,7 @@ struct TreeOutline: NSViewRepresentable {
             guard let item = item as? OutlineItem else { return nil }
             let cell = outlineView.makeView(withIdentifier: TreeCellView.identifier, owner: self) as? TreeCellView ?? TreeCellView()
             cell.identifier = TreeCellView.identifier
-            cell.configure(item: item, frame: frameExtent, isExpanded: !filtering && outlineView.isItemExpanded(item),
+            cell.configure(item: item, isExpanded: !filtering && outlineView.isItemExpanded(item),
                            isLoading: model.loadingNodes.contains(item.id),
                            error: model.nodeErrors[item.id] ?? item.node.lastError,
                            isSelected: model.selection == item.id, expandable: !filtering && item.node.isExpandable)
@@ -399,7 +397,6 @@ final class TreeRowView: NSTableRowView {
 final class TreeCellView: NSView {
     static let identifier = NSUserInterfaceItemIdentifier("TreeCell")
     private var item: TreeOutline.OutlineItem?
-    private var frameExtent: BoundingBox?
     private var isExpanded = false
     private var isLoading = false
     private var isSelected = false
@@ -423,17 +420,15 @@ final class TreeCellView: NSView {
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    func configure(item: TreeOutline.OutlineItem, frame: BoundingBox?, isExpanded: Bool, isLoading: Bool, error: String?,
+    func configure(item: TreeOutline.OutlineItem, isExpanded: Bool, isLoading: Bool, error: String?,
                    isSelected: Bool, expandable: Bool) {
         self.item = item
-        frameExtent = frame
         self.isExpanded = isExpanded
         self.isLoading = isLoading
         self.error = error
         self.isSelected = isSelected
         self.expandable = expandable
-        let help = error ?? locatorHelp
-        toolTip = help.isEmpty ? nil : help
+        toolTip = error
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
         setAccessibilityLabel(Self.spokenDescription(of: item.node, error: error))
@@ -476,7 +471,8 @@ final class TreeCellView: NSView {
     private var slotWidth: CGFloat { showsID ? 14 : 10 }
     private var chevronRect: CGRect { CGRect(x: indent, y: 8.5, width: 10, height: 10) }
     private var chevronHit: CGRect { CGRect(x: indent - 6, y: 0, width: 22, height: 27) }
-    private var rightRect: CGRect { CGRect(x: bounds.width - 14 - 22, y: 6, width: 22, height: 15) }
+    /// Where the error glyph sits; a row that did not fail gives the room to its name.
+    private var errorRect: CGRect { CGRect(x: bounds.width - 14 - 13, y: 7, width: 13, height: 13) }
 
     override func layout() {
         super.layout()
@@ -527,12 +523,9 @@ final class TreeCellView: NSView {
                  color: NSPalette.muted2, in: CGRect(x: indent, y: 0, width: 14, height: 27), alignment: .right)
         }
 
-        // Trailing: locator or error glyph.
+        // Trailing: the error glyph, for a folder that would not list or a service that would not crawl.
         if error != nil {
-            Self.symbol("exclamationmark.circle", size: 11, weight: .regular, color: NSPalette.no)?
-                .draw(in: CGRect(x: rightRect.midX - 6.5, y: rightRect.midY - 6.5, width: 13, height: 13))
-        } else {
-            drawLocator(in: rightRect, extent: node.extent, frame: frameExtent, style: locatorStyle, trusted: node.kind == .folder)
+            Self.symbol("exclamationmark.circle", size: 11, weight: .regular, color: NSPalette.no)?.draw(in: errorRect)
         }
 
         // Name, then kind label, then the stale caption; the name truncates, the rest never.
@@ -545,7 +538,7 @@ final class TreeCellView: NSView {
         let kindWidth = kind.map { Self.width(of: $0, font: kindFont) + 7 } ?? 0
         let staleWidth = stale.map { Self.width(of: $0, font: staleFont) + 7 } ?? 0
         let nameX = indent + slotWidth + 7
-        let available = rightRect.minX - 4 - nameX
+        let available = (error != nil ? errorRect.minX - 4 : bounds.width - 14) - nameX
         let nameWidth = min(Self.width(of: node.name, font: nameFont), max(0, available - kindWidth - staleWidth))
         draw(node.name, font: nameFont, color: dimmed ? NSPalette.muted2 : NSPalette.ink,
              in: CGRect(x: nameX, y: 0, width: nameWidth, height: 27))
@@ -556,70 +549,6 @@ final class TreeCellView: NSView {
         }
         if let stale {
             draw(stale, font: staleFont, color: NSPalette.warn, in: CGRect(x: x, y: 0, width: staleWidth - 7, height: 27))
-        }
-    }
-
-    private var locatorStyle: LocatorStyle {
-        guard let node = item?.node else { return .normal }
-        switch node.kind {
-        case .table: return .table
-        default: return node.extractable == false ? .notExtractable : .normal
-        }
-    }
-
-    private var locatorHelp: String {
-        guard let node = item?.node else { return "" }
-        switch node.kind {
-        case .table: return "A table: no geometry, so no extent."
-        default:
-            if node.extent == nil { return "No WGS 84 extent known: not crawled yet, or the server reports its extent in another spatial reference." }
-            if node.kind != .folder, node.extent?.isDefaultLike == true {
-                return "The server reports an extent covering most of the world (or a speck at 0,0), which looks like a default rather than data, so nothing is drawn."
-            }
-            if node.extractable == false { return "Not extractable; its extent is outlined." }
-            return "Extent locator: the frame is where the bulk of this server's data sits; the box is where this \(node.kind == .folder ? "folder" : "node") lies within it. A dot on the edge means it lies outside the frame."
-        }
-    }
-
-    enum LocatorStyle { case normal, notExtractable, table }
-
-    /// The 22 × 15 locator, as `ExtentLocator` draws it: frame = the server's union extent, box =
-    /// this node's; dashed and empty when not extractable; frame only, dashed, for a table.
-    private func drawLocator(in rect: CGRect, extent: BoundingBox?, frame: BoundingBox?, style: LocatorStyle, trusted: Bool) {
-        let outer = NSBezierPath(rect: rect.insetBy(dx: 0.5, dy: 0.5))
-        outer.lineWidth = 1
-        if style == .table { outer.setLineDash([2, 2], count: 2, phase: 0) }
-        NSPalette.line2.setStroke()
-        outer.stroke()
-        guard style != .table, let extent, !extent.isDegenerate, trusted || !extent.isDefaultLike,
-              let frame, !frame.isDegenerate else { return }
-        let inset: CGFloat = 2.5
-        let inner = CGRect(x: rect.minX + inset, y: rect.minY + inset, width: rect.width - 2 * inset, height: rect.height - 2 * inset)
-        let sx = inner.width / frame.width
-        let sy = inner.height / frame.height
-        let raw = CGRect(x: inner.minX + (extent.minX - frame.minX) * sx,
-                         y: inner.minY + (frame.maxY - extent.maxY) * sy,
-                         width: max(1.5, extent.width * sx), height: max(1.5, extent.height * sy))
-        let box = raw.intersection(inner)
-        let accent = style == .notExtractable ? NSPalette.muted2 : NSPalette.accent
-        if box.isNull || box.width < 1 || box.height < 1 {
-            let x = min(max(raw.midX, inner.minX), inner.maxX)
-            let y = min(max(raw.midY, inner.minY), inner.maxY)
-            accent.setFill()
-            NSBezierPath(ovalIn: CGRect(x: x - 1.5, y: y - 1.5, width: 3, height: 3)).fill()
-            return
-        }
-        let path = NSBezierPath(rect: box)
-        path.lineWidth = 1
-        if style == .notExtractable {
-            path.setLineDash([1.5, 1.5], count: 2, phase: 0)
-            NSPalette.muted2.setStroke()
-            path.stroke()
-        } else {
-            NSPalette.accentSoft.setFill()
-            path.fill()
-            NSPalette.accent.setStroke()
-            path.stroke()
         }
     }
 
